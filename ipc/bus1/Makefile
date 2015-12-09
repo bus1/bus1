@@ -11,6 +11,7 @@
 
 bus$(BUS1_EXT)-y :=	\
 	active.o	\
+	domain.o	\
 	filesystem.o	\
 	main.o		\
 	peer.o

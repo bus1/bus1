@@ -23,7 +23,11 @@
  * ordered. Not all orders are explicitly defined (e.g., they might define
  * orthogonal hierarchies), but this list tries to give a rough overview:
  *
- *   bus1_fs_handle.lock: serializes BUS1_CMD_CONNECT
+ *   bus1_fs_peer.lock:
+ *     bus1_fs_domain.rwlock:
+ *       bus1_fs_handle.active:
  */
+
+#define BUS1_IOCTL_MAX_SIZE (4096)
 
 #endif /* __BUS1_MAIN_H */

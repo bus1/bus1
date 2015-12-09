@@ -1,5 +1,5 @@
-#ifndef __BUS1_PEER_H
-#define __BUS1_PEER_H
+#ifndef __BUS1_DOMAIN_H
+#define __BUS1_DOMAIN_H
 
 /*
  * Copyright (C) 2013-2016 Red Hat, Inc.
@@ -11,21 +11,18 @@
  */
 
 /**
- * Peers
+ * Domains
  *
  * XXX
  */
 
-#include <uapi/linux/bus1.h>
+#include <linux/kernel.h>
 
-struct bus1_domain;
-
-struct bus1_peer {
-	int unused;
+struct bus1_domain {
+	__u64 peer_ids;
 };
 
-struct bus1_peer *bus1_peer_new(struct bus1_domain *domain,
-				struct bus1_cmd_connect *param);
-struct bus1_peer *bus1_peer_free(struct bus1_peer *peer);
+struct bus1_domain *bus1_domain_new(void);
+struct bus1_domain *bus1_domain_free(struct bus1_domain *domain);
 
-#endif /* __BUS1_PEER_H */
+#endif /* __BUS1_DOMAIN_H */

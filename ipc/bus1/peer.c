@@ -19,7 +19,8 @@
  *
  * Return: Pointer to new peer, or ERR_PTR on failure.
  */
-struct bus1_peer *bus1_peer_new(void)
+struct bus1_peer *bus1_peer_new(struct bus1_domain *domain,
+				struct bus1_cmd_connect *param)
 {
 	struct bus1_peer *peer;
 

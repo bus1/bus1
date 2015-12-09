@@ -182,6 +182,7 @@ void bus1_active_deactivate(struct bus1_active *active)
  * @active:	object to drain
  * @waitq:	wait-queue linked to @active
  * @release:	release callback, or NULL
+ * @userdata:	userdata for callback
  *
  * This waits for all active-references on @active to be dropped. It uses the
  * passed wait-queue to sleep. It must be the same wait-queue that is used when
@@ -200,7 +201,9 @@ void bus1_active_deactivate(struct bus1_active *active)
  */
 bool bus1_active_drain(struct bus1_active *active,
 		       wait_queue_head_t *waitq,
-		       void (*release) (struct bus1_active *active))
+		       void (*release) (struct bus1_active *active,
+		                        void *userdata),
+		       void *userdata)
 {
 	int v;
 
@@ -247,7 +250,7 @@ bool bus1_active_drain(struct bus1_active *active,
 #endif
 
 		if (release)
-			release(active);
+			release(active, userdata);
 
 		/* mark as DRAINED */
 		atomic_set(&active->count, BUS1_ACTIVE_DRAINED);

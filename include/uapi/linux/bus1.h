@@ -28,6 +28,11 @@
  *   ENOTTY:            unknown ioctl
  *   ESHUTDOWN:         local handle was already disconnected
  *   ENOMEM:            out of kernel memory
+ *   EFAULT:            cannot access ioctl parameters
+ *   EMSGSIZE:          ioctl parameters are too small/large
+ *   EINVAL:            invalid parameters
+ *   EISNAM:            name is already in use
+ *   EALREADY:          operation was already performed earlier
  */
 
 #include <linux/ioctl.h>
@@ -39,6 +44,8 @@
 enum {
 	BUS1_CONNECT_FLAG_PEER		= 1ULL <<  0,
 	BUS1_CONNECT_FLAG_MONITOR	= 1ULL <<  1,
+	BUS1_CONNECT_FLAG_QUERY		= 1ULL <<  2,
+	BUS1_CONNECT_FLAG_RESET		= 1ULL <<  3,
 };
 
 struct bus1_cmd_connect {

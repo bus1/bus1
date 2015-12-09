@@ -72,7 +72,9 @@ bool bus1_active_activate(struct bus1_active *active);
 void bus1_active_deactivate(struct bus1_active *active);
 bool bus1_active_drain(struct bus1_active *active,
 		       wait_queue_head_t *waitq,
-		       void (*release) (struct bus1_active *active));
+		       void (*release) (struct bus1_active *active,
+		                        void *userdata),
+		       void *userdata);
 struct bus1_active *bus1_active_acquire(struct bus1_active *active);
 struct bus1_active *bus1_active_release(struct bus1_active *active,
 					wait_queue_head_t *waitq);
