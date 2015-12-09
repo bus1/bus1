@@ -19,6 +19,7 @@
 #include <uapi/linux/bus1.h>
 
 struct bus1_domain;
+struct bus1_fs_domain;
 
 struct bus1_peer {
 	int unused;
@@ -27,5 +28,10 @@ struct bus1_peer {
 struct bus1_peer *bus1_peer_new(struct bus1_domain *domain,
 				struct bus1_cmd_connect *param);
 struct bus1_peer *bus1_peer_free(struct bus1_peer *peer);
+
+int bus1_peer_ioctl(struct bus1_peer *peer,
+		    struct bus1_fs_domain *fs_domain,
+		    unsigned int cmd,
+		    unsigned long arg);
 
 #endif /* __BUS1_PEER_H */

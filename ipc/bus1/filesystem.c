@@ -706,8 +706,7 @@ static long bus1_fs_bus_fop_ioctl(struct file *file,
 		if (!bus1_active_acquire(&fs_peer->active))
 			return -ESHUTDOWN;
 
-		/* XXX: forward to peer */
-		r = 0;
+		r = bus1_peer_ioctl(fs_peer->peer, fs_domain, cmd, arg);
 		bus1_active_release(&fs_peer->active, &fs_peer->waitq);
 		break;
 

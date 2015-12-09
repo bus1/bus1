@@ -10,6 +10,9 @@
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 #include <linux/kernel.h>
 #include <linux/slab.h>
+#include <uapi/linux/bus1.h>
+#include "domain.h"
+#include "filesystem.h"
 #include "peer.h"
 
 /**
@@ -51,4 +54,51 @@ struct bus1_peer *bus1_peer_free(struct bus1_peer *peer)
 	kfree(peer);
 
 	return NULL;
+}
+
+/**
+ * bus1_peer_ioctl() - handle peer ioctl
+ * @peer:		peer to work on
+ * @fs_domain:		parent domain
+ * @cmd:		ioctl command
+ * @arg:		ioctl argument
+ *
+ * This handles the given ioctl (cmd+arg) on the passed peer @peer. The caller
+ * must provide the parent domain of @peer as @fs_domain. It may be used for
+ * other peer lookups.
+ *
+ * Return: 0 on success, negative error code on failure.
+ */
+int bus1_peer_ioctl(struct bus1_peer *peer,
+		    struct bus1_fs_domain *fs_domain,
+		    unsigned int cmd,
+		    unsigned long arg)
+{
+	int r;
+
+	switch (cmd) {
+	case BUS1_CMD_FREE:
+		r = 0; /* XXX */
+		break;
+	case BUS1_CMD_RESOLVE:
+		r = 0; /* XXX */
+		break;
+	case BUS1_CMD_TRACK:
+		r = 0; /* XXX */
+		break;
+	case BUS1_CMD_UNTRACK:
+		r = 0; /* XXX */
+		break;
+	case BUS1_CMD_SEND:
+		r = 0; /* XXX */
+		break;
+	case BUS1_CMD_RECV:
+		r = 0; /* XXX */
+		break;
+	default:
+		r = -ENOTTY;
+		break;
+	}
+
+	return r;
 }
