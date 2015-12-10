@@ -57,13 +57,16 @@ static struct bus1_fs_name *bus1_fs_name_new(const char *name)
 	struct bus1_fs_name *fs_name;
 	size_t namelen;
 
-	namelen = strlen(name);
-	fs_name = kmalloc(sizeof(*fs_name) + namelen + 1, GFP_KERNEL);
+	namelen = strlen(name) + 1;
+	if (namelen < 2 || namelen > BUS1_NAME_MAX_SIZE)
+		return ERR_PTR(-EMSGSIZE);
+
+	fs_name = kmalloc(sizeof(*fs_name) + namelen, GFP_KERNEL);
 	if (!fs_name)
 		return ERR_PTR(-ENOMEM);
 
 	fs_name->fs_peer = NULL;
-	memcpy(fs_name->name, name, namelen + 1);
+	memcpy(fs_name->name, name, namelen);
 
 	return fs_name;
 }

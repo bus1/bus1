@@ -29,6 +29,7 @@
  */
 
 #define BUS1_IOCTL_MAX_SIZE (4096)
+#define BUS1_NAME_MAX_SIZE (256)
 
 void *bus1_import_fixed_ioctl(unsigned long arg, size_t size);
 void *bus1_import_dynamic_ioctl(unsigned long arg, size_t min_size);
