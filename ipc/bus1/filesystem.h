@@ -48,8 +48,6 @@
 #include <linux/wait.h>
 #include "active.h"
 
-struct bus1_domain;
-struct bus1_peer;
 struct bus1_fs_domain;
 struct bus1_fs_name;
 struct bus1_fs_peer;
