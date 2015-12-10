@@ -258,27 +258,6 @@ static void bus1_fs_peer_release_runtime(struct bus1_active *active,
 	fs_peer->peer = bus1_peer_free(fs_peer->peer);
 }
 
-static struct bus1_cmd_connect *
-bus1_fs_import_connect(unsigned long arg)
-{
-	struct bus1_cmd_connect *param;
-	u64 size;
-
-	/* import bus1_cmd_connect parameters */
-	if ((arg & 0x7) || get_user(size, (__u64 __user *)arg))
-		return ERR_PTR(-EFAULT);
-	if (size < sizeof(*param) || size > BUS1_IOCTL_MAX_SIZE)
-		return ERR_PTR(-EMSGSIZE);
-
-	param = memdup_user((void __user *)arg, size);
-	if (IS_ERR(param))
-		return ERR_CAST(param);
-
-	/* size might have changed, fix it up if it did */
-	param->size = size;
-	return param;
-}
-
 /*
  * Connect a new peer. We first allocate the peer object, then
  * lock the whole domain and link the names and the peer
@@ -420,7 +399,7 @@ static int bus1_fs_peer_connect(struct bus1_fs_peer *fs_peer,
 	struct bus1_cmd_connect *param;
 	int r;
 
-	param = bus1_fs_import_connect(arg);
+	param = bus1_import_dynamic_ioctl(arg, sizeof(*param));
 	if (IS_ERR(param))
 		return PTR_ERR(param);
 
