@@ -488,16 +488,18 @@ bus1_fs_peer_acquire(struct bus1_fs_peer *fs_peer)
 }
 
 /**
- * bus1_fs_peer_find_by_id() - find peer by id
+ * bus1_fs_peer_acquire_by_id() - acquire peer by id
  * @fs_domain:		domain to search
  * @id:			id to look for
  *
- * XXX
+ * Find a peer handle that is registered under the given id and domain. If
+ * found, acquire an active reference and return the handle. If not found, NULL
+ * is returned.
  *
  * Return: Active reference to matching handle, or NULL.
  */
 struct bus1_fs_peer *
-bus1_fs_peer_find_by_id(struct bus1_fs_domain *fs_domain, u64 id)
+bus1_fs_peer_acquire_by_id(struct bus1_fs_domain *fs_domain, u64 id)
 {
 	struct bus1_fs_peer *fs_peer, *res = NULL;
 	struct rb_node *n;
@@ -522,18 +524,21 @@ bus1_fs_peer_find_by_id(struct bus1_fs_domain *fs_domain, u64 id)
 }
 
 /**
- * bus1_fs_peer_find_by_name() - find peer by name
+ * bus1_fs_peer_acquire_by_name() - acquire peer by name
  * @fs_domain:		domain to search
  * @name:		name to look for
  * @out_id:		output storage for ID of found peer, or NULL
  *
- * XXX
+ * Find a peer handle that is registered under the given name and domain. If
+ * found, acquire an active reference and return the handle (putting the ID of
+ * the handle into @out_id, if non-NULL). If not found, NULL is returned and
+ * @out_id stays untouched.
  *
  * Return: Active reference to matching handle, or NULL.
  */
 struct bus1_fs_peer *
-bus1_fs_peer_find_by_name(struct bus1_fs_domain *fs_domain, const char *name,
-			  u64 *out_id)
+bus1_fs_peer_acquire_by_name(struct bus1_fs_domain *fs_domain,
+			     const char *name, u64 *out_id)
 {
 	struct bus1_fs_peer *res = NULL;
 	struct bus1_fs_name *fs_name;
@@ -738,8 +743,8 @@ static int bus1_fs_domain_resolve(struct bus1_fs_domain *fs_domain,
 	}
 
 	/* lookup peer handle */
-	fs_peer = bus1_fs_peer_find_by_name(fs_domain, param->name,
-					    &param->unique_id);
+	fs_peer = bus1_fs_peer_acquire_by_name(fs_domain, param->name,
+					       &param->unique_id);
 	if (!fs_peer) {
 		r = -ENXIO;
 		goto exit;

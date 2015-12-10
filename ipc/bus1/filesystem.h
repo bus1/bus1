@@ -58,10 +58,10 @@ int bus1_fs_init(void);
 void bus1_fs_exit(void);
 
 struct bus1_fs_peer *
-bus1_fs_peer_find_by_id(struct bus1_fs_domain *fs_domain, u64 id);
+bus1_fs_peer_acquire_by_id(struct bus1_fs_domain *fs_domain, u64 id);
 struct bus1_fs_peer *
-bus1_fs_peer_find_by_name(struct bus1_fs_domain *fs_domain, const char *name,
-			  u64 *out_id);
+bus1_fs_peer_acquire_by_name(struct bus1_fs_domain *fs_domain,
+			     const char *name, u64 *out_id);
 struct bus1_fs_peer *bus1_fs_peer_release(struct bus1_fs_peer *fs_peer);
 
 #endif /* __BUS1_FILESYSTEM_H */
