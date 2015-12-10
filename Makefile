@@ -39,6 +39,7 @@ HOST_EXTRACFLAGS	+= -I$(PWD)/usr/include
 # same build.
 #
 all: module
+.PHONY: all
 
 #
 # Module Target
@@ -51,6 +52,7 @@ module:
 	$(MAKE) -C $(KERNELDIR) M=$(PWD) EXTRA_CFLAGS="$(EXTRA_CFLAGS)" \
 		HOST_EXTRACFLAGS="$(HOST_EXTRACFLAGS)" BUS1_EXT=$(BUS1_EXT) \
 		CONFIG_BUS1=m CONFIG_SAMPLES=y CONFIG_SAMPLE_BUS1=y
+.PHONY: module
 
 #
 # Documentation Target
@@ -69,9 +71,14 @@ module:
 # integration..
 #
 tests:
+.PHONY: tests
 
 # XXX: implement
 #	CFLAGS="-g -O0" $(MAKE) -C tools/testing/selftests/bus1/
+
+# b - local bus1 kernel in the build.git repo
+b: ../build/kernel-headers
+	$(MAKE) -C ../build/kernel-headers M=$(PWD) EXTRA_CFLAGS="$(EXTRA_CFLAGS)" BUS1_EXT=1 CONFIG_BUS1=m
 
 #
 # Print Differences
@@ -85,6 +92,7 @@ diff:
 	-@diff -q -u -r samples/bus1/ ./$(KERNELSRC)/samples/bus1
 	-@diff -q -u -r Documentation/bus1/ ./$(KERNELSRC)/Documentation/bus1
 	-@diff -q -u -r tools/testing/selftests/bus1/ ./$(KERNELSRC)/tools/testing/selftests/bus1
+.PHONY: diff
 
 clean:
 	rm -f *.o *~ core .depend .*.cmd *.ko *.mod.c
@@ -95,14 +103,17 @@ clean:
 	rm -f Documentation/bus1/{*.7,*.html}
 	rm -f tools/testing/selftests/bus1/{*.o}
 	rm -rf .tmp_versions Modules.symvers $(hostprogs-y)
+.PHONY: clean
 
 install: module
 	mkdir -p /lib/modules/$(KERNELVER)/kernel/ipc/bus1/
 	cp -f ipc/bus1/bus$(BUS1_EXT).ko /lib/modules/$(KERNELVER)/kernel/ipc/bus1/
 	depmod $(KERNELVER)
+.PHONY: install
 
 uninstall:
 	rm -f /lib/modules/$(KERNELVER)/kernel/ipc/bus1/bus$(BUS1_EXT).ko
+.PHONY: uninstall
 
 tt-prepare: module tests
 	-sudo sh -c 'dmesg -c > /dev/null'
@@ -110,16 +121,13 @@ tt-prepare: module tests
 	-sudo sh -c 'rmmod bus$(BUS1_EXT)'
 	sudo sh -c 'insmod ipc/bus1/bus$(BUS1_EXT).ko'
 	sudo mount -t bus$(BUS1_EXT)fs bus$(BUS1_EXT)fs /sys/fs/bus$(BUS1_EXT)
+.PHONY: tt-prepare
 
 tt: tt-prepare
 	tools/testing/selftests/bus1/bus1-test -m bus$(BUS1_EXT) ; (R=$$? ; dmesg ; exit $$R)
+.PHONY: tt
 
 stt: tt-prepare
 	sudo tools/testing/selftests/bus1/bus1-test -m bus$(BUS1_EXT) ; (R=$$? ; dmesg ; exit $$R)
+.PHONY: stt
 
-www_target = www.freedesktop.org:/srv/www.freedesktop.org/www/software/systemd
-
-doc-sync: htmldocs
-	rsync -rlv --delete-excluded --include="*.html" --exclude="*" --omit-dir-times Documentation/bus1/ $(www_target)/bus1/
-
-.PHONY: all module tests clean install uninstall tt-prepare tt stt
