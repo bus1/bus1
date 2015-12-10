@@ -42,15 +42,10 @@
  * handles themselves (which are pretty small) will stay around.
  */
 
-#include <linux/mutex.h>
-#include <linux/rbtree.h>
-#include <linux/rwsem.h>
-#include <linux/wait.h>
-#include "active.h"
+#include <linux/kernel.h>
 
 struct bus1_peer;
 struct bus1_fs_domain;
-struct bus1_fs_name;
 struct bus1_fs_peer;
 
 int bus1_fs_init(void);
