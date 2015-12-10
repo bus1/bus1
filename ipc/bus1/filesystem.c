@@ -402,6 +402,8 @@ static int bus1_fs_peer_connect(struct bus1_fs_peer *fs_peer,
 	struct bus1_cmd_connect *param;
 	int r;
 
+	lockdep_assert_held(&fs_domain->active);
+
 	param = bus1_import_dynamic_ioctl(arg, sizeof(*param));
 	if (IS_ERR(param))
 		return PTR_ERR(param);
@@ -433,6 +435,8 @@ static int bus1_fs_peer_disconnect(struct bus1_fs_peer *fs_peer,
 				   unsigned long arg)
 {
 	int r;
+
+	lockdep_assert_held(&fs_domain->active);
 
 	/* no arguments supported so far */
 	if (arg != 0)
@@ -679,10 +683,19 @@ static long bus1_fs_bus_fop_ioctl(struct file *file,
 
 	switch (cmd) {
 	case BUS1_CMD_CONNECT:
-		return bus1_fs_peer_connect(fs_peer, fs_domain, arg);
-
 	case BUS1_CMD_DISCONNECT:
-		return bus1_fs_peer_disconnect(fs_peer, fs_domain, arg);
+		if (!bus1_active_acquire(&fs_domain->active))
+			return -ESHUTDOWN;
+
+		if (cmd == BUS1_CMD_CONNECT)
+			r = bus1_fs_peer_connect(fs_peer, fs_domain, arg);
+		else if (cmd == BUS1_CMD_DISCONNECT)
+			r = bus1_fs_peer_disconnect(fs_peer, fs_domain, arg);
+		else
+			r = -ENOTTY;
+
+		bus1_active_release(&fs_domain->active, &fs_domain->waitq);
+		break;
 
 	case BUS1_CMD_FREE:
 	case BUS1_CMD_RESOLVE:
