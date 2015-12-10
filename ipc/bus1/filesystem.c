@@ -37,6 +37,34 @@ enum { /* static inode numbers */
 	_BUS1_FS_INO_N,
 };
 
+struct bus1_fs_name {
+	struct bus1_fs_name *next;
+	struct bus1_fs_peer *fs_peer;
+	struct rb_node rb;
+	char name[];
+};
+
+struct bus1_fs_peer {
+	struct mutex lock;
+	wait_queue_head_t waitq;
+	struct bus1_active active;
+	struct bus1_peer *peer;
+	struct bus1_fs_name *names;
+	struct rb_node rb;
+	u64 id; /* protected by fs_domain->rwlock */
+};
+
+struct bus1_fs_domain {
+	wait_queue_head_t waitq;
+	struct bus1_active active;
+	struct bus1_domain *domain;
+	struct rw_semaphore rwlock;
+	size_t n_peers;
+	size_t n_names;
+	struct rb_root map_peers;
+	struct rb_root map_names;
+};
+
 static struct file_system_type bus1_fs_type;
 static struct inode *bus1_fs_inode_get(struct super_block *sb,
 				       unsigned int ino);
@@ -44,13 +72,6 @@ static struct inode *bus1_fs_inode_get(struct super_block *sb,
 /*
  * Name Handles
  */
-
-struct bus1_fs_name {
-	struct bus1_fs_name *next;
-	struct bus1_fs_peer *fs_peer;
-	struct rb_node rb;
-	char name[];
-};
 
 static struct bus1_fs_name *bus1_fs_name_new(const char *name)
 {
@@ -532,6 +553,24 @@ bus1_fs_peer_find_by_name(struct bus1_fs_domain *fs_domain, const char *name,
 	up_read(&fs_domain->rwlock);
 
 	return res;
+}
+
+/**
+ * bus1_fs_peer_release() - release an active reference
+ * @fs_peer:	handle to release, or NULL
+ *
+ * This releases an active reference to a peer, acquired previously via one
+ * of the lookup functions.
+ *
+ * If NULL is passed, this is a no-op.
+ *
+ * Return: NULL is returned.
+ */
+struct bus1_fs_peer *bus1_fs_peer_release(struct bus1_fs_peer *fs_peer)
+{
+	if (fs_peer)
+		bus1_active_release(&fs_peer->active, &fs_peer->waitq);
+	return NULL;
 }
 
 /*
