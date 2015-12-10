@@ -461,7 +461,7 @@ static int bus1_fs_peer_disconnect(struct bus1_fs_peer *fs_peer,
  * Return: Active reference to matching handle, or NULL.
  */
 struct bus1_fs_peer *
-bus1_fs_peer_find_by_id(struct bus1_fs_domain *fs_domain, __u64 id)
+bus1_fs_peer_find_by_id(struct bus1_fs_domain *fs_domain, u64 id)
 {
 	struct bus1_fs_peer *fs_peer, *res = NULL;
 	struct rb_node *n;
@@ -489,13 +489,15 @@ bus1_fs_peer_find_by_id(struct bus1_fs_domain *fs_domain, __u64 id)
  * bus1_fs_peer_find_by_name() - find peer by name
  * @fs_domain:		domain to search
  * @name:		name to look for
+ * @out_id:		output storage for ID of found peer, or NULL
  *
  * XXX
  *
  * Return: Active reference to matching handle, or NULL.
  */
 struct bus1_fs_peer *
-bus1_fs_peer_find_by_name(struct bus1_fs_domain *fs_domain, const char *name)
+bus1_fs_peer_find_by_name(struct bus1_fs_domain *fs_domain, const char *name,
+			  u64 *out_id)
 {
 	struct bus1_fs_peer *res = NULL;
 	struct bus1_fs_name *fs_name;
@@ -508,8 +510,11 @@ bus1_fs_peer_find_by_name(struct bus1_fs_domain *fs_domain, const char *name)
 		fs_name = container_of(n, struct bus1_fs_name, rb);
 		v = strcmp(name, fs_name->name);
 		if (v == 0) {
-			if (bus1_active_acquire(&fs_name->fs_peer->active))
+			if (bus1_active_acquire(&fs_name->fs_peer->active)) {
+				if (out_id)
+					*out_id = fs_name->fs_peer->id;
 				res = fs_name->fs_peer;
+			}
 			break;
 		} else if (v < 0) {
 			n = n->rb_left;
