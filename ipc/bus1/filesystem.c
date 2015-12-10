@@ -479,6 +479,14 @@ static int bus1_fs_peer_disconnect(struct bus1_fs_peer *fs_peer,
 	return r;
 }
 
+static struct bus1_fs_peer *
+bus1_fs_peer_acquire(struct bus1_fs_peer *fs_peer)
+{
+	if (fs_peer && bus1_active_acquire(&fs_peer->active))
+		return fs_peer;
+	return NULL;
+}
+
 /**
  * bus1_fs_peer_find_by_id() - find peer by id
  * @fs_domain:		domain to search
@@ -499,7 +507,7 @@ bus1_fs_peer_find_by_id(struct bus1_fs_domain *fs_domain, u64 id)
 	while (n) {
 		fs_peer = container_of(n, struct bus1_fs_peer, rb);
 		if (id == fs_peer->id) {
-			if (bus1_active_acquire(&fs_peer->active))
+			if (bus1_fs_peer_acquire(fs_peer))
 				res = fs_peer;
 			break;
 		} else if (id < fs_peer->id) {
@@ -538,7 +546,7 @@ bus1_fs_peer_find_by_name(struct bus1_fs_domain *fs_domain, const char *name,
 		fs_name = container_of(n, struct bus1_fs_name, rb);
 		v = strcmp(name, fs_name->name);
 		if (v == 0) {
-			if (bus1_active_acquire(&fs_name->fs_peer->active)) {
+			if (bus1_fs_peer_acquire(fs_name->fs_peer)) {
 				if (out_id)
 					*out_id = fs_name->fs_peer->id;
 				res = fs_name->fs_peer;
@@ -628,7 +636,23 @@ error:
 	return ERR_PTR(r);
 }
 
-static void bus1_fs_domain_release(struct bus1_active *active, void *userdata)
+static struct bus1_fs_domain *
+bus1_fs_domain_acquire(struct bus1_fs_domain *fs_domain)
+{
+	if (fs_domain && bus1_active_acquire(&fs_domain->active))
+		return fs_domain;
+	return NULL;
+}
+
+static struct bus1_fs_domain *
+bus1_fs_domain_release(struct bus1_fs_domain *fs_domain)
+{
+	if (fs_domain)
+		bus1_active_release(&fs_domain->active, &fs_domain->waitq);
+	return NULL;
+}
+
+static void bus1_fs_domain_cleanup(struct bus1_active *active, void *userdata)
 {
 	struct bus1_fs_domain *fs_domain = container_of(active,
 							struct bus1_fs_domain,
@@ -669,7 +693,7 @@ static void bus1_fs_domain_teardown(struct bus1_fs_domain *fs_domain)
 
 	/* all peers are gone, domain is unused so tear it down */
 	bus1_active_drain(&fs_domain->active, &fs_domain->waitq,
-			  bus1_fs_domain_release, NULL);
+			  bus1_fs_domain_cleanup, NULL);
 }
 
 static int bus1_fs_domain_resolve(struct bus1_fs_domain *fs_domain,
@@ -743,7 +767,7 @@ static int bus1_fs_bus_fop_open(struct inode *inode, struct file *file)
 	struct bus1_fs_peer *fs_peer;
 	int r;
 
-	if (!bus1_active_acquire(&fs_domain->active))
+	if (!bus1_fs_domain_acquire(fs_domain))
 		return -ESHUTDOWN;
 
 	fs_peer = bus1_fs_peer_new();
@@ -756,7 +780,7 @@ static int bus1_fs_bus_fop_open(struct inode *inode, struct file *file)
 	r = 0;
 
 exit:
-	bus1_active_release(&fs_domain->active, &fs_domain->waitq);
+	bus1_fs_domain_release(fs_domain);
 	return r;
 }
 
@@ -785,7 +809,7 @@ static long bus1_fs_bus_fop_ioctl(struct file *file,
 	case BUS1_CMD_CONNECT:
 	case BUS1_CMD_DISCONNECT:
 	case BUS1_CMD_RESOLVE:
-		if (!bus1_active_acquire(&fs_domain->active))
+		if (!bus1_fs_domain_acquire(fs_domain))
 			return -ESHUTDOWN;
 
 		if (cmd == BUS1_CMD_CONNECT)
@@ -797,7 +821,7 @@ static long bus1_fs_bus_fop_ioctl(struct file *file,
 		else
 			r = -ENOTTY;
 
-		bus1_active_release(&fs_domain->active, &fs_domain->waitq);
+		bus1_fs_domain_release(fs_domain);
 		break;
 
 	case BUS1_CMD_FREE:
@@ -805,11 +829,11 @@ static long bus1_fs_bus_fop_ioctl(struct file *file,
 	case BUS1_CMD_UNTRACK:
 	case BUS1_CMD_SEND:
 	case BUS1_CMD_RECV:
-		if (!bus1_active_acquire(&fs_peer->active))
+		if (!bus1_fs_peer_acquire(fs_peer))
 			return -ESHUTDOWN;
 
 		r = bus1_peer_ioctl(fs_peer->peer, fs_domain, cmd, arg);
-		bus1_active_release(&fs_peer->active, &fs_peer->waitq);
+		bus1_fs_peer_release(fs_peer);
 		break;
 
 	default:
@@ -868,7 +892,7 @@ static int bus1_fs_dir_fop_iterate(struct file *file, struct dir_context *ctx)
 {
 	struct bus1_fs_domain *fs_domain = file_inode(file)->i_sb->s_fs_info;
 
-	if (!bus1_active_acquire(&fs_domain->active))
+	if (!bus1_fs_domain_acquire(fs_domain))
 		return -ESHUTDOWN;
 
 	/*
@@ -890,7 +914,7 @@ static int bus1_fs_dir_fop_iterate(struct file *file, struct dir_context *ctx)
 	ctx->pos = INT_MAX;
 
 exit:
-	bus1_active_release(&fs_domain->active, &fs_domain->waitq);
+	bus1_fs_domain_release(fs_domain);
 	return 0;
 }
 
@@ -923,7 +947,7 @@ static struct dentry *bus1_fs_dir_iop_lookup(struct inode *dir,
 	struct dentry *old = NULL;
 	struct inode *inode;
 
-	if (!bus1_active_acquire(&fs_domain->active))
+	if (!bus1_fs_domain_acquire(fs_domain))
 		return ERR_PTR(-ESHUTDOWN);
 
 	if (!strcmp(dentry->d_name.name, "bus")) {
@@ -934,7 +958,7 @@ static struct dentry *bus1_fs_dir_iop_lookup(struct inode *dir,
 			old = d_splice_alias(inode, dentry);
 	}
 
-	bus1_active_release(&fs_domain->active, &fs_domain->waitq);
+	bus1_fs_domain_release(fs_domain);
 	return old;
 }
 
