@@ -586,6 +586,36 @@ struct bus1_fs_peer *bus1_fs_peer_release(struct bus1_fs_peer *fs_peer)
 	return NULL;
 }
 
+/**
+ * bus1_fs_peer_dereference() - dereference a peer handle
+ * @fs_peer:	handle to dereference
+ *
+ * Dereference a peer handle to get access to the underlying peer object. This
+ * function simply returns the peer-pointer, which then can be accessed
+ * directly by the caller. The caller must hold an active reference to the
+ * handle, and retain it as long as the peer object is used.
+ *
+ * Note: If you weren't called through this handle, but rather retrieved it via
+ *       other means (eg., domain lookup), you must be aware that this handle
+ *       might be reset at any time. Hence, any operation you perform on the
+ *       handle must be tagged by the actual peer ID (which you should have
+ *       retrieved via the same means as the handle itself).
+ *       If the peer is reset midway through your operation, it gets a new ID,
+ *       notifies any peer that tracked it, and automatically discards any
+ *       operation that was tagged with an old ID (or, if the operation wasn't
+ *       finished, it will be discarded later on). A reset is a lossy operation
+ *       so any pending operation is discarded silently. The origin of the
+ *       operation thus gets the impression that it succeeded (and should be
+ *       tracking the peer to get notified about the reset, if interested).
+ *
+ * Return: Pointer to the underlying peer is returned.
+ */
+struct bus1_peer *bus1_fs_peer_dereference(struct bus1_fs_peer *fs_peer)
+{
+	lockdep_assert_held(&fs_peer->active);
+	return fs_peer->peer;
+}
+
 /*
  * Domain Handles
  */

@@ -48,6 +48,7 @@
 #include <linux/wait.h>
 #include "active.h"
 
+struct bus1_peer;
 struct bus1_fs_domain;
 struct bus1_fs_name;
 struct bus1_fs_peer;
@@ -61,5 +62,6 @@ struct bus1_fs_peer *
 bus1_fs_peer_acquire_by_name(struct bus1_fs_domain *fs_domain,
 			     const char *name, u64 *out_id);
 struct bus1_fs_peer *bus1_fs_peer_release(struct bus1_fs_peer *fs_peer);
+struct bus1_peer *bus1_fs_peer_dereference(struct bus1_fs_peer *fs_peer);
 
 #endif /* __BUS1_FILESYSTEM_H */
