@@ -67,7 +67,7 @@ struct bus1_fs_peer {
 	struct bus1_peer *peer;
 	struct bus1_fs_name *names;
 	struct rb_node rb;
-	__u64 id; /* protected by fs_domain->rwlock */
+	u64 id; /* protected by fs_domain->rwlock */
 };
 
 int bus1_fs_init(void);
