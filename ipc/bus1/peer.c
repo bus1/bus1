@@ -80,9 +80,6 @@ int bus1_peer_ioctl(struct bus1_peer *peer,
 	case BUS1_CMD_FREE:
 		r = 0; /* XXX */
 		break;
-	case BUS1_CMD_RESOLVE:
-		r = 0; /* XXX */
-		break;
 	case BUS1_CMD_TRACK:
 		r = 0; /* XXX */
 		break;

@@ -633,6 +633,67 @@ static void bus1_fs_domain_teardown(struct bus1_fs_domain *fs_domain)
 			  bus1_fs_domain_release, NULL);
 }
 
+static int bus1_fs_domain_resolve(struct bus1_fs_domain *fs_domain,
+				  unsigned long arg)
+{
+	struct bus1_cmd_resolve __user *uparam = (void __user *)arg;
+	struct bus1_cmd_resolve *param;
+	struct bus1_fs_peer *fs_peer;
+	size_t namelen;
+	int r;
+
+	lockdep_assert_held(&fs_domain->active);
+
+	param = bus1_import_dynamic_ioctl(arg, sizeof(*param));
+	if (IS_ERR(param))
+		return PTR_ERR(param);
+
+	/* no flags are known at this time */
+	if (param->flags) {
+		r = -EINVAL;
+		goto exit;
+	}
+
+	/* result must be cleared by caller */
+	if (param->unique_id != 0) {
+		r = -EINVAL;
+		goto exit;
+	}
+
+	/* name must be zero-terminated */
+	if (param->size <= sizeof(*param) ||
+	    param->name[param->size - 1] != 0) {
+		r = -EINVAL;
+		goto exit;
+	}
+
+	/* reject overlong/short names early */
+	namelen = param->size - sizeof(*param);
+	if (namelen < 2 || namelen > BUS1_NAME_MAX_SIZE) {
+		r = -ENXIO;
+		goto exit;
+	}
+
+	/* lookup peer handle */
+	fs_peer = bus1_fs_peer_find_by_name(fs_domain, param->name,
+					    &param->unique_id);
+	if (!fs_peer) {
+		r = -ENXIO;
+		goto exit;
+	}
+
+	if (put_user(param->unique_id, &uparam->unique_id))
+		r = -EFAULT;
+	else
+		r = 0;
+
+	bus1_fs_peer_release(fs_peer);
+
+exit:
+	kfree(param);
+	return r;
+}
+
 /*
  * Bus-File
  */
@@ -684,6 +745,7 @@ static long bus1_fs_bus_fop_ioctl(struct file *file,
 	switch (cmd) {
 	case BUS1_CMD_CONNECT:
 	case BUS1_CMD_DISCONNECT:
+	case BUS1_CMD_RESOLVE:
 		if (!bus1_active_acquire(&fs_domain->active))
 			return -ESHUTDOWN;
 
@@ -691,6 +753,8 @@ static long bus1_fs_bus_fop_ioctl(struct file *file,
 			r = bus1_fs_peer_connect(fs_peer, fs_domain, arg);
 		else if (cmd == BUS1_CMD_DISCONNECT)
 			r = bus1_fs_peer_disconnect(fs_peer, fs_domain, arg);
+		else if (cmd == BUS1_CMD_RESOLVE)
+			r = bus1_fs_domain_resolve(fs_domain, arg);
 		else
 			r = -ENOTTY;
 
@@ -698,7 +762,6 @@ static long bus1_fs_bus_fop_ioctl(struct file *file,
 		break;
 
 	case BUS1_CMD_FREE:
-	case BUS1_CMD_RESOLVE:
 	case BUS1_CMD_TRACK:
 	case BUS1_CMD_UNTRACK:
 	case BUS1_CMD_SEND:

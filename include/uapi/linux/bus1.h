@@ -33,6 +33,7 @@
  *   EINVAL:            invalid parameters
  *   EISNAM:            name is already in use
  *   EALREADY:          operation was already performed earlier
+ *   ENXIO:             referenced object does not exist
  */
 
 #include <linux/ioctl.h>
