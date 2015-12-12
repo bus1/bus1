@@ -10,6 +10,7 @@
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 #include <linux/kernel.h>
 #include <linux/slab.h>
+#include <linux/err.h>
 #include "domain.h"
 
 struct bus1_domain *bus1_domain_new(void)
