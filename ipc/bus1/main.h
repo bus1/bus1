@@ -23,9 +23,22 @@
  * ordered. Not all orders are explicitly defined (e.g., they might define
  * orthogonal hierarchies), but this list tries to give a rough overview:
  *
- *   bus1_fs_peer.lock:
- *     bus1_fs_domain.rwlock:
- *       bus1_fs_handle.active:
+ * (A) API handle locking:
+ *  +--+ bus1_fs_domain.active.write            # domain teardown
+ *  |                                           #
+ *  +--+ bus1_fs_domain.active.read             # mount entry
+ *     +--+ bus1_fs_peer.rwlock.read_write      # ioctl entry
+ *        +--+ bus1_fs_peer.active.read         #
+ *        |  +--+ ... (B) ...                   # peer ioctls
+ *        |     +--+ bus1_fs_domain.rwlock.read # peer lookup; inverse (i1)
+ *        |                                     #
+ *        +--+ bus1_fs_domain.rwlock.write      # peer connect/disconnect
+ *        |                                     #
+ *        +--+ bus1_fs_domain.rwlock.read       # peer resolve
+ *           +--+ bus1_fs_peer.active.write     # peer teardown; inverse (i1)
+ *
+ * (B) Implementation locking
+ *  +--+ (XXX)
  */
 
 #define BUS1_IOCTL_MAX_SIZE (4096)

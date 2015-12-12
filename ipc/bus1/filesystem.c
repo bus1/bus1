@@ -45,20 +45,20 @@ struct bus1_fs_name {
 };
 
 struct bus1_fs_peer {
-	struct mutex lock;
+	struct rw_semaphore rwlock;
 	wait_queue_head_t waitq;
 	struct bus1_active active;
 	struct bus1_peer *peer;
 	struct bus1_fs_name *names;
 	struct rb_node rb;
-	u64 id; /* protected by fs_domain->rwlock */
+	u64 id;
 };
 
 struct bus1_fs_domain {
+	struct rw_semaphore rwlock;
 	wait_queue_head_t waitq;
 	struct bus1_active active;
 	struct bus1_domain *domain;
-	struct rw_semaphore rwlock;
 	size_t n_peers;
 	size_t n_names;
 	struct rb_root map_peers;
@@ -68,10 +68,10 @@ struct bus1_fs_domain {
 static struct file_system_type bus1_fs_type;
 static struct inode *bus1_fs_inode_get(struct super_block *sb,
 				       unsigned int ino);
-
-/*
- * Name Handles
- */
+static struct bus1_fs_domain *
+bus1_fs_domain_acquire(struct bus1_fs_domain *fs_domain);
+static struct bus1_fs_domain *
+bus1_fs_domain_release(struct bus1_fs_domain *fs_domain);
 
 static struct bus1_fs_name *bus1_fs_name_new(const char *name)
 {
@@ -113,7 +113,7 @@ static int bus1_fs_name_push(struct bus1_fs_domain *fs_domain,
 	struct bus1_fs_name *iter;
 	int v;
 
-	lockdep_assert_held(&fs_domain->rwlock);
+	lockdep_assert_held(&fs_domain->rwlock); /* write-locked */
 	WARN_ON(!RB_EMPTY_NODE(&fs_name->rb));
 
 	/* find rb-tree entry and check for possible duplicates first */
@@ -150,7 +150,7 @@ static struct bus1_fs_name *bus1_fs_name_pop(struct bus1_fs_domain *fs_domain,
 {
 	struct bus1_fs_name *fs_name;
 
-	lockdep_assert_held(&fs_domain->rwlock);
+	lockdep_assert_held(&fs_domain->rwlock); /* write-locked */
 
 	/* pop first entry, if there is one */
 	fs_name = fs_peer->names;
@@ -170,10 +170,6 @@ static struct bus1_fs_name *bus1_fs_name_pop(struct bus1_fs_domain *fs_domain,
 	return fs_name;
 }
 
-/*
- * Peer Handles
- */
-
 static struct bus1_fs_peer *bus1_fs_peer_new(void)
 {
 	struct bus1_fs_peer *fs_peer;
@@ -182,7 +178,7 @@ static struct bus1_fs_peer *bus1_fs_peer_new(void)
 	if (!fs_peer)
 		return ERR_PTR(-ENOMEM);
 
-	mutex_init(&fs_peer->lock);
+	init_rwsem(&fs_peer->rwlock);
 	init_waitqueue_head(&fs_peer->waitq);
 	bus1_active_init(&fs_peer->active);
 	fs_peer->peer = NULL;
@@ -202,92 +198,60 @@ bus1_fs_peer_free(struct bus1_fs_peer *fs_peer)
 	/* fs_peer->rb might be stray */
 	WARN_ON(fs_peer->names);
 	WARN_ON(fs_peer->peer);
-	mutex_destroy(&fs_peer->lock);
+	bus1_active_destroy(&fs_peer->active);
 	kfree(fs_peer);
 
 	return NULL;
 }
 
-static void bus1_fs_peer_release_unlocked(struct bus1_fs_peer *fs_peer,
-					  struct bus1_fs_domain *fs_domain,
-					   bool drop_from_tree)
+static void bus1_fs_peer_cleanup(struct bus1_fs_peer *fs_peer,
+				 struct bus1_fs_domain *fs_domain,
+				 bool drop_from_tree)
 {
 	struct bus1_fs_name *fs_name;
 
 	/*
-	 * This function is called by bus1_active_drain(), once all active
+	 * This function is called by bus1_active_cleanup(), once all active
 	 * references to the handle are drained. In that case, we know that
 	 * no-one can hold a pointer to the peer, anymore. Hence, we can simply
 	 * drop all the peer information and destroy the peer.
 	 *
-	 * Note: This leaves cleanup of the peer-object to the caller. This
-	 *       allows us to do peer-destruction outside of the rwlock in the
-	 *       runtime fast-path.
+	 * During domain teardown, we avoid dropping peers from the tree, so we
+	 * can safely iterate the tree and reset it afterwards.
 	 */
 
-	lockdep_assert_held(&fs_domain->rwlock);
+	lockdep_assert_held(&fs_domain->rwlock); /* write-locked */
 
 	while ((fs_name = bus1_fs_name_pop(fs_domain, fs_peer, drop_from_tree)))
 		bus1_fs_name_free(fs_name);
 
-	--fs_domain->n_peers;
 	if (drop_from_tree)
 		rb_erase(&fs_peer->rb, &fs_domain->map_peers);
 
-	/* caller is responsible to invoke bus1_peer_free() */
+	--fs_domain->n_peers;
+	fs_peer->peer = bus1_peer_free(fs_peer->peer);
 }
 
-static void bus1_fs_peer_release_teardown(struct bus1_active *active,
+static void bus1_fs_peer_cleanup_teardown(struct bus1_active *active,
 					  void *userdata)
 {
 	struct bus1_fs_peer *fs_peer = container_of(active,
 						    struct bus1_fs_peer,
 						    active);
-	struct bus1_fs_domain *fs_domain = userdata;
 
-	/*
-	 * Release function for handle removals at domain tear down. The domain
-	 * is already locked, and stays so for the whole teardown. Hence, there
-	 * is no need to perform peer-destruction outside of the lock (this is
-	 * a slow-path, anyway).
-	 * Furthermore, since all handles are removed, there is no reason to
-	 * touch the rb-tree. Moreover, the teardown relies on the rb-tree to
-	 * stay read-only, so it can iterate safely over all peers without
-	 * protecting against peer removal.
-	 */
-
-	bus1_fs_peer_release_unlocked(fs_peer, fs_domain, false);
-	fs_peer->peer = bus1_peer_free(fs_peer->peer);
+	return bus1_fs_peer_cleanup(fs_peer, userdata, false);
 }
 
-static void bus1_fs_peer_release_runtime(struct bus1_active *active,
+static void bus1_fs_peer_cleanup_runtime(struct bus1_active *active,
 					 void *userdata)
 {
 	struct bus1_fs_peer *fs_peer = container_of(active,
 						    struct bus1_fs_peer,
 						    active);
-	struct bus1_fs_domain *fs_domain = userdata;
 
-	/*
-	 * Release function for handle removals at runtime. The domain is not
-	 * locked and the caller explicitly avoids locking it, to reduce the
-	 * critical section to a minimum. Furthermore, since the peer is
-	 * already drained, we can do the bus1_peer_free() call outside of the
-	 * critical section.
-	 */
-
-	down_write(&fs_domain->rwlock);
-	bus1_fs_peer_release_unlocked(fs_peer, fs_domain, true);
-	up_write(&fs_domain->rwlock);
-	fs_peer->peer = bus1_peer_free(fs_peer->peer);
+	return bus1_fs_peer_cleanup(fs_peer, userdata, true);
 }
 
-/*
- * Connect a new peer. We first allocate the peer object, then
- * lock the whole domain and link the names and the peer
- * itself. If either fails, revert everything we did so far and
- * bail out.
- */
 static int bus1_fs_peer_connect_new(struct bus1_fs_peer *fs_peer,
 				    struct bus1_fs_domain *fs_domain,
 				    struct bus1_cmd_connect *param)
@@ -298,6 +262,18 @@ static int bus1_fs_peer_connect_new(struct bus1_fs_peer *fs_peer,
 	size_t n, remaining;
 	const char *name;
 	int r;
+
+	/*
+	 * Connect a new peer. We first allocate the peer object, then
+	 * lock the whole domain and link the names and the peer
+	 * itself. If either fails, revert everything we did so far and
+	 * bail out.
+	 */
+
+	lockdep_assert_held(&fs_domain->active);
+	lockdep_assert_held(&fs_peer->rwlock);
+
+	/* XXX: check param->flags */
 
 	/* allocate new peer object */
 	peer = bus1_peer_new(fs_domain->domain, param);
@@ -312,7 +288,7 @@ static int bus1_fs_peer_connect_new(struct bus1_fs_peer *fs_peer,
 	while (remaining > 0) {
 		n = strnlen(name, remaining);
 		if (n == 0 || n == remaining) {
-			r = -EINVAL;
+			r = -EMSGSIZE;
 			goto exit;
 		}
 
@@ -336,7 +312,7 @@ static int bus1_fs_peer_connect_new(struct bus1_fs_peer *fs_peer,
 			     &fs_domain->map_peers.rb_node);
 	rb_insert_color(&fs_peer->rb, &fs_domain->map_peers);
 
-	/* allocate id and activate handle */
+	/* acquire ID and activate handle */
 	fs_peer->id = ++fs_domain->domain->peer_ids;
 	fs_peer->peer = peer;
 	++fs_domain->n_peers;
@@ -347,8 +323,7 @@ static int bus1_fs_peer_connect_new(struct bus1_fs_peer *fs_peer,
 
 exit:
 	if (peer) {
-		while ((fs_name = bus1_fs_name_pop(fs_domain, fs_peer,
-						   true)))
+		while ((fs_name = bus1_fs_name_pop(fs_domain, fs_peer, true)))
 			bus1_fs_name_free(fs_name);
 		bus1_peer_free(peer);
 	}
@@ -356,15 +331,19 @@ exit:
 	return r;
 }
 
-/*
- * Already connected. Further CONNECT calls are only allowed to
- * QUERY the current peer or RESET it.
- */
 static int bus1_fs_peer_connect_again(struct bus1_fs_peer *fs_peer,
 				      struct bus1_fs_domain *fs_domain,
 				      struct bus1_cmd_connect *param)
 {
 	struct rb_node *last;
+
+	/*
+	 * Already connected. Further CONNECT calls are only allowed to
+	 * QUERY the current peer or RESET it. Anything else is rejected.
+	 */
+
+	lockdep_assert_held(&fs_domain->active);
+	lockdep_assert_held(&fs_peer->rwlock);
 
 	if (param->flags & (BUS1_CONNECT_FLAG_PEER |
 			    BUS1_CONNECT_FLAG_MONITOR))
@@ -379,13 +358,12 @@ static int bus1_fs_peer_connect_again(struct bus1_fs_peer *fs_peer,
 	 * If a RESET is requested, we atomically DISCONNECT and
 	 * CONNECT the peer. Luckily, all we have to do is allocate a
 	 * new ID and re-add it to the rb-tree. Then we tell the peer
-	 * itself to flush any pending data.
-	 *
-	 * If there is any peer ioctl in parallel (like RECV, SEND,
-	 * etc.), they are *NOT* locked against the RESET (unlike the
-	 * initial CONNECT, which is serialized). Therefore, those
-	 * calls might return data of the old ID, even though they
-	 * return to user-space after the RESET.
+	 * itself to flush any pending data. There might be operations
+	 * in-flight, that finish after we reset the peer. All those
+	 * operations must be tagged with the old id, though (see
+	 * bus1_fs_peer_dereference() for details). Therefore, those
+	 * operations can be silently ignored and will be gc'ed later
+	 * on if their tag is outdated.
 	 */
 	if (param->flags & BUS1_CONNECT_FLAG_RESET) {
 		down_write(&fs_domain->rwlock);
@@ -397,8 +375,7 @@ static int bus1_fs_peer_connect_again(struct bus1_fs_peer *fs_peer,
 		/* insert at the tail again */
 		last = rb_last(&fs_domain->map_peers);
 		if (last)
-			rb_link_node(&fs_peer->rb, last,
-				     &last->rb_right);
+			rb_link_node(&fs_peer->rb, last, &last->rb_right);
 		else
 			rb_link_node(&fs_peer->rb, NULL,
 				     &fs_domain->map_peers.rb_node);
@@ -436,7 +413,7 @@ static int bus1_fs_peer_connect(struct bus1_fs_peer *fs_peer,
 		return -EINVAL;
 
 	/* lock against parallel CONNECT/DISCONNECT */
-	mutex_lock(&fs_peer->lock);
+	down_write(&fs_peer->rwlock);
 
 	if (bus1_active_is_deactivated(&fs_peer->active))
 		r = -ESHUTDOWN;
@@ -445,36 +422,40 @@ static int bus1_fs_peer_connect(struct bus1_fs_peer *fs_peer,
 	else
 		r = bus1_fs_peer_connect_new(fs_peer, fs_domain, param);
 
-	mutex_unlock(&fs_peer->lock);
+	up_write(&fs_peer->rwlock);
 
 	kfree(param);
 	return r;
 }
 
 static int bus1_fs_peer_disconnect(struct bus1_fs_peer *fs_peer,
-				   struct bus1_fs_domain *fs_domain,
-				   unsigned long arg)
+				   struct bus1_fs_domain *fs_domain)
 {
 	int r;
 
-	lockdep_assert_held(&fs_domain->active);
-
-	/* no arguments supported so far */
-	if (arg != 0)
-		return -EINVAL;
-
 	/* lock against parallel CONNECT/DISCONNECT */
-	mutex_lock(&fs_peer->lock);
+	down_write(&fs_peer->rwlock);
 
-	bus1_active_deactivate(&fs_peer->active);
-	/* only the first to drain will yield success */
-	if (bus1_active_drain(&fs_peer->active, &fs_peer->waitq,
-			      bus1_fs_peer_release_runtime, fs_domain))
+	/* wait for any outstanding operations */
+	bus1_active_drain(&fs_peer->active, &fs_peer->waitq);
+
+	/* lock domain and then release the peer */
+	down_write(&fs_domain->rwlock);
+
+	/*
+	 * We must not sleep on the fs_peer->waitq, it could deadlock
+	 * since we already hold the domain-lock. However, luckily all
+	 * peer-releases are locked against the domain, so we wouldn't
+	 * gain anything by passing the waitq in.
+	 */
+	if (bus1_active_cleanup(&fs_peer->active, NULL,
+				bus1_fs_peer_cleanup_runtime, fs_domain))
 		r = 0;
 	else
 		r = -ESHUTDOWN;
 
-	mutex_unlock(&fs_peer->lock);
+	up_write(&fs_domain->rwlock);
+	up_write(&fs_peer->rwlock);
 
 	return r;
 }
@@ -509,8 +490,7 @@ bus1_fs_peer_acquire_by_id(struct bus1_fs_domain *fs_domain, u64 id)
 	while (n) {
 		fs_peer = container_of(n, struct bus1_fs_peer, rb);
 		if (id == fs_peer->id) {
-			if (bus1_fs_peer_acquire(fs_peer))
-				res = fs_peer;
+			res = bus1_fs_peer_acquire(fs_peer);
 			break;
 		} else if (id < fs_peer->id) {
 			n = n->rb_left;
@@ -551,11 +531,9 @@ bus1_fs_peer_acquire_by_name(struct bus1_fs_domain *fs_domain,
 		fs_name = container_of(n, struct bus1_fs_name, rb);
 		v = strcmp(name, fs_name->name);
 		if (v == 0) {
-			if (bus1_fs_peer_acquire(fs_name->fs_peer)) {
-				if (out_id)
-					*out_id = fs_name->fs_peer->id;
-				res = fs_name->fs_peer;
-			}
+			res = bus1_fs_peer_acquire(fs_name->fs_peer);
+			if (res && out_id)
+				*out_id = res->id;
 			break;
 		} else if (v < 0) {
 			n = n->rb_left;
@@ -631,6 +609,7 @@ bus1_fs_domain_free(struct bus1_fs_domain *fs_domain)
 	WARN_ON(fs_domain->n_names > 0);
 	WARN_ON(fs_domain->n_peers > 0);
 	WARN_ON(fs_domain->domain);
+	bus1_active_destroy(&fs_domain->active);
 	kfree(fs_domain);
 
 	return NULL;
@@ -702,23 +681,79 @@ static void bus1_fs_domain_teardown(struct bus1_fs_domain *fs_domain)
 	struct rb_node *n;
 
 	/*
-	 * This tears down a whole domain. We first mark the domain as
-	 * deactivated, which makes sure no new handles can be created. Then we
-	 * iterate all peers and tear them completely down, draining each of
-	 * them to make sure there is no active context left. We use a special
-	 * release function to make sure the rb-tree is not touched, as we can
-	 * simply reset it afterwards.
+	 * This tears down a whole domain, in a synchronous fashion. This is
+	 * non-trivial, as it requires to synchronously drain all peers. So we
+	 * first deactivate the domain, which prevents new peers from being
+	 * linked to the domain. Then we deactivate all peers, which prevents
+	 * any new operation to be entered. We also drain all peers so we're
+	 * guaranteed all their operations are done. Then we drain the domain
+	 * so no domain reference is left.
+	 *
+	 * At this point, we know that all our objects are drained. However,
+	 * they might not have been cleaned up, yet. Therefore, we write-lock
+	 * the domain and now release every peer, lastly followed by a release
+	 * of the domain.
+	 *
+	 * Possible locking scenarios:
+	 *
+	 *   Peer connect:
+	 *     fs_peer.rwlock.write
+	 *       fs_domain.rwlock.write
+	 *
+	 *   Peer disconnect:
+	 *     fs_peer.rwlock.write
+	 *       fs_peer.active.write
+	 *       fs_domain.rwlock.write
+	 *         fs_peer.active.try-write
+	 *
+	 *   Peer lookup:
+	 *     fs_peer.rwlock.read
+	 *       fs_peer.active.try-read
+	 *         fs_domain.rwlock.read        # lock inversion
+	 *
+	 *   Domain teardown:
+	 *     fs_domain.rwlock.read
+	 *       fs_peer.active.write
+	 *     fs_domain.active.write
+	 *     fs_domain.rwlock.write
+	 *       fs_peer.active.try-write
+	 *     fs_domain.active.try-write
+	 *
+	 *   There is exactly one lock inversion, which is the peer lookup that
+	 *   read-locks the domain while holding a peer reference. Therefore,
+	 *   all paths that drain a peer must make sure to never hold a
+	 *   write-lock on the domain, but read-locks are fine.
 	 */
 
 	bus1_active_deactivate(&fs_domain->active);
 
-	down_write(&fs_domain->rwlock);
+	down_read(&fs_domain->rwlock);
 	for (n = rb_first(&fs_domain->map_peers); n; n = rb_next(n)) {
 		fs_peer = container_of(n, struct bus1_fs_peer, rb);
 		bus1_active_deactivate(&fs_peer->active);
-		/* final drain does *not* touch the rb-tree */
-		bus1_active_drain(&fs_peer->active, &fs_peer->waitq,
-				  bus1_fs_peer_release_teardown, fs_domain);
+		bus1_active_drain(&fs_peer->active, &fs_peer->waitq);
+	}
+	up_read(&fs_domain->rwlock);
+
+	bus1_active_drain(&fs_domain->active, &fs_domain->waitq);
+
+	down_write(&fs_domain->rwlock);
+	for (n = rb_first(&fs_domain->map_peers); n; n = rb_next(n)) {
+		fs_peer = container_of(n, struct bus1_fs_peer, rb);
+
+		/*
+		 * We must not sleep on the fs_peer->waitq, it could deadlock
+		 * since we already hold the domain-lock. However, luckily all
+		 * peer-releases are locked against the domain, so we wouldn't
+		 * gain anything by passing the waitq in.
+		 *
+		 * We use a custom cleanup-callback which does the normal peer
+		 * cleanup, but leaves the rb-tree untouched. This simplifies
+		 * our iterator, as long as we properly reset the tree
+		 * afterwards.
+		 */
+		bus1_active_cleanup(&fs_peer->active, NULL,
+				    bus1_fs_peer_cleanup_teardown, fs_domain);
 	}
 	WARN_ON(fs_domain->n_peers > 0);
 	WARN_ON(fs_domain->n_names > 0);
@@ -726,9 +761,8 @@ static void bus1_fs_domain_teardown(struct bus1_fs_domain *fs_domain)
 	fs_domain->map_names = RB_ROOT;
 	up_write(&fs_domain->rwlock);
 
-	/* all peers are gone, domain is unused so tear it down */
-	bus1_active_drain(&fs_domain->active, &fs_domain->waitq,
-			  bus1_fs_domain_cleanup, NULL);
+	bus1_active_cleanup(&fs_domain->active, &fs_domain->waitq,
+			    bus1_fs_domain_cleanup, NULL);
 }
 
 static int bus1_fs_domain_resolve(struct bus1_fs_domain *fs_domain,
@@ -824,9 +858,7 @@ static int bus1_fs_bus_fop_release(struct inode *inode, struct file *file)
 	struct bus1_fs_domain *fs_domain = inode->i_sb->s_fs_info;
 	struct bus1_fs_peer *fs_peer = file->private_data;
 
-	bus1_active_deactivate(&fs_peer->active);
-	bus1_active_drain(&fs_peer->active, &fs_peer->waitq,
-			  bus1_fs_peer_release_runtime, fs_domain);
+	bus1_fs_peer_disconnect(fs_peer, fs_domain);
 	bus1_fs_peer_free(fs_peer);
 
 	return 0;
@@ -842,15 +874,13 @@ static long bus1_fs_bus_fop_ioctl(struct file *file,
 
 	switch (cmd) {
 	case BUS1_CMD_CONNECT:
-	case BUS1_CMD_DISCONNECT:
 	case BUS1_CMD_RESOLVE:
+		/* lock against domain shutdown */
 		if (!bus1_fs_domain_acquire(fs_domain))
 			return -ESHUTDOWN;
 
 		if (cmd == BUS1_CMD_CONNECT)
 			r = bus1_fs_peer_connect(fs_peer, fs_domain, arg);
-		else if (cmd == BUS1_CMD_DISCONNECT)
-			r = bus1_fs_peer_disconnect(fs_peer, fs_domain, arg);
 		else if (cmd == BUS1_CMD_RESOLVE)
 			r = bus1_fs_domain_resolve(fs_domain, arg);
 		else
@@ -859,16 +889,27 @@ static long bus1_fs_bus_fop_ioctl(struct file *file,
 		bus1_fs_domain_release(fs_domain);
 		break;
 
+	case BUS1_CMD_DISCONNECT:
+		/* no arguments allowed, it behaves like the last close() */
+		if (arg != 0)
+			return -EINVAL;
+
+		return bus1_fs_peer_disconnect(fs_peer, fs_domain);
+
 	case BUS1_CMD_FREE:
 	case BUS1_CMD_TRACK:
 	case BUS1_CMD_UNTRACK:
 	case BUS1_CMD_SEND:
 	case BUS1_CMD_RECV:
-		if (!bus1_fs_peer_acquire(fs_peer))
-			return -ESHUTDOWN;
-
-		r = bus1_peer_ioctl(fs_peer->peer, fs_domain, cmd, arg);
-		bus1_fs_peer_release(fs_peer);
+		down_read(&fs_peer->rwlock);
+		if (!bus1_fs_peer_acquire(fs_peer)) {
+			r = -ESHUTDOWN;
+		} else {
+			r = bus1_peer_ioctl(fs_peer->peer, fs_domain,
+					    cmd, arg);
+			bus1_fs_peer_release(fs_peer);
+		}
+		up_read(&fs_peer->rwlock);
 		break;
 
 	default:

@@ -22,13 +22,15 @@
  *   ACTIVE:    Live state, active references can be acquired
  *   DRAINING:  Deactivated but lingering, no active references can be acquired
  *   DRAINED:   Deactivated and all active references were dropped
+ *   RELEASED:  Fully drained and synchronously released
  *
  * Initially, all bus1_active objects are in state NEW. As soon as they're
  * activated, they enter ACTIVE and active references can be acquired. This is
  * the normal, live state. Once the object is deactivated, it enters state
  * DRAINING. No new active references can be acquired, but some threads might
  * still own active references. Once all those are dropped, the object enters
- * state DRAINED and is finished. It cannot be re-used, anymore.
+ * state DRAINED. Now the object can be released a *single* time, before it
+ * enters state RELEASED and is finished. It cannot be re-used, anymore.
  *
  * Active-references are very useful to track threads that perform callbacks on
  * an object. As long as a callback is running, an active reference is held,
@@ -52,8 +54,8 @@
  * This object should be treated like a simple atomic_t. Only in the case of
  * lockdep-enabled compilations, it will contain more fields.
  *
- * Users must embed this object into their own and create/destroy it via
- * bus1_active_init() and bus1_active_destroy().
+ * Users must embed this object into their parent structures and create/destroy
+ * it via bus1_active_init() and bus1_active_destroy().
  */
 struct bus1_active {
 	atomic_t count;
@@ -63,20 +65,34 @@ struct bus1_active {
 #endif
 };
 
-void bus1_active_init(struct bus1_active *active);
+void bus1_active_init_private(struct bus1_active *active);
 void bus1_active_destroy(struct bus1_active *active);
 bool bus1_active_is_new(struct bus1_active *active);
 bool bus1_active_is_active(struct bus1_active *active);
 bool bus1_active_is_deactivated(struct bus1_active *active);
+bool bus1_active_is_drained(struct bus1_active *active);
 bool bus1_active_activate(struct bus1_active *active);
-void bus1_active_deactivate(struct bus1_active *active);
-bool bus1_active_drain(struct bus1_active *active,
-		       wait_queue_head_t *waitq,
-		       void (*release) (struct bus1_active *active,
-		                        void *userdata),
-		       void *userdata);
+bool bus1_active_deactivate(struct bus1_active *active);
+void bus1_active_drain(struct bus1_active *active, wait_queue_head_t *waitq);
+bool bus1_active_cleanup(struct bus1_active *active,
+			 wait_queue_head_t *waitq,
+			 void (*cleanup) (struct bus1_active *active,
+		                         void *userdata),
+			 void *userdata);
 struct bus1_active *bus1_active_acquire(struct bus1_active *active);
 struct bus1_active *bus1_active_release(struct bus1_active *active,
 					wait_queue_head_t *waitq);
+
+#ifdef CONFIG_DEBUG_LOCK_ALLOC
+#  define bus1_active_init(_active) 					\
+	({								\
+		static struct lock_class_key bus1_active_lock_key;	\
+		lockdep_init_map(&(_active)->dep_map, "bus1.active",	\
+				 &bus1_active_lock_key, 0);		\
+		bus1_active_init_private(_active);			\
+	})
+#else
+#  define bus1_active_init(_active) bus1_active_init_private(_active)
+#endif
 
 #endif /* __BUS1_ACTIVE_H */

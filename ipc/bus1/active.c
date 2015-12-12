@@ -21,7 +21,7 @@
  * means, the counter is now negative but still counts the active references.
  * Once it drops to exactly ACTIVE_BIAS, we know all active references were
  * dropped. Exactly one thread will change it to ACTIVE_RELEASE now, perform
- * cleanup and then put it into ACTIVE_DRAINED. Once drained, all other threads
+ * cleanup and then put it into ACTIVE_DONE. Once released, all other threads
  * that tried deactivating the node will now be woken up (thus, they wait until
  * the object is fully done).
  * The initial state during object setup is ACTIVE_NEW. If an object is
@@ -39,25 +39,22 @@
 #define BUS1_ACTIVE_BIAS		(INT_MIN + 5)
 #define BUS1_ACTIVE_RELEASE_DIRECT	(BUS1_ACTIVE_BIAS - 1)
 #define BUS1_ACTIVE_RELEASE		(BUS1_ACTIVE_BIAS - 2)
-#define BUS1_ACTIVE_DRAINED		(BUS1_ACTIVE_BIAS - 3)
+#define BUS1_ACTIVE_DONE		(BUS1_ACTIVE_BIAS - 3)
 #define BUS1_ACTIVE_NEW			(BUS1_ACTIVE_BIAS - 4)
 #define _BUS1_ACTIVE_RESERVED		(BUS1_ACTIVE_BIAS - 5)
 
 /**
- * bus1_active_init() - initialize object
+ * bus1_active_init_private() - initialize object
  * @active:	object to initialize
  *
- * This initialized an active-object. The initial state is NEW, and as such no
+ * This initializes an active-object. The initial state is NEW, and as such no
  * active reference can be acquired. The object must be activated first.
+ *
+ * This is an internal helper. Always use the public bus1_active_init() macro
+ * which does proper lockdep initialization for private key classes.
  */
-void bus1_active_init(struct bus1_active *active)
+void bus1_active_init_private(struct bus1_active *active)
 {
-#ifdef CONFIG_DEBUG_LOCK_ALLOC
-	static struct lock_class_key lock_key;
-
-	lockdep_init_map(&active->dep_map, "bus1.active", &lock_key, 0);
-#endif
-
 	atomic_set(&active->count, BUS1_ACTIVE_NEW);
 }
 
@@ -66,14 +63,16 @@ void bus1_active_init(struct bus1_active *active)
  * @active:	object to destroy
  *
  * Destroy an active-object. The object must have been initialized via
- * bus1_active_init(), deactivated via bus1_active_deactivate() and drained via
- * bus1_active_drain(), before you can destroy it.
+ * bus1_active_init(), deactivated via bus1_active_deactivate(), drained via
+ * bus1_active_drain() and cleaned via bus1_active_cleanup(), before you can
+ * destroy it.
  *
- * This function is a no-op, apart from sanity checks.
+ * This function only does sanity checks, it does not modify the object itself.
+ * There is no allocated memory, so there is nothing to do.
  */
 void bus1_active_destroy(struct bus1_active *active)
 {
-	WARN_ON(atomic_read(&active->count) != BUS1_ACTIVE_DRAINED);
+	WARN_ON(atomic_read(&active->count) != BUS1_ACTIVE_DONE);
 }
 
 /**
@@ -95,7 +94,7 @@ bool bus1_active_is_new(struct bus1_active *active)
  * @active:	object to check
  *
  * This checks whether the given active-object is active. That is, the object
- * was activated, and was not deactivated, yet.
+ * was already activated, but not deactivated, yet.
  *
  * Note that this function does not give any guarantee that the object is still
  * active/inactive at the time this call returns. It only serves as a barrier.
@@ -108,14 +107,14 @@ bool bus1_active_is_active(struct bus1_active *active)
 }
 
 /**
- * bus1_active_is_deactivated() - check whether object was deactivated, yet
+ * bus1_active_is_deactivated() - check whether object was deactivated
  * @active:	object to check
  *
  * This checks whether the given active-object was already deactivated. That
  * is, the object was actively deactivated (state NEW does *not* count as
- * deactivated).
+ * deactivated) via bus1_active_deactivate().
  *
- * Once this function returns true, it will stay as such.
+ * Once this function returns true, it cannot change again on this object.
  *
  * Return: True if already deactivated, false if not.
  */
@@ -123,6 +122,22 @@ bool bus1_active_is_deactivated(struct bus1_active *active)
 {
 	int v = atomic_read(&active->count);
 	return v > BUS1_ACTIVE_NEW && v < 0;
+}
+
+/**
+ * bus1_active_is_drained() - check whether object is drained
+ * @active:	object to check
+ *
+ * This checks whether the given object was already deactivated and is fully
+ * drained. That is, no active references to the object exist, nor can they be
+ * acquired, anymore.
+ *
+ * Return: True if drained, false if not.
+ */
+bool bus1_active_is_drained(struct bus1_active *active)
+{
+	int v = atomic_read(&active->count);
+	return v > BUS1_ACTIVE_NEW && v <= BUS1_ACTIVE_BIAS;
 }
 
 /**
@@ -134,7 +149,8 @@ bool bus1_active_is_deactivated(struct bus1_active *active)
  *
  * Once this returns successfully, active references can be acquired.
  *
- * Return: True if it was activated, false if it was already activated.
+ * Return: True if this call activated it, false if it was already activated,
+ *         or deactivated.
  */
 bool bus1_active_activate(struct bus1_active *active)
 {
@@ -145,7 +161,7 @@ bool bus1_active_activate(struct bus1_active *active)
 /*
  * There is no atomic_add_unless_negative(), nor an
  * atomic_sub_unless_negative(), so we implement it here, similarly to their
- * *_inc_* and *_dec_* counterparts.
+ * inc and dec counterparts.
  */
 static int bus1_active_add_unless_negative(struct bus1_active *active, int add)
 {
@@ -166,49 +182,42 @@ static int bus1_active_add_unless_negative(struct bus1_active *active, int add)
  *
  * This deactivates the given object, if not already done by someone else. Once
  * this returns, no new active references can be acquired.
+ *
+ * Return: True if this call deactivated the object, false if it was already
+ *         deactivated by someone else.
  */
-void bus1_active_deactivate(struct bus1_active *active)
+bool bus1_active_deactivate(struct bus1_active *active)
 {
 	int v;
 
 	v = atomic_cmpxchg(&active->count,
 			   BUS1_ACTIVE_NEW, BUS1_ACTIVE_RELEASE_DIRECT);
 	if (v != BUS1_ACTIVE_NEW)
-		bus1_active_add_unless_negative(active, BUS1_ACTIVE_BIAS);
+		v = bus1_active_add_unless_negative(active, BUS1_ACTIVE_BIAS);
+
+	return v;
 }
 
 /**
  * bus1_active_drain() - drain active references
  * @active:	object to drain
  * @waitq:	wait-queue linked to @active
- * @release:	release callback, or NULL
- * @userdata:	userdata for callback
  *
  * This waits for all active-references on @active to be dropped. It uses the
  * passed wait-queue to sleep. It must be the same wait-queue that is used when
  * calling bus1_active_release().
- * The first caller that enters this function (picked randomly if there're
- * multiple parallel callers) is responsible to call the release callback and
- * cleanup resources. Once this is done, all other parallel callers are woken
- * up and return.
  *
  * The caller must guarantee that bus1_active_deactivate() was called before.
  *
- * This function can be safely called in parallel on multiple CPUs. It
- * guarantees that once the first CPU returns, this function is fully finished.
+ * This function can be safely called in parallel on multiple CPUs.
  *
- * Return: True if this is the thread that drained it, false otherwise.
+ * Semantically (and also enforced by lockdep), this call behaves like a
+ * down_write(), followed by an up_write(), on this active object.
  */
-bool bus1_active_drain(struct bus1_active *active,
-		       wait_queue_head_t *waitq,
-		       void (*release) (struct bus1_active *active,
-		                        void *userdata),
-		       void *userdata)
+void bus1_active_drain(struct bus1_active *active, wait_queue_head_t *waitq)
 {
-	int v;
-
 	if (WARN_ON(!bus1_active_is_deactivated(active)))
-		return false;
+		return;
 
 #ifdef CONFIG_DEBUG_LOCK_ALLOC
 	/*
@@ -230,6 +239,70 @@ bool bus1_active_drain(struct bus1_active *active,
 	/* wait until all active references were dropped */
 	wait_event(*waitq, atomic_read(&active->count) <= BUS1_ACTIVE_BIAS);
 
+#ifdef CONFIG_DEBUG_LOCK_ALLOC
+	/*
+	 * Pretend that no-one got the lock, but everyone got interruped
+	 * instead. That is, they released the lock without ever actually
+	 * getting it locked.
+	 */
+	lock_release(&active->dep_map,		/* lock */
+		     1,				/* nested (no-op) */
+		     _RET_IP_);			/* instruction pointer */
+#endif
+}
+
+/**
+ * bus1_active_cleanup() - cleanup drained object
+ * @active:	object to release
+ * @waitq:	wait-queue linked to @active, or NULL
+ * @cleanup:	cleanup callback, or NULL
+ * @userdata:	userdata for callback
+ *
+ * This performs the final object cleanup. The caller must guarantee that the
+ * object is drained, by calling bus1_active_drain().
+ *
+ * This function invokes the passed cleanup callback on the object. However, it
+ * guarantees that this is done exactly once. If there're multiple parallel
+ * callers, this will pick one randomly and make all others wait until it is
+ * done. If you call this after it was already cleaned up, this is a no-op
+ * and only serves as barrier.
+ *
+ * If @waitq is NULL, the wait is skipped and the call returns immediately. In
+ * this case, another thread has entered before, but there is no guarantee that
+ * they finished executing the cleanup callback, yet.
+ *
+ * If @waitq is non-NULL, this call behaves like a down_write(), followed by an
+ * up_write(), just like bus1_active_drain(). If @waitq is NULL, this rather
+ * behaves like a down_write_trylock(), optionally followed by an up_write().
+ *
+ * Return: True if this is the thread that released it, false otherwise.
+ */
+bool bus1_active_cleanup(struct bus1_active *active,
+			 wait_queue_head_t *waitq,
+			 void (*cleanup) (struct bus1_active *active,
+			                  void *userdata),
+			 void *userdata)
+{
+	int v;
+
+	if (WARN_ON(!bus1_active_is_drained(active)))
+		return false;
+
+#ifdef CONFIG_DEBUG_LOCK_ALLOC
+	/*
+	 * We pretend this is a down_write_interruptible() and all but
+	 * the release-context get interrupted. This is required, as we
+	 * cannot call lock_acquired() on multiple threads without
+	 * synchronization. Hence, only the release-context will do
+	 * this, all others just release the lock.
+	 */
+	lock_acquire_exclusive(&active->dep_map,/* lock */
+			       0,		/* subclass */
+			       !waitq,		/* try-lock */
+			       NULL,		/* nest underneath */
+			       _RET_IP_);	/* IP */
+#endif
+
 	/* mark object as RELEASE */
 	v = atomic_cmpxchg(&active->count,
 			   BUS1_ACTIVE_RELEASE_DIRECT, BUS1_ACTIVE_RELEASE);
@@ -249,13 +322,14 @@ bool bus1_active_drain(struct bus1_active *active,
 		lock_acquired(&active->dep_map, _RET_IP_);
 #endif
 
-		if (release)
-			release(active, userdata);
+		if (cleanup)
+			cleanup(active, userdata);
 
-		/* mark as DRAINED */
-		atomic_set(&active->count, BUS1_ACTIVE_DRAINED);
-		wake_up_all(waitq);
-	} else {
+		/* mark as DONE */
+		atomic_set(&active->count, BUS1_ACTIVE_DONE);
+		if (waitq)
+			wake_up_all(waitq);
+	} else if (waitq) {
 
 #ifdef CONFIG_DEBUG_LOCK_ALLOC
 		/* we're contended against the release context */
@@ -264,7 +338,7 @@ bool bus1_active_drain(struct bus1_active *active,
 
 		/* wait until object is DRAINED */
 		wait_event(*waitq,
-			   atomic_read(&active->count) == BUS1_ACTIVE_DRAINED);
+			   atomic_read(&active->count) == BUS1_ACTIVE_DONE);
 	}
 
 #ifdef CONFIG_DEBUG_LOCK_ALLOC
@@ -274,18 +348,18 @@ bool bus1_active_drain(struct bus1_active *active,
 	 * 'interrupted'. Everyone releases the lock, but only one
 	 * caller really got it.
 	 */
-	lock_release(&active->dep_map,		/* lock */
-		     1,				/* nested (no-op) */
-		     _RET_IP_);			/* instruction pointer */
+	lock_release(&active->dep_map,	/* lock */
+		     1,			/* nested (no-op) */
+		     _RET_IP_);		/* instruction pointer */
 #endif
 
-	/* true if we drained it */
+	/* true if we released it */
 	return v == BUS1_ACTIVE_BIAS || v == BUS1_ACTIVE_RELEASE_DIRECT;
 }
 
 /**
  * bus1_active_acquire() - acquire active reference
- * @active:	object to acquire active reference to, NULL
+ * @active:	object to acquire active reference to, or NULL
  *
  * This acquires an active reference to the passed object. If the object was
  * not activated, yet, or if it was already deactivated, this will fail and
@@ -293,6 +367,9 @@ bool bus1_active_drain(struct bus1_active *active,
  * @active.
  *
  * If NULL is passed, this is a no-op and always returns NULL.
+ *
+ * This behaves as a down_read_trylock(). Use bus1_active_release() to release
+ * the reference again and get the matching up_read().
  *
  * Return: @active if reference was acquired, NULL if not.
  */
@@ -322,6 +399,8 @@ struct bus1_active *bus1_active_acquire(struct bus1_active *active)
  * bus1_active_acquire().
  *
  * This is a no-op if NULL is passed.
+ *
+ * This behaves like an up_read().
  *
  * Return: NULL is returned.
  */
