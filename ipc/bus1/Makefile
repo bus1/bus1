@@ -14,6 +14,7 @@ bus$(BUS1_EXT)-y :=	\
 	domain.o	\
 	filesystem.o	\
 	main.o		\
-	peer.o
+	peer.o		\
+	pool.o
 
 obj-$(CONFIG_BUS1) += bus$(BUS1_EXT).o
