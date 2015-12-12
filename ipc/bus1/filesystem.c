@@ -86,6 +86,7 @@ static struct bus1_fs_name *bus1_fs_name_new(const char *name)
 	if (!fs_name)
 		return ERR_PTR(-ENOMEM);
 
+	fs_name->next = NULL;
 	fs_name->fs_peer = NULL;
 	memcpy(fs_name->name, name, namelen);
 
@@ -299,8 +300,10 @@ static int bus1_fs_peer_connect_new(struct bus1_fs_peer *fs_peer,
 		}
 
 		r = bus1_fs_name_push(fs_domain, fs_peer, fs_name);
-		if (r < 0)
+		if (r < 0) {
+			bus1_fs_name_free(fs_name);
 			goto exit;
+		}
 	}
 
 	/* link into rbtree, we know it must be at the tail */
