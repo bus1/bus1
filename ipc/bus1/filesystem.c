@@ -1065,17 +1065,16 @@ static struct inode *bus1_fs_inode_get(struct super_block *sb,
 	inode->i_mapping->a_ops = &empty_aops;
 	inode->i_atime = inode->i_ctime = inode->i_mtime = CURRENT_TIME;
 
-	/* XXX: default permissions? (uid/gid is root) */
-	inode->i_mode = S_IALLUGO;
-
 	switch (ino) {
 	case BUS1_FS_INO_ROOT:
+		inode->i_mode = 00755;
 		inode->i_mode |= S_IFDIR;
 		inode->i_op = &bus1_fs_dir_iops;
 		inode->i_fop = &bus1_fs_dir_fops;
 		set_nlink(inode, 2);
 		break;
 	case BUS1_FS_INO_BUS:
+		inode->i_mode = 00666;
 		inode->i_mode |= S_IFREG;
 		inode->i_op = &bus1_fs_bus_iops;
 		inode->i_fop = &bus1_fs_bus_fops;
