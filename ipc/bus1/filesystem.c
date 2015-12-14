@@ -439,7 +439,8 @@ static int bus1_fs_peer_disconnect(struct bus1_fs_peer *fs_peer,
 	/* lock against parallel CONNECT/DISCONNECT */
 	down_write(&fs_peer->rwlock);
 
-	/* wait for any outstanding operations */
+	/* deactivate and wait for any outstanding operations */
+	bus1_active_deactivate(&fs_peer->active);
 	bus1_active_drain(&fs_peer->active, &fs_peer->waitq);
 
 	/* lock domain and then release the peer */
