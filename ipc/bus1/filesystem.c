@@ -223,14 +223,19 @@ static void bus1_fs_peer_cleanup(struct bus1_fs_peer *fs_peer,
 
 	lockdep_assert_held(&fs_domain->rwlock); /* write-locked */
 
-	while ((fs_name = bus1_fs_name_pop(fs_domain, fs_peer, drop_from_tree)))
-		bus1_fs_name_free(fs_name);
+	if (fs_peer->peer) {
+		while ((fs_name = bus1_fs_name_pop(fs_domain, fs_peer,
+						   drop_from_tree)))
+			bus1_fs_name_free(fs_name);
 
-	if (drop_from_tree)
-		rb_erase(&fs_peer->rb, &fs_domain->map_peers);
+		if (drop_from_tree)
+			rb_erase(&fs_peer->rb, &fs_domain->map_peers);
 
-	--fs_domain->n_peers;
-	fs_peer->peer = bus1_peer_free(fs_peer->peer);
+		--fs_domain->n_peers;
+		fs_peer->peer = bus1_peer_free(fs_peer->peer);
+	} else {
+		WARN_ON(fs_peer->names);
+	}
 }
 
 static void bus1_fs_peer_cleanup_teardown(struct bus1_active *active,
