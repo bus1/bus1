@@ -1119,7 +1119,6 @@ static const struct super_operations bus1_fs_super_sops = {
 
 static int bus1_fs_super_fill(struct super_block *sb)
 {
-	struct bus1_fs_domain *fs_domain = sb->s_fs_info;
 	struct inode *inode;
 
 	sb->s_blocksize = PAGE_CACHE_SIZE;
@@ -1140,7 +1139,6 @@ static int bus1_fs_super_fill(struct super_block *sb)
 		return -ENOMEM;
 	}
 
-	bus1_active_activate(&fs_domain->active);
 	sb->s_flags |= MS_ACTIVE;
 	return 0;
 }
