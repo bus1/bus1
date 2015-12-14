@@ -977,7 +977,7 @@ static int bus1_fs_dir_fop_iterate(struct file *file, struct dir_context *ctx)
 
 	/*
 	 * There is only a single directory per mount, hence, it must be the
-	 * root directory. Inside of the root directory, we have 3 entires:
+	 * root directory. Inside of the root directory, we have 3 entries:
 	 * The 2 standard directories (`.', `..') and one fixed entry called
 	 * `bus', which is the entry point for new peers.
 	 */
