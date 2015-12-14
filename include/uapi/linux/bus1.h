@@ -66,7 +66,6 @@ struct bus1_cmd_resolve {
 } __attribute__((__aligned__(8)));
 
 struct bus1_cmd_send {
-	__u64 size;
 	__u64 flags;
 	__u64 ptr_destinations;
 	__u64 n_destinations;
@@ -81,7 +80,6 @@ enum {
 };
 
 struct bus1_cmd_recv {
-	__u64 size;
 	__u64 flags;
 	__u64 msg_offset;
 	__u64 msg_size;
