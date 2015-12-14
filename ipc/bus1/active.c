@@ -65,14 +65,17 @@ void bus1_active_init_private(struct bus1_active *active)
  * Destroy an active-object. The object must have been initialized via
  * bus1_active_init(), deactivated via bus1_active_deactivate(), drained via
  * bus1_active_drain() and cleaned via bus1_active_cleanup(), before you can
- * destroy it.
+ * destroy it. Alternatively, it can also be destroyed if still in state NEW.
  *
  * This function only does sanity checks, it does not modify the object itself.
  * There is no allocated memory, so there is nothing to do.
  */
 void bus1_active_destroy(struct bus1_active *active)
 {
-	WARN_ON(atomic_read(&active->count) != BUS1_ACTIVE_DONE);
+	int v;
+
+	v = atomic_read(&active->count);
+	WARN_ON(v != BUS1_ACTIVE_NEW && v != BUS1_ACTIVE_DONE);
 }
 
 /**
