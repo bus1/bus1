@@ -40,6 +40,8 @@
 #include <linux/ioctl.h>
 #include <linux/types.h>
 
+#define BUS1_NAME_MAX_SIZE (256) /* including terminating 0 */
+
 #define BUS1_IOCTL_MAGIC		0x96
 #define BUS1_FLAG_NEGOTIATE		(1ULL << 63)
 
