@@ -598,10 +598,6 @@ struct bus1_peer *bus1_fs_peer_dereference(struct bus1_fs_peer *fs_peer)
 	return fs_peer->peer;
 }
 
-/*
- * Domain Handles
- */
-
 static struct bus1_fs_domain *
 bus1_fs_domain_free(struct bus1_fs_domain *fs_domain)
 {
