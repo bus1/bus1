@@ -71,10 +71,8 @@ module:
 # integration..
 #
 tests:
+	CFLAGS="-g -O0" $(MAKE) -C tools/testing/selftests/bus1/
 .PHONY: tests
-
-# XXX: implement
-#	CFLAGS="-g -O0" $(MAKE) -C tools/testing/selftests/bus1/
 
 #
 # Bus1 Build Target
@@ -130,10 +128,10 @@ tt-prepare: module tests
 .PHONY: tt-prepare
 
 tt: tt-prepare
-	tools/testing/selftests/bus1/bus1-test -m bus$(BUS1_EXT) ; (R=$$? ; dmesg ; exit $$R)
+	tools/testing/selftests/bus1/b1-test --module bus$(BUS1_EXT) ; (R=$$? ; dmesg ; exit $$R)
 .PHONY: tt
 
 stt: tt-prepare
-	sudo tools/testing/selftests/bus1/bus1-test -m bus$(BUS1_EXT) ; (R=$$? ; dmesg ; exit $$R)
+	sudo tools/testing/selftests/bus1/b1-test --module bus$(BUS1_EXT) ; (R=$$? ; dmesg ; exit $$R)
 .PHONY: stt
 
