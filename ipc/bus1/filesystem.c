@@ -1043,9 +1043,34 @@ static struct dentry *bus1_fs_dir_iop_lookup(struct inode *dir,
 	return old;
 }
 
+static int bus1_fs_dir_iop_unlink(struct inode *dir, struct dentry *dentry)
+{
+	struct bus1_fs_domain *fs_domain = dir->i_sb->s_fs_info;
+
+	/*
+	 * An unlink() on the `bus' file causes a full, synchronous teardown of
+	 * the domain. We only provide this for debug builds, so we can test
+	 * the teardown properly. On production builds, it is always rejected
+	 * with EPERM (as if .unlink was NULL).
+	 */
+
+	if (!strcmp(KBUILD_MODNAME, "bus1"))
+		return -EPERM;
+	if (strcmp(dentry->d_name.name, "bus"))
+		return -EPERM;
+	if (!capable(CAP_SYS_ADMIN))
+		return -EPERM;
+
+	bus1_fs_domain_teardown(fs_domain);
+	clear_nlink(d_inode(dentry));
+
+	return 0;
+}
+
 static const struct inode_operations bus1_fs_dir_iops = {
 	.permission	= generic_permission,
 	.lookup		= bus1_fs_dir_iop_lookup,
+	.unlink		= bus1_fs_dir_iop_unlink,
 };
 
 /*
