@@ -43,4 +43,7 @@ static const struct b1_test b1_tests[] = {
 	{ .name = "peer", .main = test_peer },
 };
 
+extern const char *b1_filesystem;
+extern const char *b1_mountpath;
+
 #endif /* __B1_TEST_H */

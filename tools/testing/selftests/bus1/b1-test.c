@@ -23,6 +23,8 @@
 
 static const char *arg_module = "bus1";
 static const char *arg_test = NULL;
+const char *b1_filesystem = NULL;
+const char *b1_mountpath = NULL;
 
 static int fork_and_run(const struct b1_test *test, const char *mount_path)
 {
@@ -48,15 +50,8 @@ static int fork_and_run(const struct b1_test *test, const char *mount_path)
 
 static int run_one(const struct b1_test *test)
 {
-	size_t i, module_len, line_len;
-	char *mount_path;
+	size_t i, line_len;
 	int r;
-
-	/* concatenate mount-path */
-	module_len = strlen(arg_module) + 1;
-	mount_path = alloca(module_len + 8);
-	memcpy(mount_path, "/sys/fs/", 8);
-	memcpy(mount_path + 8, arg_module, module_len);
 
 	/* print test name, aligned */
 	line_len = 12 + strlen(test->name);
@@ -67,7 +62,7 @@ static int run_one(const struct b1_test *test)
 	fflush(stdout);
 
 	/* run test */
-	r = fork_and_run(test, mount_path);
+	r = fork_and_run(test, b1_mountpath);
 
 	/* print result */
 	if (r == B1_TEST_OK || r == B1_TEST_SKIP)
@@ -130,7 +125,7 @@ static int parse_argv(int argc, char **argv)
 		{}
 	};
 	size_t i;
-	int c;
+	int r, c;
 
 	while ((c = getopt_long(argc, argv, "h", options, NULL)) >= 0) {
 		switch (c) {
@@ -162,6 +157,12 @@ static int parse_argv(int argc, char **argv)
 	if (argc > optind)
 		arg_test = argv[optind];
 
+	r = asprintf((char **)&b1_filesystem, "%sfs", arg_module);
+	assert(r >= 0);
+
+	r = asprintf((char **)&b1_mountpath, "/sys/fs/%s", arg_module);
+	assert(r >= 0);
+
 	return 1;
 }
 
@@ -179,5 +180,7 @@ int main(int argc, char **argv)
 		r = run_all();
 
 exit:
+	free((char *)b1_mountpath);
+	free((char *)b1_filesystem);
 	return r < 0 ? EXIT_FAILURE : EXIT_SUCCESS;
 }
