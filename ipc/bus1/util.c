@@ -9,11 +9,14 @@
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 #include <linux/compat.h>
+#include <linux/file.h>
 #include <linux/fs.h>
 #include <linux/kernel.h>
 #include <linux/pagemap.h>
 #include <linux/slab.h>
 #include <linux/uaccess.h>
+#include <net/sock.h>
+#include "filesystem.h"
 #include "main.h"
 #include "util.h"
 
@@ -181,4 +184,52 @@ int bus1_import_vecs(struct iovec *out_vecs,
 
 	*out_length = length;
 	return 0;
+}
+
+/**
+ * bus1_import_fd() - import file descriptor from user
+ * @user_fd:	pointer to user-supplied file descriptor
+ *
+ * This imports a file-descriptor from the current user-context. The FD number
+ * is copied into kernel-space, then resolved to a file and returned to the
+ * caller. If something goes wrong, an error is returned.
+ *
+ * Neither bus1, nor UDS files are allowed. If those are supplied, EOPNOTSUPP
+ * is returned. Those would require expensive garbage-collection if they're
+ * sent recursively by user-space.
+ *
+ * Return: Pointer to pinned file, ERR_PTR on failure.
+ */
+struct file *bus1_import_fd(const u32 __user *user_fd)
+{
+	struct file *f, *ret;
+	struct socket *sock;
+	struct inode *inode;
+	int fd;
+
+	if (unlikely(get_user(fd, user_fd)))
+		return ERR_PTR(-EFAULT);
+	if (unlikely(fd < 0))
+		return ERR_PTR(-EBADF);
+
+	f = fget_raw(fd);
+	if (unlikely(!f))
+		return ERR_PTR(-EBADF);
+
+	inode = file_inode(f);
+	sock = S_ISSOCK(inode->i_mode) ? SOCKET_I(inode) : NULL;
+
+	if (f->f_mode & FMODE_PATH)
+		ret = f; /* O_PATH is always allowed */
+	else if (f->f_op == &bus1_fs_bus_fops)
+		ret = ERR_PTR(-EOPNOTSUPP); /* disallow bus1 recursion */
+	else if (sock && sock->sk && sock->ops && sock->ops->family == PF_UNIX)
+		ret = ERR_PTR(-EOPNOTSUPP); /* disallow UDS recursion */
+	else
+		ret = f; /* all others are allowed */
+
+	if (f != ret)
+		fput(f);
+
+	return ret;
 }

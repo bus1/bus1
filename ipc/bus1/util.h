@@ -29,5 +29,6 @@ int bus1_import_vecs(struct iovec *out_vecs,
 		     const void __user *vecs,
 		     size_t n_vecs,
 		     bool is_compat);
+struct file *bus1_import_fd(const u32 __user *user_fd);
 
 #endif /* __BUS1_UTIL_H */

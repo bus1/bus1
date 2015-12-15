@@ -948,7 +948,7 @@ static int bus1_fs_bus_fop_mmap(struct file *file, struct vm_area_struct *vma)
 	return -EINVAL;
 }
 
-static const struct file_operations bus1_fs_bus_fops = {
+const struct file_operations bus1_fs_bus_fops = {
 	.owner =		THIS_MODULE,
 	.open =			bus1_fs_bus_fop_open,
 	.release =		bus1_fs_bus_fop_release,

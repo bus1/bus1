@@ -48,6 +48,8 @@ struct bus1_peer;
 struct bus1_fs_domain;
 struct bus1_fs_peer;
 
+extern const struct file_operations bus1_fs_bus_fops;
+
 int bus1_fs_init(void);
 void bus1_fs_exit(void);
 
