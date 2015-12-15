@@ -41,10 +41,12 @@ struct b1_test {
 };
 
 int test_filesystem(const char *mount_path);
+int test_mount(const char *mount_path);
 int test_peer(const char *mount_path);
 
 static const struct b1_test b1_tests[] = {
 	{ .name = "filesystem", .main = test_filesystem },
+	{ .name = "mount", .main = test_mount },
 	{ .name = "peer", .main = test_peer },
 };
 
