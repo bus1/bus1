@@ -15,6 +15,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <linux/sched.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -45,5 +46,7 @@ static const struct b1_test b1_tests[] = {
 
 extern const char *b1_filesystem;
 extern const char *b1_mountpath;
+
+int b1_sys_clone(unsigned long flags, void *child_stack);
 
 #endif /* __B1_TEST_H */

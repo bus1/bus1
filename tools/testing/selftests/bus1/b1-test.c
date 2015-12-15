@@ -15,6 +15,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/wait.h>
+#include <syscall.h>
 #include <unistd.h>
 #include "b1-client.h"
 #include "b1-test.h"
@@ -25,6 +26,15 @@ static const char *arg_module = "bus1";
 static const char *arg_test = NULL;
 const char *b1_filesystem = NULL;
 const char *b1_mountpath = NULL;
+
+int b1_sys_clone(unsigned long flags, void *child_stack)
+{
+#if defined(__s390__) || defined(__CRIS__)
+	return (int)syscall(__NR_clone, child_stack, flags);
+#else
+	return (int)syscall(__NR_clone, flags, child_stack);
+#endif
+}
 
 static int fork_and_run(const struct b1_test *test, const char *mount_path)
 {
