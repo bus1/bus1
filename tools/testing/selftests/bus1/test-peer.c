@@ -23,5 +23,5 @@ int test_peer(const char *mount_path)
 	client = b1_client_free(client);
 	assert(!client);
 
-	return 0;
+	return B1_TEST_OK;
 }

@@ -50,5 +50,5 @@ int test_filesystem(const char *mount_path)
 	assert(found_dotdot);
 	assert(found_bus);
 
-	return 0;
+	return B1_TEST_OK;
 }

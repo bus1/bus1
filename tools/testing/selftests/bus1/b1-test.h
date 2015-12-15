@@ -24,6 +24,12 @@
 #include <unistd.h>
 #include "b1-client.h"
 
+enum {
+	B1_TEST_OK,
+	B1_TEST_FAIL,
+	B1_TEST_SKIP,
+};
+
 struct b1_test {
 	const char *name;
 	int (*main) (const char *mount_path);

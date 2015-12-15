@@ -70,9 +70,10 @@ static int run_one(const struct b1_test *test)
 	r = fork_and_run(test, mount_path);
 
 	/* print result */
-	if (r == 0)
+	if (r == B1_TEST_OK || r == B1_TEST_SKIP)
 		/* scroll down; move right */
-		fprintf(stdout, "\r\e[2T\e[60C OK\n");
+		fprintf(stdout, "\r\e[2T\e[60C %s\n",
+			r == B1_TEST_OK ? "OK" : "SKIP");
 	else
 		fprintf(stdout, "\nERROR\n\n");
 
