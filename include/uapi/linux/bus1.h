@@ -41,6 +41,9 @@
 #include <linux/types.h>
 
 #define BUS1_NAME_MAX_SIZE (256) /* including terminating 0 */
+#define BUS1_DESTINATION_MAX (1024)
+#define BUS1_VEC_MAX (512) /* UIO_MAXIOV is 1024 */
+#define BUS1_FD_MAX (256)
 
 #define BUS1_IOCTL_MAGIC		0x96
 #define BUS1_FLAG_NEGOTIATE		(1ULL << 63)
