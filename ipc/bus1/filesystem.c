@@ -27,8 +27,8 @@
 #include "active.h"
 #include "domain.h"
 #include "filesystem.h"
-#include "main.h"
 #include "peer.h"
+#include "util.h"
 
 enum { /* static inode numbers */
 	BUS1_FS_INO_INVALID,
