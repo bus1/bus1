@@ -11,10 +11,13 @@
 #include <linux/file.h>
 #include <linux/fs.h>
 #include <linux/kernel.h>
-#include <linux/list.h>
+#include <linux/rbtree.h>
 #include <linux/slab.h>
 #include "pool.h"
 #include "queue.h"
+
+#define bus1_queue_entry(_rb) \
+	((_rb) ? container_of((_rb), struct bus1_queue_entry, rb) : NULL)
 
 /**
  * bus1_queue_init() - initialize queue
@@ -25,7 +28,8 @@
  */
 void bus1_queue_init(struct bus1_queue *queue)
 {
-	INIT_LIST_HEAD(&queue->messages);
+	queue->messages = RB_ROOT;
+	queue->first = NULL;
 }
 
 /**
@@ -41,58 +45,138 @@ void bus1_queue_init(struct bus1_queue *queue)
  */
 void bus1_queue_destroy(struct bus1_queue *queue)
 {
-	WARN_ON(!list_empty(&queue->messages));
+	WARN_ON(queue->messages.rb_node);
+	WARN_ON(queue->first);
 }
 
 /**
- * bus1_queue_peek() - peek first entry
+ * bus1_queue_link() - link entry into sorted queue
+ * @queue:	queue to link into
+ * @entry:	entry to link
+ *
+ * This links @entry into the message queue @queue. The caller must guarantee
+ * that the entry is unlinked, and has a valid sequence number set.
+ *
+ * Return: If the queue did not have any available entries before this call,
+ *         but now has, this returns true. In all other cases, false is
+ *         returned.
+ */
+bool bus1_queue_link(struct bus1_queue *queue, struct bus1_queue_entry *entry)
+{
+	struct bus1_queue_entry *iter;
+	struct rb_node *prev, **slot;
+	bool is_leftmost = true;
+
+	if (WARN_ON(!RB_EMPTY_NODE(&entry->rb)))
+		return false;
+
+	slot = &queue->messages.rb_node;
+	prev = NULL;
+	while (*slot) {
+		prev = *slot;
+		iter = bus1_queue_entry(prev);
+		if (entry->seq < iter->seq) {
+			slot = &prev->rb_left;
+		} else /* if (entry->seq >= iter->seq) */ {
+			slot = &prev->rb_right;
+			is_leftmost = false;
+		}
+	}
+
+	rb_link_node(&entry->rb, prev, slot);
+	rb_insert_color(&entry->rb, &queue->messages);
+
+	if (is_leftmost)
+		queue->first = &entry->rb;
+
+	return is_leftmost && !(entry->seq & 1);
+}
+
+/**
+ * bus1_queue_unlink() - unlink entry from sorted queue
+ * @queue:	queue to unlink from
+ * @entry:	entry to unlink, or NULL
+ *
+ * This unlinks @entry from the message queue @queue. If the entry was already
+ * unlinked (or NULL is passed), this is a no-op.
+ */
+void bus1_queue_unlink(struct bus1_queue *queue,
+		       struct bus1_queue_entry *entry)
+{
+	if (!entry || RB_EMPTY_NODE(&entry->rb))
+		return;
+
+	if (queue->first == &entry->rb)
+		queue->first = rb_next(queue->first);
+
+	rb_erase(&entry->rb, &queue->messages);
+}
+
+/**
+ * bus1_queue_flush() - flush all entries from a queue
+ * @queue:	queue to flush
+ * @pool:	pool associated with this queue
+ *
+ * This drops all queued entries, both staging and non-staging entries. The
+ * caller must provide the pool that all the slices were allocated on.
+ */
+void bus1_queue_flush(struct bus1_queue *queue, struct bus1_pool *pool)
+{
+	struct bus1_queue_entry *entry;
+	struct rb_node *next;
+
+	/*
+	 * Flush all entries out of the queue. No need to keep the tree
+	 * balanced, but rather just traverse it in post-order and clear each
+	 * node to prevent a WARN_ON() in bus1_queue_entry_free().
+	 */
+
+	if (!queue->first)
+		return;
+
+	/* open coded: next = rb_left_deepest_node(queue->first); */
+	next = queue->first;
+	for (;;) {
+		if (next->rb_left)
+			next = next->rb_left;
+		else if (next->rb_right)
+			next = next->rb_right;
+		else
+			break;
+	}
+
+	/* post-order traversal */
+	while (next) {
+		entry = bus1_queue_entry(next);
+		next = rb_next_postorder(next);
+
+		RB_CLEAR_NODE(&entry->rb);
+		bus1_pool_release_kernel(pool, entry->slice);
+		bus1_queue_entry_free(entry);
+	}
+
+	bus1_queue_init(queue);
+}
+
+/**
+ * bus1_queue_peek() - peek first available entry
  * @queue:	queue to operate on
  *
- * This returns a pointer to the first entry in the given queue, or NULL if the
- * queue is empty. The queue stays unmodified and the possible first entry
+ * This returns a pointer to the first available entry in the given queue, or
+ * NULL if there is none. The queue stays unmodified and the returned entry
  * remains on the queue.
  *
- * Return: Pointer to first entry, NULL if empty.
+ * This only returns entries that are ready to be dequeued. Entries that are
+ * still in staging mode will not be considered.
+ *
+ * Return: Pointer to first available entry, NULL if empty.
  */
 struct bus1_queue_entry *bus1_queue_peek(struct bus1_queue *queue)
 {
-	return list_first_entry_or_null(&queue->messages,
-					struct bus1_queue_entry, entry);
-}
-
-/**
- * bus1_queue_push() - push entry
- * @queue:	queue to operate on
- *
- * This pushes the given, unlinked entry to the end of the queue. The caller
- * must make sure the entry is unlinked.
- */
-void bus1_queue_push(struct bus1_queue *queue, struct bus1_queue_entry *entry)
-{
-	if (WARN_ON(!list_empty(&entry->entry)))
-		return;
-
-	list_add_tail(&entry->entry, &queue->messages);
-}
-
-/**
- * bus1_queue_pop() - pop first entry
- * @queue:	queue to operate on
- *
- * This unlinkes the first entry from the queue and returns a pointer to it. If
- * the queue is empty, this returns NULL.
- *
- * Return: Pointer to popped entry, NULL if empty.
- */
-struct bus1_queue_entry *bus1_queue_pop(struct bus1_queue *queue)
-{
 	struct bus1_queue_entry *entry;
 
-	entry = bus1_queue_peek(queue);
-	if (entry)
-		list_del_init(&entry->entry);
-
-	return entry;
+	entry = bus1_queue_entry(queue->first);
+	return (entry && !(entry->seq & 1)) ? entry : NULL;
 }
 
 /**
@@ -110,12 +194,13 @@ struct bus1_queue_entry *bus1_queue_entry_new(size_t n_files)
 {
 	struct bus1_queue_entry *entry;
 
-	entry = kzalloc(sizeof(*entry) + n_files * sizeof(struct file *),
+	entry = kmalloc(sizeof(*entry) + n_files * sizeof(struct file *),
 			GFP_KERNEL);
 	if (!entry)
 		return ERR_PTR(-ENOMEM);
 
-	INIT_LIST_HEAD(&entry->entry);
+	entry->seq = 0;
+	RB_CLEAR_NODE(&entry->rb);
 	entry->slice = NULL;
 	entry->n_files = n_files;
 	if (n_files > 0)
@@ -150,7 +235,7 @@ struct bus1_queue_entry *bus1_queue_entry_free(struct bus1_queue_entry *entry)
 			fput(entry->files[i]);
 
 	WARN_ON(entry->slice);
-	WARN_ON(!list_empty(&entry->entry));
+	WARN_ON(!RB_EMPTY_NODE(&entry->rb));
 	kfree(entry);
 
 	return NULL;
