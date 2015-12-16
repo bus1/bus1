@@ -24,17 +24,16 @@
  * guarantees. This global order is a partial order on the set of all messages.
  * The order is defined as:
  *
- *   1) If a peer queues a message B *after* it queued a message A (i.e., the
- *      send-ioctl of A returned *before* the send-ioctl for B was entered),
- *      then: A < B
+ *   1) If a message B was queued *after* a message A (i.e., the send-ioctl of
+ *      A returned *before* the send-ioctl for B was entered), then: A < B
  *
- *   2) If a peer dequeues a message B *after* it dequeued a message A (i.e.,
- *      the recv-ioctl of A returned *before* the recv-ioctl for B was
- *      entered), then: A < B
- *
- *   3) If a peer queues a message B *after* it dequeued a message A (i.e., the
+ *   2) If a message B was queued *after* a message A was dequeued (i.e., the
  *      recv-ioctl of A returned *before* the send-ioctl for B was entered),
  *      then: A < B
+ *
+ *   3) If a peer dequeues a message B *after* it dequeued a message A (i.e.,
+ *      the recv-ioctl of A returned *before* the recv-ioctl for B was
+ *      entered), then: A < B
  *
  * The queue object implements this global order in a lockless fashion. It
  * solely relies on an atomic sequence counter on the bus object. Each message
