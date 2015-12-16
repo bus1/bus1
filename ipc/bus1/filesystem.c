@@ -8,6 +8,7 @@
  */
 
 #include <linux/dcache.h>
+#include <linux/file.h>
 #include <linux/fs.h>
 #include <linux/fsnotify.h>
 #include <linux/init.h>
@@ -944,8 +945,40 @@ static unsigned int bus1_fs_bus_fop_poll(struct file *file,
 
 static int bus1_fs_bus_fop_mmap(struct file *file, struct vm_area_struct *vma)
 {
-	/* XXX: forward to peer */
-	return -EINVAL;
+	struct bus1_fs_peer *fs_peer = file->private_data;
+	struct bus1_pool *pool;
+	int r;
+
+	/*
+	 * We don't lock fs_peer->rwlock, as it is not needed, and we really
+	 * don't want to order it below mmap_sem. Pinning the peer is
+	 * sufficient to guarantee the pool is accessible and will not go away.
+	 */
+
+	if (!bus1_fs_peer_acquire(fs_peer))
+		return -ESHUTDOWN;
+
+	pool = &fs_peer->peer->pool;
+
+	if ((vma->vm_end - vma->vm_start) > pool->size) {
+		/* do not allow to map more than the size of the file */
+		r = -EFAULT;
+	} else if (vma->vm_flags & VM_WRITE) {
+		/* deny write access to the pool */
+		r = -EPERM;
+	} else {
+		/* replace the connection file with our shmem file */
+		if (vma->vm_file)
+			fput(vma->vm_file);
+
+		vma->vm_file = get_file(pool->f);
+		vma->vm_flags &= ~VM_MAYWRITE;
+
+		r = pool->f->f_op->mmap(pool->f, vma);
+	}
+
+	bus1_fs_peer_release(fs_peer);
+	return r;
 }
 
 const struct file_operations bus1_fs_bus_fops = {

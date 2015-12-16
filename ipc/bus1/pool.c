@@ -233,37 +233,6 @@ void bus1_pool_destroy(struct bus1_pool *pool)
 }
 
 /**
- * bus1_pool_mmap() - mmap pool memory
- * @pool:	pool to map
- * @vma:	vma to use
- *
- * This is the mmap() implementation of a memory pool. Use it inside the mmap
- * file-operations callback. It does sanity checks and then forwards the call
- * to shmem.
- *
- * Return: 0 on success, negative error code on failure.
- */
-int bus1_pool_mmap(struct bus1_pool *pool, struct vm_area_struct *vma)
-{
-	/* do not allow to map more than the size of the file */
-	if ((vma->vm_end - vma->vm_start) > pool->size)
-		return -EFAULT;
-
-	/* deny write access to the pool */
-	if (vma->vm_flags & VM_WRITE)
-		return -EPERM;
-
-	vma->vm_flags &= ~VM_MAYWRITE;
-
-	/* replace the connection file with our shmem file */
-	if (vma->vm_file)
-		fput(vma->vm_file);
-	vma->vm_file = get_file(pool->f);
-
-	return pool->f->f_op->mmap(pool->f, vma);
-}
-
-/**
  * bus1_pool_alloc() - allocate memory
  * @pool:	pool to allocate memory from
  * @size:	number of bytes to allocate

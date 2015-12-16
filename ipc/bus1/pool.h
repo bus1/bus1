@@ -102,7 +102,6 @@ struct bus1_pool {
 
 int bus1_pool_create(struct bus1_pool *pool, size_t size);
 void bus1_pool_destroy(struct bus1_pool *pool);
-int bus1_pool_mmap(struct bus1_pool *pool, struct vm_area_struct *vma);
 
 struct bus1_pool_slice *
 bus1_pool_alloc(struct bus1_pool *pool, size_t size, bool accounted);
