@@ -9,11 +9,14 @@
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 #include <linux/kernel.h>
+#include <linux/mutex.h>
 #include <linux/slab.h>
 #include <uapi/linux/bus1.h>
 #include "domain.h"
 #include "filesystem.h"
 #include "peer.h"
+#include "pool.h"
+#include "queue.h"
 
 /**
  * bus1_peer_new() - create new peer
@@ -26,12 +29,25 @@ struct bus1_peer *bus1_peer_new(struct bus1_domain *domain,
 				struct bus1_cmd_connect *param)
 {
 	struct bus1_peer *peer;
+	int r;
 
 	peer = kmalloc(sizeof(*peer), GFP_KERNEL);
 	if (!peer)
 		return ERR_PTR(-ENOMEM);
 
+	mutex_init(&peer->lock);
+	peer->pool = BUS1_POOL_INIT;
+	bus1_queue_init(&peer->queue);
+
+	r = bus1_pool_create(&peer->pool, param->pool_size);
+	if (r < 0)
+		goto error;
+
 	return peer;
+
+error:
+	bus1_peer_free(peer);
+	return ERR_PTR(r);
 }
 
 /**
@@ -51,6 +67,8 @@ struct bus1_peer *bus1_peer_free(struct bus1_peer *peer)
 	if (!peer)
 		return NULL;
 
+	bus1_queue_destroy(&peer->queue);
+	bus1_pool_destroy(&peer->pool);
 	kfree(peer);
 
 	return NULL;
