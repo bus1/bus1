@@ -11,25 +11,34 @@
 #include <linux/file.h>
 #include <linux/fs.h>
 #include <linux/kernel.h>
+#include <linux/lockdep.h>
 #include <linux/rbtree.h>
+#include <linux/rcupdate.h>
 #include <linux/slab.h>
+#include "peer.h"
 #include "pool.h"
 #include "queue.h"
 
-#define bus1_queue_entry(_rb) \
-	((_rb) ? container_of((_rb), struct bus1_queue_entry, rb) : NULL)
+#define bus1_queue_assert_held(_queue) \
+	lockdep_assert_held(&bus1_peer_from_queue(_queue)->lock)
 
 /**
- * bus1_queue_init() - initialize queue
+ * bus1_queue_init_internal() - initialize queue
  * @queue:	queue to initialize
  *
  * This initializes a new queue. The queue memory is considered uninitialized,
  * any previous content is lost unrecoverably.
+ *
+ * NOTE: All queues must be embedded into a parent bus1_peer object. The code
+ *       works fine, if you don't, but the lockdep-annotations will fail
+ *       horribly. They rely on bus1_peer_from_queue() to be valid on every
+ *       queue. Use the bus1_queue_init_for_peer() macro to make sure you
+ *       never violate this rule.
  */
-void bus1_queue_init(struct bus1_queue *queue)
+void bus1_queue_init_internal(struct bus1_queue *queue)
 {
 	queue->messages = RB_ROOT;
-	queue->first = NULL;
+	rcu_assign_pointer(queue->front, NULL);
 }
 
 /**
@@ -39,14 +48,16 @@ void bus1_queue_init(struct bus1_queue *queue)
  * This destroys a queue that was previously initialized via bus1_queue_init().
  * The caller must make sure the queue is empty before calling this.
  *
- * This function is a no-op, and only does safety checks on the queue.
+ * This function is a no-op, and only does safety checks on the queue. It is
+ * safe to call this function multiple times on the same queue.
  *
- * It is safe to call this function multiple times on the same queue.
+ * The caller must guarantee that the backing memory of @queue is freed in an
+ * rcu-delayed manner.
  */
 void bus1_queue_destroy(struct bus1_queue *queue)
 {
 	WARN_ON(queue->messages.rb_node);
-	WARN_ON(queue->first);
+	WARN_ON(rcu_access_pointer(queue->front));
 }
 
 /**
@@ -55,13 +66,14 @@ void bus1_queue_destroy(struct bus1_queue *queue)
  * @entry:	entry to link
  *
  * This links @entry into the message queue @queue. The caller must guarantee
- * that the entry is unlinked, and has a valid sequence number set.
+ * that the entry is unlinked.
  *
- * Return: If the queue did not have any available entries before this call,
- *         but now has, this returns true. In all other cases, false is
- *         returned.
+ * The caller must hold the write-side peer-lock of the parent peer.
+ *
+ * Return: True if the queue became readable with this call.
  */
-bool bus1_queue_link(struct bus1_queue *queue, struct bus1_queue_entry *entry)
+bool bus1_queue_link(struct bus1_queue *queue,
+		     struct bus1_queue_entry *entry)
 {
 	struct bus1_queue_entry *iter;
 	struct rb_node *prev, **slot;
@@ -69,6 +81,8 @@ bool bus1_queue_link(struct bus1_queue *queue, struct bus1_queue_entry *entry)
 
 	if (WARN_ON(!RB_EMPTY_NODE(&entry->rb)))
 		return false;
+
+	bus1_queue_assert_held(queue);
 
 	slot = &queue->messages.rb_node;
 	prev = NULL;
@@ -86,9 +100,18 @@ bool bus1_queue_link(struct bus1_queue *queue, struct bus1_queue_entry *entry)
 	rb_link_node(&entry->rb, prev, slot);
 	rb_insert_color(&entry->rb, &queue->messages);
 
-	if (is_leftmost)
-		queue->first = &entry->rb;
+	if (is_leftmost) {
+		WARN_ON(rcu_access_pointer(queue->front));
+		if (!(entry->seq & 1))
+			rcu_assign_pointer(queue->front, &entry->rb);
+	}
 
+	/*
+	 * If we're linked leftmost, we're the new front. If we're ready to be
+	 * dequeued, the list has become readable via this entry. Note that the
+	 * previous front cannot be ready in this case, as we *never* order
+	 * ready entries in front of other ready entries.
+	 */
 	return is_leftmost && !(entry->seq & 1);
 }
 
@@ -99,17 +122,83 @@ bool bus1_queue_link(struct bus1_queue *queue, struct bus1_queue_entry *entry)
  *
  * This unlinks @entry from the message queue @queue. If the entry was already
  * unlinked (or NULL is passed), this is a no-op.
+ *
+ * The caller must hold the write-side peer-lock of the parent peer.
+ *
+ * Return: True if the queue became readable with this call. This can happen if
+ *         you unlink a staging entry, and thus a waiting entry becomes ready.
  */
-void bus1_queue_unlink(struct bus1_queue *queue,
+bool bus1_queue_unlink(struct bus1_queue *queue,
 		       struct bus1_queue_entry *entry)
 {
-	if (!entry || RB_EMPTY_NODE(&entry->rb))
-		return;
+	struct rb_node *node;
 
-	if (queue->first == &entry->rb)
-		queue->first = rb_next(queue->first);
+	if (!entry || RB_EMPTY_NODE(&entry->rb))
+		return false;
+
+	bus1_queue_assert_held(queue);
+
+	node = rcu_dereference_protected(queue->front,
+					 bus1_queue_assert_held(queue));
+	if (node == &entry->rb) {
+		node = rb_next(node);
+		if (bus1_queue_entry(node)->seq & 1)
+			node = NULL;
+		rcu_assign_pointer(queue->front, node);
+	} else {
+		node = NULL;
+	}
 
 	rb_erase(&entry->rb, &queue->messages);
+	RB_CLEAR_NODE(&entry->rb);
+
+	/*
+	 * If this entry was non-ready in front, but the next entry exists and
+	 * is ready, then the queue becomes readable if you pop the front.
+	 */
+	return (entry->seq & 1) && node && !(bus1_queue_entry(node)->seq & 1);
+}
+
+/**
+ * bus1_queue_relink() - change sequence number of an entry
+ * @queue:	queue to operate on
+ * @entry:	entry to relink
+ * @seq:	sequence number to set
+ *
+ * This changes the sequence number of @entry to @seq. The caller must
+ * guarantee that the entry was already linked with an odd-numbered sequence
+ * number. This will unlink the entry, change the sequence number and link it
+ * again.
+ *
+ * The caller must hold the write-side peer-lock of the parent peer.
+ *
+ * Return: True if the queue became readable with this call.
+ */
+bool bus1_queue_relink(struct bus1_queue *queue,
+		       struct bus1_queue_entry *entry,
+		       u64 seq)
+{
+	struct rb_node *front;
+
+	if (WARN_ON(seq == 0 ||
+		    RB_EMPTY_NODE(&entry->rb) ||
+		    !(entry->seq & 1)))
+		return false;
+
+	bus1_queue_assert_held(queue);
+
+	/* remember front, cannot point to @entry */
+	front = rcu_access_pointer(queue->front);
+	WARN_ON(front == &entry->rb);
+
+	/* drop from rb-tree and insert again */
+	rb_erase(&entry->rb, &queue->messages);
+	RB_CLEAR_NODE(&entry->rb);
+	entry->seq = seq;
+	bus1_queue_link(queue, entry);
+
+	/* if this uncovered a front, then the queue became readable */
+	return !front && rcu_access_pointer(queue->front);
 }
 
 /**
@@ -119,11 +208,12 @@ void bus1_queue_unlink(struct bus1_queue *queue,
  *
  * This drops all queued entries, both staging and non-staging entries. The
  * caller must provide the pool that all the slices were allocated on.
+ *
+ * The caller must hold the write-side peer-lock of the parent peer.
  */
 void bus1_queue_flush(struct bus1_queue *queue, struct bus1_pool *pool)
 {
-	struct bus1_queue_entry *entry;
-	struct rb_node *next;
+	struct bus1_queue_entry *entry, *t;
 
 	/*
 	 * Flush all entries out of the queue. No need to keep the tree
@@ -131,31 +221,18 @@ void bus1_queue_flush(struct bus1_queue *queue, struct bus1_pool *pool)
 	 * node to prevent a WARN_ON() in bus1_queue_entry_free().
 	 */
 
-	if (!queue->first)
+	if (RB_EMPTY_ROOT(&queue->messages))
 		return;
 
-	/* open coded: next = rb_left_deepest_node(queue->first); */
-	next = queue->first;
-	for (;;) {
-		if (next->rb_left)
-			next = next->rb_left;
-		else if (next->rb_right)
-			next = next->rb_right;
-		else
-			break;
-	}
+	rcu_assign_pointer(queue->front, NULL);
 
-	/* post-order traversal */
-	while (next) {
-		entry = bus1_queue_entry(next);
-		next = rb_next_postorder(next);
-
+	rbtree_postorder_for_each_entry_safe(entry, t, &queue->messages, rb) {
 		RB_CLEAR_NODE(&entry->rb);
 		bus1_pool_release_kernel(pool, entry->slice);
 		bus1_queue_entry_free(entry);
 	}
 
-	bus1_queue_init(queue);
+	queue->messages = RB_ROOT;
 }
 
 /**
@@ -169,18 +246,20 @@ void bus1_queue_flush(struct bus1_queue *queue, struct bus1_pool *pool)
  * This only returns entries that are ready to be dequeued. Entries that are
  * still in staging mode will not be considered.
  *
- * Return: Pointer to first available entry, NULL if empty.
+ * The caller must hold the read-side peer-lock of the parent peer.
+ *
+ * Return: Pointer to first available entry, NULL if none available.
  */
 struct bus1_queue_entry *bus1_queue_peek(struct bus1_queue *queue)
 {
-	struct bus1_queue_entry *entry;
-
-	entry = bus1_queue_entry(queue->first);
-	return (entry && !(entry->seq & 1)) ? entry : NULL;
+	return bus1_queue_entry(
+		rcu_dereference_protected(queue->front,
+					  bus1_queue_assert_held(queue)));
 }
 
 /**
  * bus1_queue_entry_new() - allocate new queue entry
+ * @seq:	initial sequence number
  * @n_files:	number of files to carry
  *
  * This allocates a new queue-entry with pre-allocated space to carry the given
@@ -190,16 +269,19 @@ struct bus1_queue_entry *bus1_queue_peek(struct bus1_queue *queue)
  *
  * Return: Pointer to slice, ERR_PTR on failure.
  */
-struct bus1_queue_entry *bus1_queue_entry_new(size_t n_files)
+struct bus1_queue_entry *bus1_queue_entry_new(u64 seq, size_t n_files)
 {
 	struct bus1_queue_entry *entry;
+
+	if (WARN_ON(seq == 0))
+		return ERR_PTR(-EINVAL);
 
 	entry = kmalloc(sizeof(*entry) + n_files * sizeof(struct file *),
 			GFP_KERNEL);
 	if (!entry)
 		return ERR_PTR(-ENOMEM);
 
-	entry->seq = 0;
+	entry->seq = seq;
 	RB_CLEAR_NODE(&entry->rb);
 	entry->slice = NULL;
 	entry->n_files = n_files;
@@ -223,7 +305,8 @@ struct bus1_queue_entry *bus1_queue_entry_new(size_t n_files)
  *
  * Return: NULL is returned.
  */
-struct bus1_queue_entry *bus1_queue_entry_free(struct bus1_queue_entry *entry)
+struct bus1_queue_entry *
+bus1_queue_entry_free(struct bus1_queue_entry *entry)
 {
 	size_t i;
 
@@ -235,8 +318,14 @@ struct bus1_queue_entry *bus1_queue_entry_free(struct bus1_queue_entry *entry)
 			fput(entry->files[i]);
 
 	WARN_ON(entry->slice);
+
+	/*
+	 * Entry must be unlinked by the caller. The rb-storage is re-used by
+	 * the rcu-head to enforced delayed memory release. This guarantees
+	 * that the entry is accessible via rcu-protected readers.
+	 */
 	WARN_ON(!RB_EMPTY_NODE(&entry->rb));
-	kfree(entry);
+	kfree_rcu(entry, rcu);
 
 	return NULL;
 }

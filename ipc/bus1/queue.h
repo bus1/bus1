@@ -78,47 +78,92 @@
 
 #include <linux/kernel.h>
 #include <linux/rbtree.h>
+#include <linux/rcupdate.h>
 
 struct bus1_pool_slice;
 struct file;
 
 /**
  * struct bus1_queue_entry - queue entry
- * @seq:	sequence number
+ * @seq:	sequence number, rcu-accessible
  * @rb:		link into the queue
+ * @rcu:	rcu-head
  * @slice:	carried data, or NULL
  * @n_files:	number of carried files
  * @files:	carried files, or NULL
  */
 struct bus1_queue_entry {
 	u64 seq;
-	struct rb_node rb;
+	union {
+		struct rb_node rb;
+		struct rcu_head rcu;
+	};
 	struct bus1_pool_slice *slice;
 	size_t n_files;
 	struct file *files[0];
 };
 
+/* turn rb_node pointer into queue entry */
+#define bus1_queue_entry(_rb) \
+	((_rb) ? container_of((_rb), struct bus1_queue_entry, rb) : NULL)
+
 /**
  * struct bus1_queue - message queue
  * @messages:		queued messages
- * @first:		cached first queue entry
+ * @front:		cached front entry
  */
 struct bus1_queue {
 	struct rb_root messages;
-	struct rb_node *first;
+	struct rb_node __rcu *front;
 };
 
-void bus1_queue_init(struct bus1_queue *queue);
+void bus1_queue_init_internal(struct bus1_queue *queue);
 void bus1_queue_destroy(struct bus1_queue *queue);
-bool bus1_queue_link(struct bus1_queue *queue, struct bus1_queue_entry *entry);
-void bus1_queue_unlink(struct bus1_queue *queue,
+bool bus1_queue_link(struct bus1_queue *queue,
+		     struct bus1_queue_entry *entry);
+bool bus1_queue_unlink(struct bus1_queue *queue,
 		       struct bus1_queue_entry *entry);
+bool bus1_queue_relink(struct bus1_queue *queue,
+		       struct bus1_queue_entry *entry,
+		       u64 seq);
+bool bus1_queue_is_readable_rcu(struct bus1_queue *queue);
 void bus1_queue_flush(struct bus1_queue *queue, struct bus1_pool *pool);
 struct bus1_queue_entry *bus1_queue_peek(struct bus1_queue *queue);
 
-struct bus1_queue_entry *bus1_queue_entry_new(size_t n_files);
+struct bus1_queue_entry *bus1_queue_entry_new(u64 seq, size_t n_files);
 struct bus1_queue_entry *bus1_queue_entry_free(struct bus1_queue_entry *entry);
 int bus1_queue_entry_install(struct bus1_queue_entry *entry,
 			     struct bus1_pool *pool);
+
+/* see bus1_queue_init_internal() for details */
+#define bus1_queue_init_for_peer(_queue, _peer) ({		\
+		BUILD_BUG_ON((_queue) != &(_peer)->queue);	\
+		bus1_queue_init_internal(&(_peer)->queue);	\
+	})
+
+/**
+ * bus1_queue_peek_rcu() - peek first available entry
+ * @queue:	queue to operate on
+ *
+ * This returns a pointer to the first available entry in the given queue, or
+ * NULL if there is none. The queue stays unmodified and the returned entry
+ * remains on the queue.
+ *
+ * The caller must be inside an rcu read-side crictical section, and the
+ * returned pointer is only valid for that critical section. Furthermore, the
+ * caller must only access fields of the queue-entry that are explicitly
+ * available for rcu-access.
+ *
+ * If the caller needs to operate on the queue entry, it better lock the peer
+ * and call bus1_queue_peek(). This fast-path should only be used for poll()
+ * callbacks and alike.
+ *
+ * Return: Pointer to first available entry, NULL if none available.
+ */
+static inline struct bus1_queue_entry *
+bus1_queue_peek_rcu(struct bus1_queue *queue)
+{
+	return bus1_queue_entry(rcu_dereference(queue->front));
+}
 
 #endif /* __BUS1_QUEUE_H */

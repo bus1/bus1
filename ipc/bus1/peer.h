@@ -18,6 +18,7 @@
 
 #include <linux/kernel.h>
 #include <linux/mutex.h>
+#include <linux/rcupdate.h>
 #include <uapi/linux/bus1.h>
 #include "pool.h"
 #include "queue.h"
@@ -26,10 +27,16 @@ struct bus1_domain;
 struct bus1_fs_domain;
 
 struct bus1_peer {
+	struct rcu_head rcu;
 	struct mutex lock;
 	struct bus1_pool pool;
 	struct bus1_queue queue;
 };
+
+#define bus1_peer_from_pool(_pool) \
+	container_of((_pool), struct bus1_peer, pool)
+#define bus1_peer_from_queue(_queue) \
+	container_of((_queue), struct bus1_peer, queue)
 
 struct bus1_peer *bus1_peer_new(struct bus1_domain *domain,
 				struct bus1_cmd_connect *param);

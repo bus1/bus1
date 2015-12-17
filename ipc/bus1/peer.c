@@ -37,7 +37,7 @@ struct bus1_peer *bus1_peer_new(struct bus1_domain *domain,
 
 	mutex_init(&peer->lock);
 	peer->pool = BUS1_POOL_NULL;
-	bus1_queue_init(&peer->queue);
+	bus1_queue_init_for_peer(&peer->queue, peer);
 
 	r = bus1_pool_create(&peer->pool, param->pool_size);
 	if (r < 0)
@@ -69,7 +69,13 @@ struct bus1_peer *bus1_peer_free(struct bus1_peer *peer)
 
 	bus1_queue_destroy(&peer->queue);
 	bus1_pool_destroy(&peer->pool);
-	kfree(peer);
+
+	/*
+	 * Make sure the peer object is freed in a delayed-manner. Some
+	 * embedded members (like the queue) must be accessible for an entire
+	 * rcu read-side critical section.
+	 */
+	kfree_rcu(peer, rcu);
 
 	return NULL;
 }
