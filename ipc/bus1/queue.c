@@ -19,6 +19,7 @@
 #include "pool.h"
 #include "queue.h"
 
+/* lockdep assertion to verify the parent peer is locked */
 #define bus1_queue_assert_held(_queue) \
 	lockdep_assert_held(&bus1_peer_from_queue(_queue)->lock)
 
@@ -56,7 +57,7 @@ void bus1_queue_init_internal(struct bus1_queue *queue)
  */
 void bus1_queue_destroy(struct bus1_queue *queue)
 {
-	WARN_ON(queue->messages.rb_node);
+	WARN_ON(!RB_EMPTY_ROOT(&queue->messages));
 	WARN_ON(rcu_access_pointer(queue->front));
 }
 

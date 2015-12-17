@@ -35,6 +35,10 @@
  *      the recv-ioctl of A returned *before* the recv-ioctl for B was
  *      entered), then: A < B
  *
+ *      (Note: Causality is honored. `after' and `before' do not refer to the
+ *             same task, nor the same peer, but rather any kind of
+ *             synchronization between the two operations.)
+ *
  * The queue object implements this global order in a lockless fashion. It
  * solely relies on an atomic sequence counter on the bus object. Each message
  * to be sent gets assigned a sequence ID. Initially, this ID equals the
@@ -73,7 +77,30 @@
  *       destination of the message might fail with EAGAIN. That is, a message
  *       might be in-flight for an undefined amount of time.
  *
- *       In other words: Side-channels do not order against messages.
+ *       In other words: Message transmission is not instanteous. Side-channels
+ *                       do not order against messages.
+ *
+ * The queue implementation uses an rb-tree (ordered by sequence numbers), with
+ * a cached pointer to the front of the queue. The front pointer is only set if
+ * the first entry in the queue is ready to be dequeued (that is, it has an
+ * even sequence number). If the first entry is not ready to be dequeued, or if
+ * the queue is empty, the front pointer is NULL.
+ *
+ * The queue itself must be embedded into the parent peer structure. We do not
+ * access any of the peer-data from within the queue, but we rely on the
+ * peer-lock to be held by the caller (see each function for details of which
+ * locks are required). Therefore, the lockdep annotations might access the
+ * surrounding peer object that the queue is embedded in. See
+ * bus1_queue_init_internal() for details.
+ *
+ * Queue entries are disconnected from a queue. Callers can allocate and free
+ * them as they wish. Furthermore, the payload of the queue-entry is never
+ * touched by the queue implementation (except for sanity checks in the release
+ * functions). Only as soon as an entry is linked into the queue (and marked as
+ * ready), other contexts may dequeue it (*and* free it!).
+ * For lockless access to queue entries, we also support rcu-protected access
+ * to the front of the queue. This is used in the poll() implementation right
+ * now.
  */
 
 #include <linux/kernel.h>
@@ -85,7 +112,7 @@ struct file;
 
 /**
  * struct bus1_queue_entry - queue entry
- * @seq:	sequence number, rcu-accessible
+ * @seq:	sequence number
  * @rb:		link into the queue
  * @rcu:	rcu-head
  * @slice:	carried data, or NULL
@@ -126,7 +153,6 @@ bool bus1_queue_unlink(struct bus1_queue *queue,
 bool bus1_queue_relink(struct bus1_queue *queue,
 		       struct bus1_queue_entry *entry,
 		       u64 seq);
-bool bus1_queue_is_readable_rcu(struct bus1_queue *queue);
 void bus1_queue_flush(struct bus1_queue *queue, struct bus1_pool *pool);
 struct bus1_queue_entry *bus1_queue_peek(struct bus1_queue *queue);
 
