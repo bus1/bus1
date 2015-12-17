@@ -265,6 +265,97 @@ static void bus1_fs_peer_cleanup_runtime(struct bus1_active *active,
 	return bus1_fs_peer_cleanup(fs_peer, userdata, true);
 }
 
+static struct bus1_fs_peer *
+bus1_fs_peer_acquire(struct bus1_fs_peer *fs_peer)
+{
+	if (fs_peer && bus1_active_acquire(&fs_peer->active))
+		return fs_peer;
+	return NULL;
+}
+
+/**
+ * bus1_fs_peer_acquire_by_id() - acquire peer by id
+ * @fs_domain:		domain to search
+ * @id:			id to look for
+ *
+ * Find a peer handle that is registered under the given id and domain. If
+ * found, acquire an active reference and return the handle. If not found, NULL
+ * is returned.
+ *
+ * Return: Active reference to matching handle, or NULL.
+ */
+struct bus1_fs_peer *
+bus1_fs_peer_acquire_by_id(struct bus1_fs_domain *fs_domain, u64 id)
+{
+	struct bus1_fs_peer *fs_peer, *res = NULL;
+	struct rb_node *n;
+
+	down_read(&fs_domain->rwlock);
+	n = fs_domain->map_peers.rb_node;
+	while (n) {
+		fs_peer = container_of(n, struct bus1_fs_peer, rb);
+		if (id == fs_peer->id) {
+			res = bus1_fs_peer_acquire(fs_peer);
+			break;
+		} else if (id < fs_peer->id) {
+			n = n->rb_left;
+		} else /* if (id > fs_peer->id) */ {
+			n = n->rb_right;
+		}
+	}
+	up_read(&fs_domain->rwlock);
+
+	return res;
+}
+
+/**
+ * bus1_fs_peer_release() - release an active reference
+ * @fs_peer:	handle to release, or NULL
+ *
+ * This releases an active reference to a peer, acquired previously via one
+ * of the lookup functions.
+ *
+ * If NULL is passed, this is a no-op.
+ *
+ * Return: NULL is returned.
+ */
+struct bus1_fs_peer *bus1_fs_peer_release(struct bus1_fs_peer *fs_peer)
+{
+	if (fs_peer)
+		bus1_active_release(&fs_peer->active, &fs_peer->waitq);
+	return NULL;
+}
+
+/**
+ * bus1_fs_peer_dereference() - dereference a peer handle
+ * @fs_peer:	handle to dereference
+ *
+ * Dereference a peer handle to get access to the underlying peer object. This
+ * function simply returns the peer-pointer, which then can be accessed
+ * directly by the caller. The caller must hold an active reference to the
+ * handle, and retain it as long as the peer object is used.
+ *
+ * Note: If you weren't called through this handle, but rather retrieved it via
+ *       other means (eg., domain lookup), you must be aware that this handle
+ *       might be reset at any time. Hence, any operation you perform on the
+ *       handle must be tagged by the actual peer ID (which you should have
+ *       retrieved via the same means as the handle itself).
+ *       If the peer is reset midway through your operation, it gets a new ID,
+ *       notifies any peer that tracked it, and automatically discards any
+ *       operation that was tagged with an old ID (or, if the operation wasn't
+ *       finished, it will be discarded later on). A reset is a lossy operation
+ *       so any pending operation is discarded silently. The origin of the
+ *       operation thus gets the impression that it succeeded (and should be
+ *       tracking the peer to get notified about the reset, if interested).
+ *
+ * Return: Pointer to the underlying peer is returned.
+ */
+struct bus1_peer *bus1_fs_peer_dereference(struct bus1_fs_peer *fs_peer)
+{
+	return rcu_dereference_protected(fs_peer->peer,
+					 lockdep_assert_held(&fs_peer->active));
+}
+
 static int bus1_fs_peer_connect_new(struct bus1_fs_peer *fs_peer,
 				    struct bus1_fs_domain *fs_domain,
 				    struct bus1_cmd_connect *param)
@@ -474,97 +565,6 @@ static int bus1_fs_peer_disconnect(struct bus1_fs_peer *fs_peer,
 	up_write(&fs_peer->rwlock);
 
 	return r;
-}
-
-static struct bus1_fs_peer *
-bus1_fs_peer_acquire(struct bus1_fs_peer *fs_peer)
-{
-	if (fs_peer && bus1_active_acquire(&fs_peer->active))
-		return fs_peer;
-	return NULL;
-}
-
-/**
- * bus1_fs_peer_acquire_by_id() - acquire peer by id
- * @fs_domain:		domain to search
- * @id:			id to look for
- *
- * Find a peer handle that is registered under the given id and domain. If
- * found, acquire an active reference and return the handle. If not found, NULL
- * is returned.
- *
- * Return: Active reference to matching handle, or NULL.
- */
-struct bus1_fs_peer *
-bus1_fs_peer_acquire_by_id(struct bus1_fs_domain *fs_domain, u64 id)
-{
-	struct bus1_fs_peer *fs_peer, *res = NULL;
-	struct rb_node *n;
-
-	down_read(&fs_domain->rwlock);
-	n = fs_domain->map_peers.rb_node;
-	while (n) {
-		fs_peer = container_of(n, struct bus1_fs_peer, rb);
-		if (id == fs_peer->id) {
-			res = bus1_fs_peer_acquire(fs_peer);
-			break;
-		} else if (id < fs_peer->id) {
-			n = n->rb_left;
-		} else /* if (id > fs_peer->id) */ {
-			n = n->rb_right;
-		}
-	}
-	up_read(&fs_domain->rwlock);
-
-	return res;
-}
-
-/**
- * bus1_fs_peer_release() - release an active reference
- * @fs_peer:	handle to release, or NULL
- *
- * This releases an active reference to a peer, acquired previously via one
- * of the lookup functions.
- *
- * If NULL is passed, this is a no-op.
- *
- * Return: NULL is returned.
- */
-struct bus1_fs_peer *bus1_fs_peer_release(struct bus1_fs_peer *fs_peer)
-{
-	if (fs_peer)
-		bus1_active_release(&fs_peer->active, &fs_peer->waitq);
-	return NULL;
-}
-
-/**
- * bus1_fs_peer_dereference() - dereference a peer handle
- * @fs_peer:	handle to dereference
- *
- * Dereference a peer handle to get access to the underlying peer object. This
- * function simply returns the peer-pointer, which then can be accessed
- * directly by the caller. The caller must hold an active reference to the
- * handle, and retain it as long as the peer object is used.
- *
- * Note: If you weren't called through this handle, but rather retrieved it via
- *       other means (eg., domain lookup), you must be aware that this handle
- *       might be reset at any time. Hence, any operation you perform on the
- *       handle must be tagged by the actual peer ID (which you should have
- *       retrieved via the same means as the handle itself).
- *       If the peer is reset midway through your operation, it gets a new ID,
- *       notifies any peer that tracked it, and automatically discards any
- *       operation that was tagged with an old ID (or, if the operation wasn't
- *       finished, it will be discarded later on). A reset is a lossy operation
- *       so any pending operation is discarded silently. The origin of the
- *       operation thus gets the impression that it succeeded (and should be
- *       tracking the peer to get notified about the reset, if interested).
- *
- * Return: Pointer to the underlying peer is returned.
- */
-struct bus1_peer *bus1_fs_peer_dereference(struct bus1_fs_peer *fs_peer)
-{
-	return rcu_dereference_protected(fs_peer->peer,
-					 lockdep_assert_held(&fs_peer->active));
 }
 
 static struct bus1_fs_domain *
