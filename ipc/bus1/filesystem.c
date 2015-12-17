@@ -30,6 +30,7 @@
 #include "domain.h"
 #include "filesystem.h"
 #include "peer.h"
+#include "queue.h"
 #include "util.h"
 
 enum { /* static inode numbers */
@@ -937,15 +938,34 @@ static unsigned int bus1_fs_bus_fop_poll(struct file *file,
 					 struct poll_table_struct *wait)
 {
 	struct bus1_fs_peer *fs_peer = file->private_data;
-	unsigned int mask = POLLOUT | POLLWRNORM;
+	struct bus1_peer *peer;
+	unsigned int mask = 0;
 
-	if (bus1_active_is_active(&fs_peer->active)) {
-		poll_wait(file, &fs_peer->waitq, wait);
-		if (0) /* XXX: is-readable */
-			mask |= POLLIN | POLLRDNORM;
-	} else {
-		mask = POLLERR | POLLHUP;
+	poll_wait(file, &fs_peer->waitq, wait);
+
+	/*
+	 * If the peer is still in state NEW, then CONNECT hasn't been called
+	 * and the peer is unused. Return no event at all.
+	 * If the peer is not NEW, then CONNECT *was* called. We then check
+	 * whether it was deactivated, yet. In that case, the peer is dead
+	 * (either via DISCONNECT or domain teardown). Lastly, we dereference
+	 * the peer object (which is rcu-protected). It might be NULL during a
+	 * racing DISCONNECT (_very_ unlikely, but lets be safe). If it is not
+	 * NULL, the peer is life and active, so it is at least writable. Check
+	 * if the queue is non-empty, and then also mark it as readable.
+	 */
+	rcu_read_lock();
+	if (!bus1_active_is_new(&fs_peer->active)) {
+		peer = rcu_dereference(fs_peer->peer);
+		if (bus1_active_is_deactivated(&fs_peer->active) || !peer) {
+			mask = POLLERR | POLLHUP;
+		} else {
+			mask = POLLOUT | POLLWRNORM;
+			if (bus1_queue_peek_rcu(&peer->queue))
+				mask |= POLLIN | POLLRDNORM;
+		}
 	}
+	rcu_read_unlock();
 
 	return mask;
 }
