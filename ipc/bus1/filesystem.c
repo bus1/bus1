@@ -653,10 +653,10 @@ static void bus1_fs_domain_teardown(struct bus1_fs_domain *fs_domain)
 	 * This tears down a whole domain, in a synchronous fashion. This is
 	 * non-trivial, as it requires to synchronously drain all peers. So we
 	 * first deactivate the domain, which prevents new peers from being
-	 * linked to the domain. Then we deactivate all peers, which prevents
-	 * any new operation to be entered. We also drain all peers so we're
-	 * guaranteed all their operations are done. Then we drain the domain
-	 * so no domain reference is left.
+	 * linked to the domain. We also drain the domain to guarantee any
+	 * racing connect/reset calls are done. Then we deactivate all peers,
+	 * which prevents any new operation to be entered. We also drain all
+	 * peers so we're guaranteed all their operations are done.
 	 *
 	 * At this point, we know that all our objects are drained. However,
 	 * they might not have been cleaned up, yet. Therefore, we write-lock
@@ -681,9 +681,9 @@ static void bus1_fs_domain_teardown(struct bus1_fs_domain *fs_domain)
 	 *         fs_domain.rwlock.read        # lock inversion
 	 *
 	 *   Domain teardown:
+	 *     fs_domain.active.write
 	 *     fs_domain.rwlock.read
 	 *       fs_peer.active.write
-	 *     fs_domain.active.write
 	 *     fs_domain.rwlock.write
 	 *       fs_peer.active.try-write
 	 *     fs_domain.active.try-write
@@ -695,6 +695,7 @@ static void bus1_fs_domain_teardown(struct bus1_fs_domain *fs_domain)
 	 */
 
 	bus1_active_deactivate(&fs_domain->active);
+	bus1_active_drain(&fs_domain->active, &fs_domain->waitq);
 
 	down_read(&fs_domain->rwlock);
 	for (n = rb_first(&fs_domain->map_peers); n; n = rb_next(n)) {
@@ -703,8 +704,6 @@ static void bus1_fs_domain_teardown(struct bus1_fs_domain *fs_domain)
 		bus1_active_drain(&fs_peer->active, &fs_peer->waitq);
 	}
 	up_read(&fs_domain->rwlock);
-
-	bus1_active_drain(&fs_domain->active, &fs_domain->waitq);
 
 	down_write(&fs_domain->rwlock);
 	for (n = rb_first(&fs_domain->map_peers); n; n = rb_next(n)) {
