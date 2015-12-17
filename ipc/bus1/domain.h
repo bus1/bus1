@@ -19,7 +19,7 @@
 #include <linux/kernel.h>
 
 struct bus1_domain {
-	__u64 peer_ids;
+	u64 peer_ids;
 };
 
 struct bus1_domain *bus1_domain_new(void);
