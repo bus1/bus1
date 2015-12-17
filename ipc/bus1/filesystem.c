@@ -377,7 +377,9 @@ static int bus1_fs_peer_connect_new(struct bus1_fs_peer *fs_peer,
 	lockdep_assert_held(&fs_domain->active);
 	lockdep_assert_held(&fs_peer->rwlock);
 
-	/* XXX: check param->flags */
+	/* cannot connect a peer that is already connected */
+	if (!bus1_active_is_new(&fs_peer->active))
+		return -EISCONN;
 
 	/* allocate new peer object */
 	peer = bus1_peer_new(fs_domain->domain, param);
@@ -385,6 +387,19 @@ static int bus1_fs_peer_connect_new(struct bus1_fs_peer *fs_peer,
 		return PTR_ERR(peer);
 
 	down_write(&fs_domain->rwlock);
+
+	/*
+	 * domain-rwlock guarantees that fs_peer->peer cannot change underneath
+	 * us. The domain-reference and peer-lock guarantees that no other
+	 * connect/disconnect or teardown can race us (they wait for us). We
+	 * also verified that the peer is NEW. Hence, fs_peer->peer must be
+	 * NULL. We still verify it, just to be safe.
+	 */
+	if (WARN_ON(rcu_dereference_protected(fs_peer->peer,
+				lockdep_assert_held(&fs_domain->rwlock)))) {
+		r = -EISCONN;
+		goto exit;
+	}
 
 	/* insert names */
 	name = param->names;
@@ -424,6 +439,9 @@ static int bus1_fs_peer_connect_new(struct bus1_fs_peer *fs_peer,
 	++fs_domain->n_peers;
 	bus1_active_activate(&fs_peer->active);
 
+	/* provide ID for caller, pool-size is already set */
+	param->unique_id = fs_peer->id;
+
 	peer = NULL;
 	r = 0;
 
@@ -437,28 +455,12 @@ exit:
 	return r;
 }
 
-static int bus1_fs_peer_connect_again(struct bus1_fs_peer *fs_peer,
+static int bus1_fs_peer_connect_reset(struct bus1_fs_peer *fs_peer,
 				      struct bus1_fs_domain *fs_domain,
 				      struct bus1_cmd_connect *param)
 {
+	struct bus1_peer *peer;
 	struct rb_node *last;
-
-	/*
-	 * Already connected. Further CONNECT calls are only allowed to
-	 * QUERY the current peer or RESET it. Anything else is rejected.
-	 */
-
-	lockdep_assert_held(&fs_domain->active);
-	lockdep_assert_held(&fs_peer->rwlock);
-
-	if (param->flags & (BUS1_CONNECT_FLAG_PEER |
-			    BUS1_CONNECT_FLAG_MONITOR))
-		return -EALREADY;
-
-	if (param->size > sizeof(*param) ||
-	    param->pool_size != 0 ||
-	    param->unique_id != 0)
-		return -EINVAL;
 
 	/*
 	 * If a RESET is requested, we atomically DISCONNECT and
@@ -471,64 +473,158 @@ static int bus1_fs_peer_connect_again(struct bus1_fs_peer *fs_peer,
 	 * operations can be silently ignored and will be gc'ed later
 	 * on if their tag is outdated.
 	 */
-	if (param->flags & BUS1_CONNECT_FLAG_RESET) {
-		down_write(&fs_domain->rwlock);
 
-		/* remove from rb-tree, and change the ID */
-		rb_erase(&fs_peer->rb, &fs_domain->map_peers);
-		fs_peer->id = ++fs_domain->domain->peer_ids;
+	lockdep_assert_held(&fs_domain->active);
+	lockdep_assert_held(&fs_peer->rwlock);
 
-		/* insert at the tail again */
-		last = rb_last(&fs_domain->map_peers);
-		if (last)
-			rb_link_node(&fs_peer->rb, last, &last->rb_right);
-		else
-			rb_link_node(&fs_peer->rb, NULL,
-				     &fs_domain->map_peers.rb_node);
-		rb_insert_color(&fs_peer->rb, &fs_domain->map_peers);
+	/* cannot reset a peer that was never connected */
+	if (bus1_active_is_new(&fs_peer->active))
+		return -ENOTCONN;
 
+	/* verify pool-size is unset and no names are appended */
+	if (param->pool_size != 0 || param->size > sizeof(*param))
+		return -EINVAL;
+
+	down_write(&fs_domain->rwlock);
+
+	/*
+	 * We hold domain reference and peer-lock, hence domain/peer teardown
+	 * must wait for us. Our caller already verified we haven't been torn
+	 * down, yet. We verified that the peer is not NEW. Hence, the peer
+	 * pointer must be valid.
+	 * Be safe and verify it anyway. Note that the domain-rwlock guarantees
+	 * that the peer cannot change while we reset the peer.
+	 */
+	peer = rcu_dereference_protected(fs_peer->peer,
+				lockdep_assert_held(&fs_domain->rwlock));
+	if (WARN_ON(!peer)) {
 		up_write(&fs_domain->rwlock);
-
-		/* XXX: reset actual peer, queues, etc. */
+		return -ESHUTDOWN;
 	}
 
-	if (param->flags & BUS1_CONNECT_FLAG_QUERY) {
-		/* XXX: return unique-id and pool-size to user */
-	}
+	/* remove from rb-tree, and change the ID */
+	rb_erase(&fs_peer->rb, &fs_domain->map_peers);
+	fs_peer->id = ++fs_domain->domain->peer_ids;
+
+	/* insert at the tail again */
+	last = rb_last(&fs_domain->map_peers);
+	if (last)
+		rb_link_node(&fs_peer->rb, last, &last->rb_right);
+	else
+		rb_link_node(&fs_peer->rb, NULL,
+			     &fs_domain->map_peers.rb_node);
+	rb_insert_color(&fs_peer->rb, &fs_domain->map_peers);
+
+	/* provide information for caller */
+	param->unique_id = fs_peer->id;
+	param->pool_size = peer->pool.size;
+
+	up_write(&fs_domain->rwlock);
+
+	/* XXX: reset actual peer, queues, etc. */
 
 	return 0;
+}
+
+static int bus1_fs_peer_connect_query(struct bus1_fs_peer *fs_peer,
+				      struct bus1_fs_domain *fs_domain,
+				      struct bus1_cmd_connect *param)
+{
+	struct bus1_peer *peer;
+	int r;
+
+	lockdep_assert_held(&fs_domain->active);
+	lockdep_assert_held(&fs_peer->rwlock);
+
+	/*
+	 * We hold a domain-reference and peer-lock, the caller already
+	 * verified we're not disconnected. Barriers guarantee that the peer is
+	 * accessible, and both the domain teardown and peer-disconnect have to
+	 * wait for us to finish. However, to be safe, we still wrap it as
+	 * rcu-access and check for NULL. Note that it *can* be NULL in case
+	 * the peer was never connected. However, it cannot be NULL if it was
+	 * connected before.
+	 */
+	rcu_read_lock();
+	peer = rcu_dereference(fs_peer->peer);
+	if (!peer) {
+		WARN_ON(!bus1_active_is_new(&fs_peer->active));
+		r = -ENOTCONN;
+	} else {
+		param->unique_id = fs_peer->id;
+		param->pool_size = peer->pool.size;
+	}
+	rcu_read_unlock();
+
+	return r;
 }
 
 static int bus1_fs_peer_connect(struct bus1_fs_peer *fs_peer,
 				struct bus1_fs_domain *fs_domain,
 				unsigned long arg)
 {
+	struct bus1_cmd_connect __user *uparam = (void __user *)arg;
 	struct bus1_cmd_connect *param;
 	int r;
 
+	/*
+	 * The domain-active-reference guarantees that a domain teardown waits
+	 * for us, before it starts the force-disconnect on all clients.
+	 */
 	lockdep_assert_held(&fs_domain->active);
 
 	param = bus1_import_dynamic_ioctl(arg, sizeof(*param));
 	if (IS_ERR(param))
 		return PTR_ERR(param);
 
+	/* check for validity of all flags */
 	if (param->flags & ~(BUS1_CONNECT_FLAG_PEER |
 			     BUS1_CONNECT_FLAG_MONITOR |
 			     BUS1_CONNECT_FLAG_QUERY |
 			     BUS1_CONNECT_FLAG_RESET))
 		return -EINVAL;
+	/* only one mode can be specified */
+	if (!!(param->flags & BUS1_CONNECT_FLAG_PEER) +
+	    !!(param->flags & BUS1_CONNECT_FLAG_MONITOR) +
+	    !!(param->flags & BUS1_CONNECT_FLAG_RESET) > 1)
+		return -EINVAL;
+	/* unique-id is never used as input */
+	if (param->unique_id != 0)
+		return -EINVAL;
 
 	/* lock against parallel CONNECT/DISCONNECT */
 	down_write(&fs_peer->rwlock);
 
-	if (bus1_active_is_deactivated(&fs_peer->active))
+	if (bus1_active_is_deactivated(&fs_peer->active)) {
+		/* all fails, if the peer was already disconnected */
 		r = -ESHUTDOWN;
-	else if (rcu_access_pointer(fs_peer->peer))
-		r = bus1_fs_peer_connect_again(fs_peer, fs_domain, param);
-	else
+	} else if (param->flags & (BUS1_CONNECT_FLAG_PEER |
+				   BUS1_CONNECT_FLAG_MONITOR)) {
+		/* fresh connect of a new peer */
 		r = bus1_fs_peer_connect_new(fs_peer, fs_domain, param);
+	} else if (param->flags & BUS1_CONNECT_FLAG_RESET) {
+		/* reset of the peer requested */
+		r = bus1_fs_peer_connect_reset(fs_peer, fs_domain, param);
+	} else if (param->flags & BUS1_CONNECT_FLAG_QUERY) {
+		/* fallback: no special operation specified, just query */
+		r = bus1_fs_peer_connect_query(fs_peer, fs_domain, param);
+	} else {
+		r = -EINVAL; /* no mode specified */
+	}
 
 	up_write(&fs_peer->rwlock);
+
+	/*
+	 * QUERY can be combined with any CONNECT operation. On success, it
+	 * causes the peer-id and pool-size to be copied back to user-space.
+	 * All handlers above must provide that information in @param for this
+	 * to copy it back.
+	 */
+	if (r >= 0 && (param->flags & BUS1_CONNECT_FLAG_QUERY)) {
+		if (put_user(param->unique_id, &uparam->unique_id) ||
+		    put_user(param->pool_size, &uparam->pool_size))
+			r = -EFAULT;
+	}
 
 	kfree(param);
 	return r;
