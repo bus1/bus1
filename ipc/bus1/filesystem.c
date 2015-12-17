@@ -724,10 +724,10 @@ static void bus1_fs_domain_teardown(struct bus1_fs_domain *fs_domain)
 		bus1_active_cleanup(&fs_peer->active, NULL,
 				    bus1_fs_peer_cleanup_teardown, fs_domain);
 	}
-	WARN_ON(fs_domain->n_peers > 0);
+	WARN_ON(!RB_EMPTY_ROOT(&fs_domain->map_names));
 	WARN_ON(fs_domain->n_names > 0);
+	WARN_ON(fs_domain->n_peers > 0);
 	fs_domain->map_peers = RB_ROOT;
-	fs_domain->map_names = RB_ROOT;
 	up_write(&fs_domain->rwlock);
 
 	bus1_active_cleanup(&fs_domain->active, &fs_domain->waitq,
