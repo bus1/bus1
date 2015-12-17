@@ -91,6 +91,7 @@ static struct bus1_fs_name *bus1_fs_name_new(const char *name)
 
 	fs_name->next = NULL;
 	fs_name->fs_peer = NULL;
+	RB_CLEAR_NODE(&fs_name->rb);
 	memcpy(fs_name->name, name, namelen);
 
 	return fs_name;
@@ -101,7 +102,7 @@ static struct bus1_fs_name *bus1_fs_name_free(struct bus1_fs_name *fs_name)
 	if (!fs_name)
 		return NULL;
 
-	/* fs_name->rb might be stray */
+	WARN_ON(!RB_EMPTY_NODE(&fs_name->rb));
 	WARN_ON(fs_name->fs_peer);
 	WARN_ON(fs_name->next);
 	kfree(fs_name);
@@ -118,7 +119,9 @@ static int bus1_fs_name_push(struct bus1_fs_domain *fs_domain,
 	int v;
 
 	lockdep_assert_held(&fs_domain->rwlock); /* write-locked */
-	WARN_ON(!RB_EMPTY_NODE(&fs_name->rb));
+
+	if (WARN_ON(!RB_EMPTY_NODE(&fs_name->rb)))
+		return -EINVAL;
 
 	/* find rb-tree entry and check for possible duplicates first */
 	slot = &fs_domain->map_names.rb_node;
@@ -149,8 +152,7 @@ static int bus1_fs_name_push(struct bus1_fs_domain *fs_domain,
 }
 
 static struct bus1_fs_name *bus1_fs_name_pop(struct bus1_fs_domain *fs_domain,
-					     struct bus1_fs_peer *fs_peer,
-					     bool drop_from_tree)
+					     struct bus1_fs_peer *fs_peer)
 {
 	struct bus1_fs_name *fs_name;
 
@@ -161,11 +163,8 @@ static struct bus1_fs_name *bus1_fs_name_pop(struct bus1_fs_domain *fs_domain,
 	if (!fs_name)
 		return NULL;
 
-	/* final teardown is allowed to leave stray data in the tree */
-	if (drop_from_tree)
-		rb_erase(&fs_name->rb, &fs_domain->map_peers);
-
-	/* remove from peer */
+	rb_erase(&fs_name->rb, &fs_domain->map_peers);
+	RB_CLEAR_NODE(&fs_name->rb);
 	fs_peer->names = fs_name->next;
 	fs_name->next = NULL;
 	fs_name->fs_peer = NULL;
@@ -231,8 +230,7 @@ static void bus1_fs_peer_cleanup(struct bus1_fs_peer *fs_peer,
 				bus1_active_is_drained(&fs_peer->active) &&
 				lockdep_assert_held(&fs_domain->rwlock));
 	if (peer) {
-		while ((fs_name = bus1_fs_name_pop(fs_domain, fs_peer,
-						   drop_from_tree)))
+		while ((fs_name = bus1_fs_name_pop(fs_domain, fs_peer)))
 			bus1_fs_name_free(fs_name);
 
 		if (drop_from_tree)
@@ -340,7 +338,7 @@ static int bus1_fs_peer_connect_new(struct bus1_fs_peer *fs_peer,
 
 exit:
 	if (peer) {
-		while ((fs_name = bus1_fs_name_pop(fs_domain, fs_peer, true)))
+		while ((fs_name = bus1_fs_name_pop(fs_domain, fs_peer)))
 			bus1_fs_name_free(fs_name);
 		bus1_peer_free(peer);
 	}
