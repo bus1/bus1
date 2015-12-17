@@ -17,6 +17,7 @@ bus$(BUS1_EXT)-y :=	\
 	peer.o		\
 	pool.o		\
 	queue.o		\
+	transaction.o	\
 	util.o
 
 obj-$(CONFIG_BUS1) += bus$(BUS1_EXT).o

@@ -71,6 +71,11 @@ struct bus1_cmd_resolve {
 	char name[];
 } __attribute__((__aligned__(8)));
 
+enum {
+	BUS1_SEND_FLAG_IGNORE_UNKNOWN	= 1ULL <<  0,
+	BUS1_SEND_FLAG_CONVEY_ERRORS	= 1ULL <<  1,
+};
+
 struct bus1_cmd_send {
 	__u64 flags;
 	__u64 ptr_destinations;
