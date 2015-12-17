@@ -20,6 +20,7 @@
 #include <linux/pagemap.h>
 #include <linux/poll.h>
 #include <linux/rbtree.h>
+#include <linux/rcupdate.h>
 #include <linux/rwsem.h>
 #include <linux/sched.h>
 #include <linux/slab.h>
@@ -49,7 +50,7 @@ struct bus1_fs_peer {
 	struct rw_semaphore rwlock;
 	wait_queue_head_t waitq;
 	struct bus1_active active;
-	struct bus1_peer *peer;
+	struct bus1_peer __rcu *peer;
 	struct bus1_fs_name *names;
 	struct rb_node rb;
 	u64 id;
@@ -183,7 +184,7 @@ static struct bus1_fs_peer *bus1_fs_peer_new(void)
 	init_rwsem(&fs_peer->rwlock);
 	init_waitqueue_head(&fs_peer->waitq);
 	bus1_active_init(&fs_peer->active);
-	fs_peer->peer = NULL;
+	rcu_assign_pointer(fs_peer->peer, NULL);
 	fs_peer->names = NULL;
 	RB_CLEAR_NODE(&fs_peer->rb);
 	fs_peer->id = 0;
@@ -199,7 +200,7 @@ bus1_fs_peer_free(struct bus1_fs_peer *fs_peer)
 
 	/* fs_peer->rb might be stray */
 	WARN_ON(fs_peer->names);
-	WARN_ON(fs_peer->peer);
+	WARN_ON(rcu_access_pointer(fs_peer->peer));
 	bus1_active_destroy(&fs_peer->active);
 	kfree(fs_peer);
 
@@ -211,6 +212,7 @@ static void bus1_fs_peer_cleanup(struct bus1_fs_peer *fs_peer,
 				 bool drop_from_tree)
 {
 	struct bus1_fs_name *fs_name;
+	struct bus1_peer *peer;
 
 	/*
 	 * This function is called by bus1_active_cleanup(), once all active
@@ -224,7 +226,10 @@ static void bus1_fs_peer_cleanup(struct bus1_fs_peer *fs_peer,
 
 	lockdep_assert_held(&fs_domain->rwlock); /* write-locked */
 
-	if (fs_peer->peer) {
+	peer = rcu_dereference_protected(fs_peer->peer,
+				bus1_active_is_drained(&fs_peer->active) &&
+				lockdep_assert_held(&fs_domain->rwlock));
+	if (peer) {
 		while ((fs_name = bus1_fs_name_pop(fs_domain, fs_peer,
 						   drop_from_tree)))
 			bus1_fs_name_free(fs_name);
@@ -233,7 +238,9 @@ static void bus1_fs_peer_cleanup(struct bus1_fs_peer *fs_peer,
 			rb_erase(&fs_peer->rb, &fs_domain->map_peers);
 
 		--fs_domain->n_peers;
-		fs_peer->peer = bus1_peer_free(fs_peer->peer);
+
+		rcu_assign_pointer(fs_peer->peer, NULL);
+		bus1_peer_free(peer);
 	} else {
 		WARN_ON(fs_peer->names);
 	}
@@ -323,7 +330,7 @@ static int bus1_fs_peer_connect_new(struct bus1_fs_peer *fs_peer,
 
 	/* acquire ID and activate handle */
 	fs_peer->id = ++fs_domain->domain->peer_ids;
-	fs_peer->peer = peer;
+	rcu_assign_pointer(fs_peer->peer, peer);
 	++fs_domain->n_peers;
 	bus1_active_activate(&fs_peer->active);
 
@@ -426,7 +433,7 @@ static int bus1_fs_peer_connect(struct bus1_fs_peer *fs_peer,
 
 	if (bus1_active_is_deactivated(&fs_peer->active))
 		r = -ESHUTDOWN;
-	else if (fs_peer->peer)
+	else if (rcu_access_pointer(fs_peer->peer))
 		r = bus1_fs_peer_connect_again(fs_peer, fs_domain, param);
 	else
 		r = bus1_fs_peer_connect_new(fs_peer, fs_domain, param);
@@ -600,8 +607,8 @@ struct bus1_fs_peer *bus1_fs_peer_release(struct bus1_fs_peer *fs_peer)
  */
 struct bus1_peer *bus1_fs_peer_dereference(struct bus1_fs_peer *fs_peer)
 {
-	lockdep_assert_held(&fs_peer->active);
-	return fs_peer->peer;
+	return rcu_dereference_protected(fs_peer->peer,
+					 lockdep_assert_held(&fs_peer->active));
 }
 
 static struct bus1_fs_domain *
@@ -911,8 +918,8 @@ static long bus1_fs_bus_fop_ioctl(struct file *file,
 		if (!bus1_fs_peer_acquire(fs_peer)) {
 			r = -ESHUTDOWN;
 		} else {
-			r = bus1_peer_ioctl(fs_peer->peer, fs_domain,
-					    cmd, arg);
+			r = bus1_peer_ioctl(bus1_fs_peer_dereference(fs_peer),
+					    fs_domain, cmd, arg);
 			bus1_fs_peer_release(fs_peer);
 		}
 		up_read(&fs_peer->rwlock);
@@ -958,7 +965,7 @@ static int bus1_fs_bus_fop_mmap(struct file *file, struct vm_area_struct *vma)
 	if (!bus1_fs_peer_acquire(fs_peer))
 		return -ESHUTDOWN;
 
-	pool = &fs_peer->peer->pool;
+	pool = &bus1_fs_peer_dereference(fs_peer)->pool;
 
 	if ((vma->vm_end - vma->vm_start) > pool->size) {
 		/* do not allow to map more than the size of the file */
