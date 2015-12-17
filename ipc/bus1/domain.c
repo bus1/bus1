@@ -8,6 +8,7 @@
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+#include <linux/err.h>
 #include <linux/kernel.h>
 #include <linux/slab.h>
 #include "domain.h"

@@ -9,6 +9,7 @@
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 #include <linux/compat.h>
+#include <linux/err.h>
 #include <linux/file.h>
 #include <linux/fs.h>
 #include <linux/kernel.h>

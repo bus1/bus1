@@ -8,6 +8,7 @@
  */
 
 #include <linux/dcache.h>
+#include <linux/err.h>
 #include <linux/file.h>
 #include <linux/fs.h>
 #include <linux/fsnotify.h>
