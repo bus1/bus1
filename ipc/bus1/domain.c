@@ -8,6 +8,7 @@
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+#include <linux/atomic.h>
 #include <linux/err.h>
 #include <linux/kernel.h>
 #include <linux/slab.h>
@@ -22,6 +23,7 @@ struct bus1_domain *bus1_domain_new(void)
 		return ERR_PTR(-ENOMEM);
 
 	domain->peer_ids = 0;
+	atomic64_set(&domain->seq_ids, 0);
 
 	return domain;
 }

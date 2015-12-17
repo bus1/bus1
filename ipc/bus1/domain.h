@@ -16,10 +16,12 @@
  * XXX
  */
 
+#include <linux/atomic.h>
 #include <linux/kernel.h>
 
 struct bus1_domain {
 	u64 peer_ids;
+	atomic64_t seq_ids;
 };
 
 struct bus1_domain *bus1_domain_new(void);
