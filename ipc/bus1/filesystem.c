@@ -520,49 +520,6 @@ bus1_fs_peer_acquire_by_id(struct bus1_fs_domain *fs_domain, u64 id)
 }
 
 /**
- * bus1_fs_peer_acquire_by_name() - acquire peer by name
- * @fs_domain:		domain to search
- * @name:		name to look for
- * @out_id:		output storage for ID of found peer, or NULL
- *
- * Find a peer handle that is registered under the given name and domain. If
- * found, acquire an active reference and return the handle (putting the ID of
- * the handle into @out_id, if non-NULL). If not found, NULL is returned and
- * @out_id stays untouched.
- *
- * Return: Active reference to matching handle, or NULL.
- */
-struct bus1_fs_peer *
-bus1_fs_peer_acquire_by_name(struct bus1_fs_domain *fs_domain,
-			     const char *name, u64 *out_id)
-{
-	struct bus1_fs_peer *res = NULL;
-	struct bus1_fs_name *fs_name;
-	struct rb_node *n;
-	int v;
-
-	down_read(&fs_domain->rwlock);
-	n = fs_domain->map_names.rb_node;
-	while (n) {
-		fs_name = container_of(n, struct bus1_fs_name, rb);
-		v = strcmp(name, fs_name->name);
-		if (v == 0) {
-			res = bus1_fs_peer_acquire(fs_name->fs_peer);
-			if (res && out_id)
-				*out_id = res->id;
-			break;
-		} else if (v < 0) {
-			n = n->rb_left;
-		} else /* if (v > 0) */ {
-			n = n->rb_right;
-		}
-	}
-	up_read(&fs_domain->rwlock);
-
-	return res;
-}
-
-/**
  * bus1_fs_peer_release() - release an active reference
  * @fs_peer:	handle to release, or NULL
  *
@@ -782,9 +739,10 @@ static int bus1_fs_domain_resolve(struct bus1_fs_domain *fs_domain,
 {
 	struct bus1_cmd_resolve __user *uparam = (void __user *)arg;
 	struct bus1_cmd_resolve *param;
-	struct bus1_fs_peer *fs_peer;
+	struct bus1_fs_name *fs_name;
+	struct rb_node *n;
 	size_t namelen;
-	int r;
+	int r, v;
 
 	lockdep_assert_held(&fs_domain->active);
 
@@ -818,20 +776,30 @@ static int bus1_fs_domain_resolve(struct bus1_fs_domain *fs_domain,
 		goto exit;
 	}
 
-	/* lookup peer handle */
-	fs_peer = bus1_fs_peer_acquire_by_name(fs_domain, param->name,
-					       &param->unique_id);
-	if (!fs_peer) {
-		r = -ENXIO;
-		goto exit;
+	/* find unique-id of named peer */
+	down_read(&fs_domain->rwlock);
+	n = fs_domain->map_names.rb_node;
+	while (n) {
+		fs_name = container_of(n, struct bus1_fs_name, rb);
+		v = strcmp(param->name, fs_name->name);
+		if (v == 0) {
+			if (bus1_active_is_active(&fs_name->fs_peer->active))
+				param->unique_id = fs_name->fs_peer->id;
+			break;
+		} else if (v < 0) {
+			n = n->rb_left;
+		} else /* if (v > 0) */ {
+			n = n->rb_right;
+		}
 	}
+	up_read(&fs_domain->rwlock);
 
-	if (put_user(param->unique_id, &uparam->unique_id))
+	if (!n)
+		r = -ENXIO; /* not found, or deactivated */
+	else if (put_user(param->unique_id, &uparam->unique_id))
 		r = -EFAULT;
 	else
 		r = 0;
-
-	bus1_fs_peer_release(fs_peer);
 
 exit:
 	kfree(param);
