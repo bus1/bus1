@@ -30,7 +30,7 @@ BUS1_EXT		?= 1
 KERNELVER		?= $(shell uname -r)
 KERNELDIR 		?= /lib/modules/$(KERNELVER)/build
 PWD			:= $(shell pwd)
-EXTRA_CFLAGS		+= -I$(PWD)/include -DBUS1_SUPER_MAGIC=0x64766468726d
+EXTRA_CFLAGS		+= -I$(PWD)/include -DBUS1_SUPER_MAGIC=0x64627573
 HOST_EXTRACFLAGS	+= -I$(PWD)/usr/include
 
 #
