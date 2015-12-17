@@ -36,7 +36,7 @@ struct bus1_peer *bus1_peer_new(struct bus1_domain *domain,
 		return ERR_PTR(-ENOMEM);
 
 	mutex_init(&peer->lock);
-	peer->pool = BUS1_POOL_INIT;
+	peer->pool = BUS1_POOL_NULL;
 	bus1_queue_init(&peer->queue);
 
 	r = bus1_pool_create(&peer->pool, param->pool_size);
