@@ -32,9 +32,10 @@
  *   EMSGSIZE:          ioctl parameters are too small/large
  *   EINVAL:            invalid parameters
  *   EISNAM:            name is already in use
- *   EALREADY:          operation was already performed earlier
  *   ENXIO:             referenced object does not exist
  *   EXFULL:            target memory pool is full
+ *   ENOTCONN:          handle is not connected, yet
+ *   EISCONN:           handle is already connected
  */
 
 #include <linux/ioctl.h>
