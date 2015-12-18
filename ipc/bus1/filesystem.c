@@ -41,6 +41,15 @@ enum { /* static inode numbers */
 	_BUS1_FS_INO_N,
 };
 
+/*
+ * Name Handles
+ *
+ * Each peer is linked on its parent domain via its ID, but also optionally via
+ * a set of names. Each such name is represented via name handles, and are
+ * exclusively used for peer lookups. No other operations are possible.
+ *
+ * The object is fully protected by @domain->rwlock.
+ */
 struct bus1_fs_name {
 	struct bus1_fs_name *next;
 	struct bus1_fs_peer *fs_peer;
@@ -48,6 +57,31 @@ struct bus1_fs_name {
 	char name[];
 };
 
+/*
+ * Peer Handles
+ *
+ * The bus1_fs_peer object is the low-level handle for peers. It is stored in
+ * each open-file of the `bus' node. As long as you hold an active reference on
+ * @active, you can access @peer and it will be non-NULL. Furthermore, @peer
+ * can be accessed via rcu, in which case it might be NULL, though.
+ *
+ * @rwlock is used to protect peer setup and resets. It is only used by the
+ * owner of the handle to synchronize file-operations. No-one else must acquire
+ * it.
+ *
+ * @id is the peer ID. It is protected by both @rwlock *and* @domain->rwlock.
+ * That is, if you hold either, you can read it. You need to lock both to write
+ * it.
+ *
+ * Peers are linked into their parent domain. Therefore, if you own an active
+ * reference to the parent domain, the peer object is protected from teardown.
+ * If you also hold @rwlock, you're thusly protected against teardown and can
+ * dereference @peer (but it might be NULL).
+ *
+ * Technically, @id belongs into @peer. However, we want it close to @rb to
+ * speed up the peer lookups considerably. Otherwise, it had to be protected by
+ * the peer-lock (to support RESET), which would be way too heavy.
+ */
 struct bus1_fs_peer {
 	struct rw_semaphore rwlock;
 	wait_queue_head_t waitq;
@@ -58,6 +92,24 @@ struct bus1_fs_peer {
 	u64 id;
 };
 
+/*
+ * Domain Handles
+ *
+ * The bus1_fs_domain object is the low-level handle for domains. It is stored
+ * in the super-block of the respective mount that created the domain. As long
+ * as you hold an active reference to @active, you can access @domain and it
+ * will be non-NULL.
+ *
+ * @rwlock is used to protect the lookup-trees @map_peers and @map_names. This
+ * lock should be treated as a data-lock and be used scarcily. It is very
+ * contended and you should never do any heavy operations while holding it. You
+ * need a read-lock to lookup peers or names. You need a write-lock to
+ * link/unlink peers or names.
+ *
+ * Technically, the rb-trees could be moved into @domain, as they don't belong
+ * to the handle itself. However, for performance reasons, we avoid the
+ * additional dereference and just allow fast lookups on domains.
+ */
 struct bus1_fs_domain {
 	struct rw_semaphore rwlock;
 	wait_queue_head_t waitq;
