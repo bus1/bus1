@@ -458,19 +458,19 @@ static int bus1_fs_peer_connect_new(struct bus1_fs_peer *fs_peer,
 		n = strnlen(name, remaining);
 		if (n == 0 || n == remaining) {
 			r = -EMSGSIZE;
-			goto exit;
+			goto error;
 		}
 
 		fs_name = bus1_fs_name_new(name);
 		if (IS_ERR(fs_name)) {
 			r = PTR_ERR(fs_name);
-			goto exit;
+			goto error;
 		}
 
 		r = bus1_fs_name_push(fs_domain, fs_peer, fs_name);
 		if (r < 0) {
 			bus1_fs_name_free(fs_name);
-			goto exit;
+			goto error;
 		}
 	}
 
@@ -492,16 +492,14 @@ static int bus1_fs_peer_connect_new(struct bus1_fs_peer *fs_peer,
 	/* provide ID for caller, pool-size is already set */
 	param->unique_id = fs_peer->id;
 
-	peer = NULL;
-	r = 0;
-
-exit:
-	if (peer) {
-		while ((fs_name = bus1_fs_name_pop(fs_domain, fs_peer)))
-			bus1_fs_name_free(fs_name);
-		bus1_peer_free(peer);
-	}
 	up_write(&fs_domain->rwlock);
+	return 0;
+
+error:
+	while ((fs_name = bus1_fs_name_pop(fs_domain, fs_peer)))
+		bus1_fs_name_free(fs_name);
+	up_write(&fs_domain->rwlock);
+	bus1_peer_free(peer);
 	return r;
 }
 
