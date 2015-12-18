@@ -451,7 +451,7 @@ void bus1_transaction_commit(struct bus1_transaction *transaction)
 	 * For unicast fast-paths, we even skip fetching the sequence-number,
 	 * which might be a heavy operation, depending on the architecture.
 	 */
-	if (!second) {
+	if (second) {
 		seq = atomic64_read(&transaction->domain->seq_ids) + 1;
 		WARN_ON(!(seq & 1)); /* must be odd */
 
