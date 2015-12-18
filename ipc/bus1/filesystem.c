@@ -280,7 +280,6 @@ static void bus1_fs_peer_cleanup(struct bus1_fs_peer *fs_peer,
 	lockdep_assert_held(&fs_domain->rwlock); /* write-locked */
 
 	peer = rcu_dereference_protected(fs_peer->peer,
-				bus1_active_is_drained(&fs_peer->active) &&
 				lockdep_assert_held(&fs_domain->rwlock));
 	if (peer) {
 		while ((fs_name = bus1_fs_name_pop(fs_domain, fs_peer)))
@@ -434,25 +433,23 @@ static int bus1_fs_peer_connect_new(struct bus1_fs_peer *fs_peer,
 	if (!bus1_active_is_new(&fs_peer->active))
 		return -EISCONN;
 
+	/*
+	 * The domain-reference and peer-lock guarantee that no other
+	 * connect, disconnect, or teardown can race us (they wait for us). We
+	 * also verified that the peer is NEW. Hence, fs_peer->peer must be
+	 * NULL. We still verify it, just to be safe.
+	 */
+	if (WARN_ON(rcu_dereference_protected(fs_peer->peer,
+				lockdep_assert_held(&fs_domain->active) &&
+				lockdep_assert_held(&fs_peer->rwlock))))
+		return -EISCONN;
+
 	/* allocate new peer object */
 	peer = bus1_peer_new(fs_domain->domain, param);
 	if (IS_ERR(peer))
 		return PTR_ERR(peer);
 
 	down_write(&fs_domain->rwlock);
-
-	/*
-	 * domain-rwlock guarantees that fs_peer->peer cannot change underneath
-	 * us. The domain-reference and peer-lock guarantees that no other
-	 * connect/disconnect or teardown can race us (they wait for us). We
-	 * also verified that the peer is NEW. Hence, fs_peer->peer must be
-	 * NULL. We still verify it, just to be safe.
-	 */
-	if (WARN_ON(rcu_dereference_protected(fs_peer->peer,
-				lockdep_assert_held(&fs_domain->rwlock)))) {
-		r = -EISCONN;
-		goto exit;
-	}
 
 	/* insert names */
 	name = param->names;
@@ -538,22 +535,20 @@ static int bus1_fs_peer_connect_reset(struct bus1_fs_peer *fs_peer,
 	if (param->pool_size != 0 || param->size > sizeof(*param))
 		return -EINVAL;
 
-	down_write(&fs_domain->rwlock);
-
 	/*
 	 * We hold domain reference and peer-lock, hence domain/peer teardown
 	 * must wait for us. Our caller already verified we haven't been torn
 	 * down, yet. We verified that the peer is not NEW. Hence, the peer
 	 * pointer must be valid.
-	 * Be safe and verify it anyway. Note that the domain-rwlock guarantees
-	 * that the peer cannot change while we reset the peer.
+	 * Be safe and verify it anyway.
 	 */
 	peer = rcu_dereference_protected(fs_peer->peer,
-				lockdep_assert_held(&fs_domain->rwlock));
-	if (WARN_ON(!peer)) {
-		up_write(&fs_domain->rwlock);
+				lockdep_assert_held(&fs_domain->active) &&
+				lockdep_assert_held(&fs_peer->rwlock));
+	if (WARN_ON(!peer))
 		return -ESHUTDOWN;
-	}
+
+	down_write(&fs_domain->rwlock);
 
 	/* remove from rb-tree, and change the ID */
 	rb_erase(&fs_peer->rb, &fs_domain->map_peers);
@@ -584,32 +579,30 @@ static int bus1_fs_peer_connect_query(struct bus1_fs_peer *fs_peer,
 				      struct bus1_cmd_connect *param)
 {
 	struct bus1_peer *peer;
-	int r;
 
 	lockdep_assert_held(&fs_domain->active);
 	lockdep_assert_held(&fs_peer->rwlock);
+
+	/* cannot query a peer that was never connected */
+	if (bus1_active_is_new(&fs_peer->active))
+		return -ENOTCONN;
 
 	/*
 	 * We hold a domain-reference and peer-lock, the caller already
 	 * verified we're not disconnected. Barriers guarantee that the peer is
 	 * accessible, and both the domain teardown and peer-disconnect have to
-	 * wait for us to finish. However, to be safe, we still wrap it as
-	 * rcu-access and check for NULL. Note that it *can* be NULL in case
-	 * the peer was never connected. However, it cannot be NULL if it was
-	 * connected before.
+	 * wait for us to finish. However, to be safe, check for NULL anyway.
 	 */
-	rcu_read_lock();
-	peer = rcu_dereference(fs_peer->peer);
-	if (!peer) {
-		WARN_ON(!bus1_active_is_new(&fs_peer->active));
-		r = -ENOTCONN;
-	} else {
-		param->unique_id = fs_peer->id;
-		param->pool_size = peer->pool.size;
-	}
-	rcu_read_unlock();
+	peer = rcu_dereference_protected(fs_peer->peer,
+				lockdep_assert_held(&fs_domain->active) &&
+				lockdep_assert_held(&fs_peer->rwlock));
+	if (WARN_ON(!peer))
+		return -ESHUTDOWN;
 
-	return r;
+	param->unique_id = fs_peer->id;
+	param->pool_size = peer->pool.size;
+
+	return 0;
 }
 
 static int bus1_fs_peer_connect(struct bus1_fs_peer *fs_peer,
