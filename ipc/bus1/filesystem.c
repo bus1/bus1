@@ -164,7 +164,7 @@ static struct bus1_fs_name *bus1_fs_name_pop(struct bus1_fs_domain *fs_domain,
 	if (!fs_name)
 		return NULL;
 
-	rb_erase(&fs_name->rb, &fs_domain->map_peers);
+	rb_erase(&fs_name->rb, &fs_domain->map_names);
 	RB_CLEAR_NODE(&fs_name->rb);
 	fs_peer->names = fs_name->next;
 	fs_name->next = NULL;
