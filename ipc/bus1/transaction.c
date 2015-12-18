@@ -8,6 +8,7 @@
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+#include <linux/atomic.h>
 #include <linux/err.h>
 #include <linux/file.h>
 #include <linux/fs.h>
@@ -46,7 +47,6 @@ struct bus1_transaction {
 	/* transaction state */
 	size_t length_vecs;
 	struct bus1_transaction_header header;
-	u64 seq;
 
 	/* payload */
 	size_t n_vecs;
@@ -133,7 +133,6 @@ bus1_transaction_free(struct bus1_transaction *transaction)
 		mutex_lock(&peer->lock);
 		entry->slice = bus1_pool_release_kernel(&peer->pool,
 							entry->slice);
-		bus1_queue_unlink(&peer->queue, entry);
 		mutex_unlock(&peer->lock);
 
 		bus1_fs_peer_release(fs_peer);
@@ -275,7 +274,6 @@ bus1_transaction_new_from_user(struct bus1_fs_domain *fs_domain,
 
 	transaction->fs_domain = fs_domain;
 	transaction->domain = domain;
-	transaction->seq = 0;
 
 	r = bus1_transaction_import_vecs(transaction, param, is_compat);
 	if (r < 0)
@@ -311,9 +309,9 @@ error:
  *
  * Instantiate the message from the given transaction for the peer given as
  * @peer_id. A new pool-slice is allocated, a queue entry is created and the
- * message is queued as in-flight message on the destination queue. The message
- * cannot be dequeued by the destination, until the entire transaction is
- * committed.
+ * message is queued as in-flight message on the transaction object. The
+ * message is not linked on the destination, yet. You need to commit the
+ * transaction to actually link it on the destination queue.
  *
  * Return: 0 on success, negative error code on failure.
  */
@@ -327,10 +325,6 @@ int bus1_transaction_instantiate_for_id(struct bus1_transaction *transaction,
 	struct bus1_peer *peer;
 	size_t i;
 	int r;
-
-	/* cannot instantiate on a uninitialized or committed transaction */
-	if (WARN_ON(!(transaction->seq & 1)))
-		return -EINVAL;
 
 	/* unknown peers are only ignored, if explicitly told so */
 	fs_peer = bus1_fs_peer_acquire_by_id(transaction->fs_domain, peer_id);
@@ -359,7 +353,6 @@ int bus1_transaction_instantiate_for_id(struct bus1_transaction *transaction,
 				true);
 	mutex_unlock(&peer->lock);
 
-	/* recover if we couldn't allocate a pool slice */
 	if (IS_ERR(slice)) {
 		r = PTR_ERR(slice);
 		slice = NULL;
@@ -409,45 +402,6 @@ error:
 }
 
 /**
- * bus1_transaction_stage() - stage a transaction
- * @transaction:	transaction to commit
- *
- * XXX:
- */
-void bus1_transaction_stage(struct bus1_transaction *transaction)
-{
-	struct bus1_queue_entry *entry;
-	struct bus1_fs_peer *fs_peer;
-	struct bus1_peer *peer;
-	bool wake;
-
-	/* cannot stage an initialized transaction */
-	if (WARN_ON(transaction->seq != 0))
-		return;
-
-	/* allocate initial transaction ID, which must be odd */
-	transaction->seq = atomic64_read(&transaction->domain->seq_ids) + 1;
-	WARN_ON(!(transaction->seq & 1));
-
-	entry = transaction->entries;
-
-	while ((entry)) {
-		fs_peer = entry->transaction.fs_peer;
-		peer = bus1_fs_peer_dereference(fs_peer);
-
-		entry->seq = transaction->seq;
-
-		mutex_lock(&peer->lock);
-		wake = bus1_queue_link(&peer->queue, entry);
-		mutex_unlock(&peer->lock);
-
-		WARN_ON(wake); /* in-flight messages cannot cause a wake-up */
-
-		entry = entry->transaction.next;
-	}
-}
-
-/**
  * bus1_transaction_commit() - commit a transaction
  * @transaction:	transaction to commit
  *
@@ -455,30 +409,51 @@ void bus1_transaction_stage(struct bus1_transaction *transaction)
  */
 void bus1_transaction_commit(struct bus1_transaction *transaction)
 {
-	struct bus1_queue_entry *entry;
+	struct bus1_queue_entry *e;
 	struct bus1_fs_peer *fs_peer;
 	struct bus1_peer *peer;
+	bool wake;
+	u64 seq;
 
-	/* cannot commit an uninitialized or committed transaction */
-	if (WARN_ON(transaction->seq == 0 || !(transaction->seq & 1)))
+	/* nothing to do for empty destination sets */
+	if (!transaction->entries)
 		return;
 
-	/* allocate final transaction ID, which must be even */
-	transaction->seq =
-			atomic64_add_return(2, &transaction->domain->seq_ids);
-	WARN_ON(transaction->seq & 1);
+	/* allocate initial transaction ID, which must be odd */
+	seq = atomic64_read(&transaction->domain->seq_ids) + 1;
+	WARN_ON(!(seq & 1));
 
-	while ((entry = transaction->entries)) {
-		transaction->entries = entry->transaction.next;
-		fs_peer = entry->transaction.fs_peer;
-		peer = bus1_fs_peer_dereference(fs_peer);
-
-		entry->transaction.next = NULL;
-		entry->transaction.fs_peer = NULL;
+	/* stamp all entries and link them into their queues */
+	for (e = transaction->entries; e; e = e->transaction.next) {
+		peer = bus1_fs_peer_dereference(e->transaction.fs_peer);
+		e->seq = seq;
 
 		mutex_lock(&peer->lock);
-		bus1_queue_relink(&peer->queue, entry, transaction->seq);
+		wake = bus1_queue_link(&peer->queue, e);
 		mutex_unlock(&peer->lock);
+
+		WARN_ON(wake); /* in-flight messages cannot cause a wake-up */
+	}
+
+	/* allocate final transaction ID, which must be even */
+	seq = atomic64_add_return(2, &transaction->domain->seq_ids);
+	WARN_ON(seq & 1);
+
+	/* stamp again, relink, and release the entries to the peer */
+	while ((e = transaction->entries)) {
+		transaction->entries = e->transaction.next;
+		fs_peer = e->transaction.fs_peer;
+		peer = bus1_fs_peer_dereference(fs_peer);
+
+		e->transaction.next = NULL;
+		e->transaction.fs_peer = NULL;
+
+		mutex_lock(&peer->lock);
+		wake = bus1_queue_relink(&peer->queue, e, seq);
+		mutex_unlock(&peer->lock);
+
+		if (wake)
+			/* XXX: wake up peer */ ;
 
 		bus1_fs_peer_release(fs_peer);
 	}
