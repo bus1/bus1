@@ -157,7 +157,8 @@ struct bus1_queue {
 void bus1_queue_init_internal(struct bus1_queue *queue);
 void bus1_queue_destroy(struct bus1_queue *queue);
 bool bus1_queue_link(struct bus1_queue *queue,
-		     struct bus1_queue_entry *entry);
+		     struct bus1_queue_entry *entry,
+		     u64 seq);
 bool bus1_queue_unlink(struct bus1_queue *queue,
 		       struct bus1_queue_entry *entry);
 bool bus1_queue_relink(struct bus1_queue *queue,

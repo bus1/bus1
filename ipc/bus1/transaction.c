@@ -405,11 +405,25 @@ error:
  * bus1_transaction_commit() - commit a transaction
  * @transaction:	transaction to commit
  *
- * XXX:
+ * This performs the final commit of this transaction. All instances of the
+ * message that have been created on this transaction are staged on their
+ * respective destination queues and committed. This function makes sure to
+ * adhere to global-order restrictions, hence, the caller *must* instantiate
+ * the message for each destination before committing the whole transaction.
+ * Otherwise, ordering might not be guaranteed.
+ *
+ * This function flushes the entire transaction. Technically, you can
+ * instantiate further entries once this call returns and commit them again.
+ * However, they will be treated as a new message which just happens to have
+ * the same contents as the previous one. This might come in handy for messages
+ * that might be triggered multiple times (like peer notifications).
+ *
+ * This function never fails. If you successfully instantiated all your
+ * entries, they will always be correctly committed without failure.
  */
 void bus1_transaction_commit(struct bus1_transaction *transaction)
 {
-	struct bus1_queue_entry *e;
+	struct bus1_queue_entry *e, *second;
 	struct bus1_fs_peer *fs_peer;
 	struct bus1_peer *peer;
 	bool wake;
@@ -419,27 +433,50 @@ void bus1_transaction_commit(struct bus1_transaction *transaction)
 	if (!transaction->entries)
 		return;
 
-	/* allocate initial transaction ID, which must be odd */
-	seq = atomic64_read(&transaction->domain->seq_ids) + 1;
-	WARN_ON(!(seq & 1));
+	/* second destination, or NULL; used to select fast-paths */
+	second = transaction->entries->transaction.next;
 
-	/* stamp all entries and link them into their queues */
-	for (e = transaction->entries; e; e = e->transaction.next) {
-		peer = bus1_fs_peer_dereference(e->transaction.fs_peer);
-		e->seq = seq;
+	/*
+	 * Stamp all entries with a staging sequence number, and link them into
+	 * their queues. They're marked as in-flight and cannot be unlinked by
+	 * anyone but us. We just have to make sure we keep the peer pinned.
+	 *
+	 * Note that the first entry can be skipped. It is the first entry that
+	 * is committed in the following loop, hence, there is no reason to
+	 * mark it as staging. The only requirement we have is once we commit
+	 * the first entry, all others have to be staged. This allows us to
+	 * skip the first entry, and immediately start staging with the second
+	 * entry.
+	 *
+	 * For unicast fast-paths, we even skip fetching the sequence-number,
+	 * which might be a heavy operation, depending on the architecture.
+	 */
+	if (!second) {
+		seq = atomic64_read(&transaction->domain->seq_ids) + 1;
+		WARN_ON(!(seq & 1)); /* must be odd */
 
-		mutex_lock(&peer->lock);
-		wake = bus1_queue_link(&peer->queue, e);
-		mutex_unlock(&peer->lock);
+		for (e = second; e; e = e->transaction.next) {
+			peer = bus1_fs_peer_dereference(e->transaction.fs_peer);
 
-		WARN_ON(wake); /* in-flight messages cannot cause a wake-up */
+			mutex_lock(&peer->lock);
+			wake = bus1_queue_link(&peer->queue, e, seq);
+			mutex_unlock(&peer->lock);
+
+			WARN_ON(wake); /* in-flight; cannot cause a wake-up */
+		}
 	}
 
-	/* allocate final transaction ID, which must be even */
+	/*
+	 * Now that all entries (but the first) are linked as in-flight, we
+	 * allocate the final, unique sequence number for our transaction. Then
+	 * we stamp all entries again and commit them into their respective
+	 * queues.
+	 * Once we drop the peer-lock, each entry is owned by the peer and we
+	 * must not dereference it, anymore. It might get dequeued at any time.
+	 */
 	seq = atomic64_add_return(2, &transaction->domain->seq_ids);
-	WARN_ON(seq & 1);
+	WARN_ON(seq & 1); /* must be even */
 
-	/* stamp again, relink, and release the entries to the peer */
 	while ((e = transaction->entries)) {
 		transaction->entries = e->transaction.next;
 		fs_peer = e->transaction.fs_peer;
@@ -449,7 +486,10 @@ void bus1_transaction_commit(struct bus1_transaction *transaction)
 		e->transaction.fs_peer = NULL;
 
 		mutex_lock(&peer->lock);
-		wake = bus1_queue_relink(&peer->queue, e, seq);
+		if (second == transaction->entries) /* -> @e is first entry */
+			wake = bus1_queue_link(&peer->queue, e, seq);
+		else
+			wake = bus1_queue_relink(&peer->queue, e, seq);
 		mutex_unlock(&peer->lock);
 
 		if (wake)

@@ -66,25 +66,26 @@ void bus1_queue_destroy(struct bus1_queue *queue)
  * bus1_queue_link() - link entry into sorted queue
  * @queue:	queue to link into
  * @entry:	entry to link
+ * @seq:	sequence number to use
  *
  * This links @entry into the message queue @queue. The caller must guarantee
- * that the entry is unlinked and its seq initialized.
+ * that the entry is unlinked and was never marked as ready.
  *
  * The caller must hold the write-side peer-lock of the parent peer.
  *
  * Return: True if the queue became readable with this call.
  */
 bool bus1_queue_link(struct bus1_queue *queue,
-		     struct bus1_queue_entry *entry)
+		     struct bus1_queue_entry *entry,
+		     u64 seq)
 {
 	struct bus1_queue_entry *iter;
 	struct rb_node *prev, **slot;
 	bool is_leftmost = true;
 
-	if (WARN_ON(!RB_EMPTY_NODE(&entry->rb)))
-		return false;
-
-	if (WARN_ON(entry->seq == 0))
+	if (WARN_ON(seq == 0 ||
+		    !RB_EMPTY_NODE(&entry->rb) ||
+		    (entry->seq > 0 && !(entry->seq & 1))))
 		return false;
 
 	bus1_queue_assert_held(queue);
@@ -94,20 +95,21 @@ bool bus1_queue_link(struct bus1_queue *queue,
 	while (*slot) {
 		prev = *slot;
 		iter = bus1_queue_entry(prev);
-		if (entry->seq < iter->seq) {
+		if (seq < iter->seq) {
 			slot = &prev->rb_left;
-		} else /* if (entry->seq >= iter->seq) */ {
+		} else /* if (seq >= iter->seq) */ {
 			slot = &prev->rb_right;
 			is_leftmost = false;
 		}
 	}
 
+	entry->seq = seq;
 	rb_link_node(&entry->rb, prev, slot);
 	rb_insert_color(&entry->rb, &queue->messages);
 
 	if (is_leftmost) {
 		WARN_ON(rcu_access_pointer(queue->front));
-		if (!(entry->seq & 1))
+		if (!(seq & 1))
 			rcu_assign_pointer(queue->front, &entry->rb);
 	}
 
@@ -117,7 +119,7 @@ bool bus1_queue_link(struct bus1_queue *queue,
 	 * previous front cannot be ready in this case, as we *never* order
 	 * ready entries in front of other ready entries.
 	 */
-	return is_leftmost && !(entry->seq & 1);
+	return is_leftmost && !(seq & 1);
 }
 
 /**
@@ -199,8 +201,7 @@ bool bus1_queue_relink(struct bus1_queue *queue,
 	/* drop from rb-tree and insert again */
 	rb_erase(&entry->rb, &queue->messages);
 	RB_CLEAR_NODE(&entry->rb);
-	entry->seq = seq;
-	bus1_queue_link(queue, entry);
+	bus1_queue_link(queue, entry, seq);
 
 	/* if this uncovered a front, then the queue became readable */
 	return !front && rcu_access_pointer(queue->front);
