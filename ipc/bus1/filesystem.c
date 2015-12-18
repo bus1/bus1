@@ -260,10 +260,16 @@ bus1_fs_peer_free(struct bus1_fs_peer *fs_peer)
 	return NULL;
 }
 
+struct bus1_fs_peer_cleanup_context {
+	struct bus1_fs_domain *fs_domain;
+	struct bus1_peer *stale_peer;
+};
+
 static void bus1_fs_peer_cleanup(struct bus1_fs_peer *fs_peer,
-				 struct bus1_fs_domain *fs_domain,
+				 struct bus1_fs_peer_cleanup_context *ctx,
 				 bool drop_from_tree)
 {
+	struct bus1_fs_domain *fs_domain = ctx->fs_domain;
 	struct bus1_fs_name *fs_name;
 	struct bus1_peer *peer;
 
@@ -275,9 +281,18 @@ static void bus1_fs_peer_cleanup(struct bus1_fs_peer *fs_peer,
 	 *
 	 * During domain teardown, we avoid dropping peers from the tree, so we
 	 * can safely iterate the tree and reset it afterwards.
+	 *
+	 * If this released the peer, the peer-object is returned to the caller
+	 * via the passed in context. The caller must destroy it by calling
+	 * bus1_peer_free(). We skip this step here, to allow the caller to
+	 * drop locks before freeing the peer, and thus reducing lock
+	 * contention.
+	 * The caller really ought to initialize @ctx->stale_peer to NULL, so
+	 * it can check whether this call actually released the peer or not.
 	 */
 
 	lockdep_assert_held(&fs_domain->rwlock); /* write-locked */
+	WARN_ON(ctx->stale_peer);
 
 	peer = rcu_dereference_protected(fs_peer->peer,
 				lockdep_assert_held(&fs_domain->rwlock));
@@ -290,8 +305,17 @@ static void bus1_fs_peer_cleanup(struct bus1_fs_peer *fs_peer,
 
 		--fs_domain->n_peers;
 
+		/*
+		 * Reset @fs_peer->peer so any racing rcu-call will get NULL
+		 * before the peer is released via kfree_rcu().
+		 *
+		 * Instead of calling into bus1_peer_free(), return the stale
+		 * peer via the context to the caller. The object is fully
+		 * unlinked (except for harmless rcu queries), so the caller
+		 * can drop their locks before calling into bus1_peer_free().
+		 */
 		rcu_assign_pointer(fs_peer->peer, NULL);
-		bus1_peer_free(peer);
+		ctx->stale_peer = peer;
 	} else {
 		WARN_ON(fs_peer->names);
 	}
@@ -677,6 +701,7 @@ static int bus1_fs_peer_connect(struct bus1_fs_peer *fs_peer,
 static int bus1_fs_peer_disconnect(struct bus1_fs_peer *fs_peer,
 				   struct bus1_fs_domain *fs_domain)
 {
+	struct bus1_fs_peer_cleanup_context ctx = { .fs_domain = fs_domain, };
 	int r;
 
 	/* lock against parallel CONNECT/DISCONNECT */
@@ -696,13 +721,22 @@ static int bus1_fs_peer_disconnect(struct bus1_fs_peer *fs_peer,
 	 * gain anything by passing the waitq in.
 	 */
 	if (bus1_active_cleanup(&fs_peer->active, NULL,
-				bus1_fs_peer_cleanup_runtime, fs_domain))
+				bus1_fs_peer_cleanup_runtime, &ctx))
 		r = 0;
 	else
 		r = -ESHUTDOWN;
 
 	up_write(&fs_domain->rwlock);
 	up_write(&fs_peer->rwlock);
+
+	/*
+	 * bus1_fs_peer_cleanup() returns the now stale peer pointer via the
+	 * context (but only if it really released the peer, otherwise it is
+	 * NULL). It allows us to drop the locks before calling into
+	 * bus1_peer_free(). This is not strictly necessary, but reduces
+	 * lock-contention on @fs_domain->rwlock.
+	 */
+	bus1_peer_free(ctx.stale_peer);
 
 	return r;
 }
@@ -786,6 +820,7 @@ static void bus1_fs_domain_cleanup(struct bus1_active *active, void *userdata)
 
 static void bus1_fs_domain_teardown(struct bus1_fs_domain *fs_domain)
 {
+	struct bus1_fs_peer_cleanup_context ctx = { .fs_domain = fs_domain, };
 	struct bus1_fs_peer *fs_peer;
 	struct rb_node *n;
 
@@ -860,8 +895,20 @@ static void bus1_fs_domain_teardown(struct bus1_fs_domain *fs_domain)
 		 * our iterator, as long as we properly reset the tree
 		 * afterwards.
 		 */
+		ctx.stale_peer = NULL;
 		bus1_active_cleanup(&fs_peer->active, NULL,
-				    bus1_fs_peer_cleanup_teardown, fs_domain);
+				    bus1_fs_peer_cleanup_teardown, &ctx);
+
+		/*
+		 * bus1_fs_peer_cleanup() returns the now stale peer object via
+		 * the context (but only if it really released the object, so
+		 * it might be NULL). This allows us to drop @fs_domain->rwlock
+		 * before calling into bus1_peer_free(). It reduces lock
+		 * contention during peer disconnects. However, during domain
+		 * teardown, we couldn't care less, so we simply release it
+		 * directly.
+		 */
+		bus1_peer_free(ctx.stale_peer);
 	}
 	WARN_ON(!RB_EMPTY_ROOT(&fs_domain->map_names));
 	WARN_ON(fs_domain->n_names > 0);
