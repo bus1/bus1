@@ -12,12 +12,15 @@
 #include <linux/kernel.h>
 #include <linux/mutex.h>
 #include <linux/slab.h>
+#include <linux/uaccess.h>
 #include <uapi/linux/bus1.h>
 #include "domain.h"
 #include "filesystem.h"
 #include "peer.h"
 #include "pool.h"
 #include "queue.h"
+#include "transaction.h"
+#include "util.h"
 
 /**
  * bus1_peer_new() - create new peer
@@ -108,6 +111,81 @@ void bus1_peer_reset(struct bus1_peer *peer, u64 id)
 	mutex_unlock(&peer->lock);
 }
 
+static int bus1_peer_send(struct bus1_peer *peer,
+			  u64 peer_id,
+			  struct bus1_fs_domain *fs_domain,
+			  struct bus1_domain *domain,
+			  unsigned long arg,
+			  bool is_compat)
+{
+	struct bus1_transaction *transaction = NULL;
+	struct bus1_cmd_send *param;
+	u64 destination;
+	size_t i;
+	int r;
+
+	param = bus1_import_fixed_ioctl(arg, sizeof(*param));
+	if (IS_ERR(param))
+		return PTR_ERR(param);
+
+	if (unlikely(param->flags & ~(BUS1_SEND_FLAG_IGNORE_UNKNOWN |
+				      BUS1_SEND_FLAG_CONVEY_ERRORS))) {
+		r = -EINVAL;
+		goto exit;
+	}
+
+	/* check basic limits; avoids integer-overflows later on */
+	if (unlikely(param->n_destinations > BUS1_DESTINATION_MAX) ||
+	    unlikely(param->n_vecs > BUS1_VEC_MAX) ||
+	    unlikely(param->n_fds > BUS1_FD_MAX)) {
+		r = -EMSGSIZE;
+		goto exit;
+	}
+
+	/* 32bit pointer validity checks */
+	if (unlikely(param->ptr_destinations !=
+		     (u64)(void __user *)param->ptr_destinations) ||
+	    unlikely(param->ptr_vecs !=
+		     (u64)(void __user *)param->ptr_vecs) ||
+	    unlikely(param->ptr_fds !=
+		     (u64)(void __user *)param->ptr_fds)) {
+		r = -EFAULT;
+		goto exit;
+	}
+
+	transaction = bus1_transaction_new_from_user(fs_domain, domain,
+						     peer_id, param,
+						     is_compat);
+	if (IS_ERR(transaction)) {
+		r = PTR_ERR(transaction);
+		transaction = NULL;
+		goto exit;
+	}
+
+	for (i = 0; i < param->n_destinations; ++i) {
+		/* faults are always fatal for any transaction */
+		if (get_user(destination,
+			     (u64 __user *)param->ptr_destinations + i)) {
+			r = -EFAULT;
+			goto exit;
+		}
+
+		r = bus1_transaction_instantiate_for_id(transaction,
+							destination,
+							param->flags);
+		if (r < 0)
+			goto exit;
+	}
+
+	bus1_transaction_commit(transaction);
+	r = 0;
+
+exit:
+	bus1_transaction_free(transaction);
+	kfree(param);
+	return r;
+}
+
 /**
  * bus1_peer_ioctl() - handle peer ioctl
  * @peer:		peer to work on
@@ -122,6 +200,8 @@ void bus1_peer_reset(struct bus1_peer *peer, u64 id)
  * must make sure the peer is pinned, its current ID is provided as @peer_id,
  * its parent domain handle is pinned as @fs_domain, and dereferenced as
  * @domain.
+ *
+ * Multiple ioctls can be called in parallel just fine. No locking is needed.
  *
  * Return: 0 on success, negative error code on failure.
  */
@@ -146,7 +226,8 @@ int bus1_peer_ioctl(struct bus1_peer *peer,
 		r = 0; /* XXX */
 		break;
 	case BUS1_CMD_SEND:
-		r = 0; /* XXX */
+		r = bus1_peer_send(peer, peer_id, fs_domain, domain,
+				   arg, is_compat);
 		break;
 	case BUS1_CMD_RECV:
 		r = 0; /* XXX */
