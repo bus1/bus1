@@ -667,7 +667,7 @@ static int bus1_fs_peer_connect(struct bus1_fs_peer *fs_peer,
 	if (r >= 0 && (param->flags & BUS1_CONNECT_FLAG_QUERY)) {
 		if (put_user(param->unique_id, &uparam->unique_id) ||
 		    put_user(param->pool_size, &uparam->pool_size))
-			r = -EFAULT;
+			r = -EFAULT; /* Don't care.. keep what we did so far */
 	}
 
 	kfree(param);
