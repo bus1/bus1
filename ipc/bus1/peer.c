@@ -9,6 +9,8 @@
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 #include <linux/err.h>
+#include <linux/file.h>
+#include <linux/fs.h>
 #include <linux/kernel.h>
 #include <linux/mutex.h>
 #include <linux/slab.h>
@@ -176,6 +178,183 @@ exit:
 	return r;
 }
 
+static int bus1_peer_recv(struct bus1_peer *peer,
+			  u64 peer_id,
+			  unsigned long arg)
+{
+	struct bus1_cmd_recv __user *uparam = (void __user *)arg;
+	struct bus1_queue_entry *entry;
+	struct bus1_cmd_recv param;
+	size_t wanted_fds, n_fds = 0;
+	int r, *t, *fds = NULL;
+	struct kvec vec;
+
+	r = bus1_import_fixed_ioctl(&param, arg, sizeof(param));
+	if (r < 0)
+		return r;
+
+	if (unlikely(param.flags & ~(BUS1_RECV_FLAG_PEEK)))
+		return -EINVAL;
+
+	if (unlikely(param.msg_offset != 0) ||
+	    unlikely(param.msg_size != 0) ||
+	    unlikely(param.msg_fds != 0))
+		return -EINVAL;
+
+	/*
+	 * Peek at the first message to fetch the FD count. We need to
+	 * pre-allocate FDs, to avoid dropping messages due to FD exhaustion.
+	 * If no entry is queued, we can bail out early.
+	 * Note that this is just a fast-path optimization. Anyone might race
+	 * us for message retrieval, so we have to check it again below.
+	 */
+	rcu_read_lock();
+	entry = bus1_queue_peek_rcu(&peer->queue);
+	if (entry)
+		wanted_fds = entry->n_files;
+	rcu_read_unlock();
+	if (!entry)
+		return -EAGAIN;
+
+	/*
+	 * Deal with PEEK first. This is simple. Just look at the first queued
+	 * message, publish the slice and return the information to user-space.
+	 * Keep the entry queued, so it can be peeked multiple times, and
+	 * received later on.
+	 * We do not install any FDs for PEEK, but provide the number in
+	 * msg_fds, anyway.
+	 */
+	if (param.flags & BUS1_RECV_FLAG_PEEK) {
+		mutex_lock(&peer->lock);
+		entry = bus1_queue_peek(&peer->queue);
+		if (entry) {
+			bus1_pool_publish(&peer->pool, entry->slice,
+					  &param.msg_offset, &param.msg_size);
+			param.msg_fds = entry->n_files;
+		}
+		mutex_unlock(&peer->lock);
+
+		if (!entry)
+			return -EAGAIN;
+
+		r = 0;
+		goto exit;
+	}
+
+	/*
+	 * So there is a message queued with 'wanted_fds' attached FDs.
+	 * Allocate a temporary buffer to store them, then dequeue the message.
+	 * In case someone raced us and the message changed, re-allocate the
+	 * temporary buffer and retry.
+	 */
+
+	do {
+		if (wanted_fds > n_fds) {
+			t = krealloc(fds, wanted_fds * sizeof(*fds),
+				     GFP_TEMPORARY);
+			if (!t) {
+				r = -ENOMEM;
+				goto exit;
+			}
+
+			fds = t;
+			for ( ; n_fds < wanted_fds; ++n_fds) {
+				r = get_unused_fd_flags(O_CLOEXEC);
+				if (r < 0)
+					goto exit;
+
+				fds[n_fds] = r;
+			}
+		}
+
+		mutex_lock(&peer->lock);
+		entry = bus1_queue_peek(&peer->queue);
+		if (!entry) {
+			/* nothing to do, caught below */
+		} else if (entry->n_files > n_fds) {
+			/* re-allocate FD array and retry */
+			wanted_fds = entry->n_files;
+		} else {
+			bus1_queue_unlink(&peer->queue, entry);
+			bus1_pool_publish(&peer->pool, entry->slice,
+					  &param.msg_offset, &param.msg_size);
+			param.msg_fds = entry->n_files;
+
+			/*
+			 * Fastpath: If no FD is transmitted, we can avoid the
+			 *           second lock below. Directly release the
+			 *           slice.
+			 */
+			if (entry->n_files == 0)
+				bus1_pool_release_kernel(&peer->pool,
+							 entry->slice);
+		}
+		mutex_unlock(&peer->lock);
+	} while (wanted_fds > n_fds);
+
+	if (!entry) {
+		r = -EAGAIN;
+		goto exit;
+	}
+
+	while (n_fds > entry->n_files)
+		put_unused_fd(fds[--n_fds]);
+
+	if (n_fds > 0) {
+		/*
+		 * We dequeued the message, we already fetched enough FDs, all
+		 * we have to do is copy the FD numbers into the slice and link
+		 * the FDs.
+		 * The only reason this can fail, is if writing the pool fails,
+		 * which itself can only happen during OOM. In that case, we
+		 * don't support reverting the operation, but you rather lose
+		 * the message. We cannot put it back on the queue (would break
+		 * ordering), and we don't want to perform the copy-operation
+		 * while holding the queue-lock.
+		 * We treat this OOM as if the actual message transaction OOMed
+		 * and simply drop the message.
+		 */
+
+		vec.iov_base = fds;
+		vec.iov_len = n_fds * sizeof(*fds);
+
+		r = bus1_pool_write_kvec(&peer->pool, entry->slice,
+					 entry->slice->size - vec.iov_len,
+					 &vec, 1, vec.iov_len);
+
+		mutex_lock(&peer->lock);
+		bus1_pool_release_kernel(&peer->pool, entry->slice);
+		mutex_unlock(&peer->lock);
+
+		/* on success, install FDs; on error, see fput() in `exit:' */
+		if (r >= 0) {
+			for ( ; n_fds > 0; --n_fds)
+				fd_install(fds[n_fds - 1],
+					   get_file(entry->files[n_fds - 1]));
+		} else {
+			/* XXX: convey error, just like in transactions */
+		}
+	} else {
+		/* slice is already released, nothing to do */
+		r = 0;
+	}
+
+	entry->slice = NULL;
+	bus1_queue_entry_free(entry);
+
+exit:
+	if (r >= 0) {
+		if (put_user(param.msg_offset, &uparam->msg_offset) ||
+		    put_user(param.msg_size, &uparam->msg_size) ||
+		    put_user(param.msg_fds, &uparam->msg_fds))
+			r = -EFAULT; /* Don't care.. keep what we did so far */
+	}
+	while (n_fds > 0)
+		put_unused_fd(fds[--n_fds]);
+	kfree(fds);
+	return r;
+}
+
 /**
  * bus1_peer_ioctl() - handle peer ioctl
  * @peer:		peer to work on
@@ -220,7 +399,7 @@ int bus1_peer_ioctl(struct bus1_peer *peer,
 				   arg, is_compat);
 		break;
 	case BUS1_CMD_RECV:
-		r = 0; /* XXX */
+		r = bus1_peer_recv(peer, peer_id, arg);
 		break;
 	default:
 		r = -ENOTTY;
