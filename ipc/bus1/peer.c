@@ -111,20 +111,27 @@ void bus1_peer_reset(struct bus1_peer *peer, u64 id)
 /**
  * bus1_peer_ioctl() - handle peer ioctl
  * @peer:		peer to work on
- * @fs_domain:		parent domain
+ * @peer_id:		current ID of this peer
+ * @fs_domain:		parent domain handle
+ * @domain:		parent domain
  * @cmd:		ioctl command
  * @arg:		ioctl argument
+ * @is_compat:		compat ioctl
  *
  * This handles the given ioctl (cmd+arg) on the passed peer @peer. The caller
- * must provide the parent domain of @peer as @fs_domain. It may be used for
- * other peer lookups.
+ * must make sure the peer is pinned, its current ID is provided as @peer_id,
+ * its parent domain handle is pinned as @fs_domain, and dereferenced as
+ * @domain.
  *
  * Return: 0 on success, negative error code on failure.
  */
 int bus1_peer_ioctl(struct bus1_peer *peer,
+		    u64 peer_id,
 		    struct bus1_fs_domain *fs_domain,
+		    struct bus1_domain *domain,
 		    unsigned int cmd,
-		    unsigned long arg)
+		    unsigned long arg,
+		    bool is_compat)
 {
 	int r;
 

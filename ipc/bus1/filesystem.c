@@ -1033,7 +1033,8 @@ static int bus1_fs_bus_fop_release(struct inode *inode, struct file *file)
 
 static long bus1_fs_bus_fop_ioctl(struct file *file,
 				  unsigned int cmd,
-				  unsigned long arg)
+				  unsigned long arg,
+				  bool is_compat)
 {
 	struct bus1_fs_domain *fs_domain = file_inode(file)->i_sb->s_fs_info;
 	struct bus1_fs_peer *fs_peer = file->private_data;
@@ -1073,7 +1074,9 @@ static long bus1_fs_bus_fop_ioctl(struct file *file,
 			r = -ESHUTDOWN;
 		} else {
 			r = bus1_peer_ioctl(bus1_fs_peer_dereference(fs_peer),
-					    fs_domain, cmd, arg);
+					    fs_peer->id,
+					    fs_domain, fs_domain->domain,
+					    cmd, arg, is_compat);
 			bus1_fs_peer_release(fs_peer);
 		}
 		up_read(&fs_peer->rwlock);
@@ -1161,16 +1164,32 @@ static int bus1_fs_bus_fop_mmap(struct file *file, struct vm_area_struct *vma)
 	return r;
 }
 
+static long bus1_fs_bus_fop_ioctl_native(struct file *file,
+					 unsigned int cmd,
+					 unsigned long arg)
+{
+	return bus1_fs_bus_fop_ioctl(file, cmd, arg, false);
+}
+
+#ifdef CONFIG_COMPAT
+static long bus1_fs_bus_fop_ioctl_compat(struct file *file,
+					 unsigned int cmd,
+					 unsigned long arg)
+{
+	return bus1_fs_bus_fop_ioctl(file, cmd, arg, true);
+}
+#endif
+
 const struct file_operations bus1_fs_bus_fops = {
 	.owner =		THIS_MODULE,
 	.open =			bus1_fs_bus_fop_open,
 	.release =		bus1_fs_bus_fop_release,
 	.poll =			bus1_fs_bus_fop_poll,
 	.llseek =		noop_llseek,
-	.unlocked_ioctl =	bus1_fs_bus_fop_ioctl,
 	.mmap =			bus1_fs_bus_fop_mmap,
+	.unlocked_ioctl =	bus1_fs_bus_fop_ioctl_native,
 #ifdef CONFIG_COMPAT
-	.compat_ioctl =		bus1_fs_bus_fop_ioctl,
+	.compat_ioctl =		bus1_fs_bus_fop_ioctl_compat,
 #endif
 };
 

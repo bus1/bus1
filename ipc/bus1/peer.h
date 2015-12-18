@@ -52,8 +52,11 @@ struct bus1_peer *bus1_peer_free(struct bus1_peer *peer);
 void bus1_peer_reset(struct bus1_peer *peer, u64 id);
 
 int bus1_peer_ioctl(struct bus1_peer *peer,
+		    u64 peer_id,
 		    struct bus1_fs_domain *fs_domain,
+		    struct bus1_domain *domain,
 		    unsigned int cmd,
-		    unsigned long arg);
+		    unsigned long arg,
+		    bool is_compat);
 
 #endif /* __BUS1_PEER_H */
