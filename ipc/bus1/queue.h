@@ -57,8 +57,8 @@
  *   * The initial sequence number of a message is always an odd number, as it
  *     equals the even global sequence counter plus 1.
  *
- *   * The final sequence number of a message is always an even number, as it
- *     equals the even global sequence counter.
+ *   * The final sequence number of a message is always an even number greater
+ *     than zero, as it equals the even global sequence counter.
  *
  *   * The final sequence number of a message identifies it uniquely. Only odd
  *     sequence numbers can clash (since they do not imply an atomic increment)
