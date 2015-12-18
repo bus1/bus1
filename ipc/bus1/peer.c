@@ -21,16 +21,21 @@
 
 /**
  * bus1_peer_new() - create new peer
+ * @param:	parameter for peer
  *
- * XXX:
+ * Allocate a new peer object with the given parameters. The peer is not linked
+ * into any domain, nor is any locking required for this call.
  *
  * Return: Pointer to new peer, or ERR_PTR on failure.
  */
-struct bus1_peer *bus1_peer_new(struct bus1_domain *domain,
-				struct bus1_cmd_connect *param)
+struct bus1_peer *bus1_peer_new(struct bus1_cmd_connect *param)
 {
 	struct bus1_peer *peer;
 	int r;
+
+	if (unlikely(param->pool_size == 0 ||
+		     !IS_ALIGNED(param->pool_size, PAGE_SIZE)))
+		return ERR_PTR(-EINVAL);
 
 	peer = kmalloc(sizeof(*peer), GFP_KERNEL);
 	if (!peer)
@@ -59,6 +64,9 @@ error:
  * via bus1_peer_new(). The caller must make sure no-one else is accessing the
  * peer object at the same time.
  *
+ * The peer-object is released in an rcu-delayed manner. That is, the object
+ * will stay accessible for at least one rcu grace period.
+ *
  * If NULL is passed, this is a no-op.
  *
  * Return: NULL is returned.
@@ -79,6 +87,25 @@ struct bus1_peer *bus1_peer_free(struct bus1_peer *peer)
 	kfree_rcu(peer, rcu);
 
 	return NULL;
+}
+
+/**
+ * bus1_peer_reset() - reset peer
+ * @peer:	peer to reset
+ * @id:		ID of peer
+ *
+ * Reset a peer object. The caller must provide the new peer ID as @id. This
+ * function will flush all data on the peer, which is tagged with an ID that
+ * does not match the new ID @id.
+ *
+ * No locking is required by the caller. However, the caller obviously must
+ * make sure they own the object.
+ */
+void bus1_peer_reset(struct bus1_peer *peer, u64 id)
+{
+	mutex_lock(&peer->lock);
+	/* XXX: flush outdated queue entries */
+	mutex_unlock(&peer->lock);
 }
 
 /**

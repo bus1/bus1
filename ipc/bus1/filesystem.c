@@ -469,7 +469,7 @@ static int bus1_fs_peer_connect_new(struct bus1_fs_peer *fs_peer,
 		return -EISCONN;
 
 	/* allocate new peer object */
-	peer = bus1_peer_new(fs_domain->domain, param);
+	peer = bus1_peer_new(param);
 	if (IS_ERR(peer))
 		return PTR_ERR(peer);
 
@@ -591,7 +591,8 @@ static int bus1_fs_peer_connect_reset(struct bus1_fs_peer *fs_peer,
 
 	up_write(&fs_domain->rwlock);
 
-	/* XXX: reset actual peer, queues, etc. */
+	/* safe to call outside of domain-lock; we still hold the peer-lock */
+	bus1_peer_reset(peer, fs_peer->id);
 
 	return 0;
 }
