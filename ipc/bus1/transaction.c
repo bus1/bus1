@@ -275,8 +275,7 @@ bus1_transaction_new_from_user(struct bus1_fs_domain *fs_domain,
 
 	transaction->fs_domain = fs_domain;
 	transaction->domain = domain;
-	transaction->seq = atomic64_read(&domain->seq_ids) + 1;
-	WARN_ON(!(transaction->seq & 1));
+	transaction->seq = 0;
 
 	r = bus1_transaction_import_vecs(transaction, param, is_compat);
 	if (r < 0)
@@ -326,7 +325,6 @@ int bus1_transaction_instantiate_for_id(struct bus1_transaction *transaction,
 	struct bus1_pool_slice *slice = NULL;
 	struct bus1_fs_peer *fs_peer;
 	struct bus1_peer *peer;
-	bool wake;
 	size_t i;
 	int r;
 
@@ -359,11 +357,6 @@ int bus1_transaction_instantiate_for_id(struct bus1_transaction *transaction,
 				transaction->length_vecs +
 				transaction->n_files * sizeof(int),
 				true);
-	if (!IS_ERR(slice)) {
-		entry->seq = transaction->seq;
-		wake = bus1_queue_link(&peer->queue, entry);
-		WARN_ON(wake); /* in-flight messages cannot cause a wake-up */
-	}
 	mutex_unlock(&peer->lock);
 
 	/* recover if we couldn't allocate a pool slice */
@@ -403,7 +396,6 @@ int bus1_transaction_instantiate_for_id(struct bus1_transaction *transaction,
 error:
 	if (slice) {
 		mutex_lock(&peer->lock);
-		bus1_queue_unlink(&peer->queue, entry);
 		bus1_pool_release_kernel(&peer->pool, slice);
 		mutex_unlock(&peer->lock);
 	}
@@ -414,6 +406,45 @@ error:
 	}
 	bus1_fs_peer_release(fs_peer);
 	return r;
+}
+
+/**
+ * bus1_transaction_stage() - stage a transaction
+ * @transaction:	transaction to commit
+ *
+ * XXX:
+ */
+void bus1_transaction_stage(struct bus1_transaction *transaction)
+{
+	struct bus1_queue_entry *entry;
+	struct bus1_fs_peer *fs_peer;
+	struct bus1_peer *peer;
+	bool wake;
+
+	/* cannot stage an initialized transaction */
+	if (WARN_ON(transaction->seq != 0))
+		return;
+
+	/* allocate initial transaction ID, which must be odd */
+	transaction->seq = atomic64_read(&transaction->domain->seq_ids) + 1;
+	WARN_ON(!(transaction->seq & 1));
+
+	entry = transaction->entries;
+
+	while ((entry)) {
+		fs_peer = entry->transaction.fs_peer;
+		peer = bus1_fs_peer_dereference(fs_peer);
+
+		entry->seq = transaction->seq;
+
+		mutex_lock(&peer->lock);
+		wake = bus1_queue_link(&peer->queue, entry);
+		mutex_unlock(&peer->lock);
+
+		WARN_ON(wake); /* in-flight messages cannot cause a wake-up */
+
+		entry = entry->transaction.next;
+	}
 }
 
 /**
