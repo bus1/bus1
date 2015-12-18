@@ -166,7 +166,7 @@ bool bus1_queue_relink(struct bus1_queue *queue,
 void bus1_queue_flush(struct bus1_queue *queue, struct bus1_pool *pool);
 struct bus1_queue_entry *bus1_queue_peek(struct bus1_queue *queue);
 
-struct bus1_queue_entry *bus1_queue_entry_new(u64 seq, size_t n_files);
+struct bus1_queue_entry *bus1_queue_entry_new(size_t n_files);
 struct bus1_queue_entry *bus1_queue_entry_free(struct bus1_queue_entry *entry);
 int bus1_queue_entry_install(struct bus1_queue_entry *entry,
 			     struct bus1_pool *pool);

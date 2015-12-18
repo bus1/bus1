@@ -342,7 +342,7 @@ int bus1_transaction_instantiate_for_id(struct bus1_transaction *transaction,
 	peer = bus1_fs_peer_dereference(fs_peer);
 
 	/* allocate new, unlinked queue entry */
-	entry = bus1_queue_entry_new(transaction->seq, transaction->n_files);
+	entry = bus1_queue_entry_new(transaction->n_files);
 	if (IS_ERR(entry)) {
 		r = PTR_ERR(entry);
 		entry = NULL;
@@ -360,6 +360,7 @@ int bus1_transaction_instantiate_for_id(struct bus1_transaction *transaction,
 				transaction->n_files * sizeof(int),
 				true);
 	if (!IS_ERR(slice)) {
+		entry->seq = transaction->seq;
 		wake = bus1_queue_link(&peer->queue, entry);
 		WARN_ON(wake); /* in-flight messages cannot cause a wake-up */
 	}

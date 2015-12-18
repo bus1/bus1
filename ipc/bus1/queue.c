@@ -68,7 +68,7 @@ void bus1_queue_destroy(struct bus1_queue *queue)
  * @entry:	entry to link
  *
  * This links @entry into the message queue @queue. The caller must guarantee
- * that the entry is unlinked.
+ * that the entry is unlinked and its seq initialized.
  *
  * The caller must hold the write-side peer-lock of the parent peer.
  *
@@ -82,6 +82,9 @@ bool bus1_queue_link(struct bus1_queue *queue,
 	bool is_leftmost = true;
 
 	if (WARN_ON(!RB_EMPTY_NODE(&entry->rb)))
+		return false;
+
+	if (WARN_ON(entry->seq == 0))
 		return false;
 
 	bus1_queue_assert_held(queue);
@@ -271,19 +274,16 @@ struct bus1_queue_entry *bus1_queue_peek(struct bus1_queue *queue)
  *
  * Return: Pointer to slice, ERR_PTR on failure.
  */
-struct bus1_queue_entry *bus1_queue_entry_new(u64 seq, size_t n_files)
+struct bus1_queue_entry *bus1_queue_entry_new(size_t n_files)
 {
 	struct bus1_queue_entry *entry;
-
-	if (WARN_ON(seq == 0))
-		return ERR_PTR(-EINVAL);
 
 	entry = kmalloc(sizeof(*entry) + n_files * sizeof(struct file *),
 			GFP_KERNEL);
 	if (!entry)
 		return ERR_PTR(-ENOMEM);
 
-	entry->seq = seq;
+	entry->seq = 0;
 	RB_CLEAR_NODE(&entry->rb);
 	entry->slice = NULL;
 	entry->n_files = n_files;
