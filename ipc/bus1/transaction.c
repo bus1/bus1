@@ -275,7 +275,7 @@ bus1_transaction_new_from_user(struct bus1_fs_domain *fs_domain,
 
 	transaction->fs_domain = fs_domain;
 	transaction->domain = domain;
-	transaction->seq = atomic64_read(&domain->seq_ids);
+	transaction->seq = atomic64_read(&domain->seq_ids) + 1;
 	WARN_ON(!(transaction->seq & 1));
 
 	r = bus1_transaction_import_vecs(transaction, param, is_compat);
