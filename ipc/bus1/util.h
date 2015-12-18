@@ -22,7 +22,7 @@
 #include <linux/kernel.h>
 #include <linux/uio.h>
 
-void *bus1_import_fixed_ioctl(unsigned long arg, size_t size);
+int bus1_import_fixed_ioctl(void *dst, unsigned long src, size_t size);
 void *bus1_import_dynamic_ioctl(unsigned long arg, size_t min_size);
 int bus1_import_vecs(struct iovec *out_vecs,
 		     size_t *out_length,

@@ -23,20 +23,22 @@
 
 /**
  * bus1_import_fixed_ioctl() - copy fixed-size ioctl payload from user
- * @arg:	user-provided ioctl argument
+ * @dst:	destination to copy data to
+ * @src:	user address to copy from
  * @size:	exact size of the ioctl payload
  *
- * Copy ioctl payload from user-space into kernel-space. Backing memory is
- * dynamically allocated, alignment restrictions are checked.
+ * Copy ioctl payload from user-space into kernel-space. Backing memory must be
+ * pre-allocated by the caller, alignment restrictions are checked.
  *
- * Return: Pointer to dynamically allocated payload, ERR_PTR on failure.
+ * Return: 0 on success, negative error code on failure.
  */
-void *bus1_import_fixed_ioctl(unsigned long arg, size_t size)
+int bus1_import_fixed_ioctl(void *dst, unsigned long src, size_t size)
 {
-	if (arg & 0x7)
-		return ERR_PTR(-EFAULT);
-
-	return memdup_user((void __user *)arg, size);
+	if (src & 0x7)
+		return -EFAULT;
+	if (copy_from_user(dst, (void __user *)src, size))
+		return -EFAULT;
+	return 0;
 }
 
 /**
@@ -57,6 +59,7 @@ void *bus1_import_dynamic_ioctl(unsigned long arg, size_t min_size)
 {
 	void *param;
 	u64 size;
+	int r;
 
 	if (WARN_ON(min_size < sizeof(u64)))
 		return ERR_PTR(-EFAULT);
@@ -65,9 +68,15 @@ void *bus1_import_dynamic_ioctl(unsigned long arg, size_t min_size)
 	if (size < min_size || size > BUS1_IOCTL_MAX_SIZE)
 		return ERR_PTR(-EMSGSIZE);
 
-	param = bus1_import_fixed_ioctl(arg, size);
-	if (IS_ERR(param))
-		return ERR_CAST(param);
+	param = kmalloc(size, GFP_TEMPORARY);
+	if (!param)
+		return ERR_PTR(-ENOMEM);
+
+	r = bus1_import_fixed_ioctl(param, arg, size);
+	if (r < 0) {
+		kfree(param);
+		return ERR_PTR(r);
+	}
 
 	/* size might have changed, fix it up if it did */
 	*(u64 *)param = size;
