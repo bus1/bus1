@@ -427,7 +427,7 @@ void bus1_transaction_commit(struct bus1_transaction *transaction)
 	struct bus1_fs_peer *fs_peer;
 	struct bus1_peer *peer;
 	bool wake;
-	u64 seq;
+	u64 seq = 0;
 
 	/* nothing to do for empty destination sets */
 	if (!transaction->entries)
@@ -452,7 +452,11 @@ void bus1_transaction_commit(struct bus1_transaction *transaction)
 	 * which might be a heavy operation, depending on the architecture.
 	 */
 	if (second) {
-		seq = atomic64_read(&transaction->domain->seq_ids) + 1;
+		/* pick a temporary sequence number greater than all messages
+		 * (including unicast ones) delivered before the next
+		 * multicast message and smaller than the next multicast
+		 * message */
+		seq = atomic64_read(&transaction->domain->seq_ids) + 3;
 		WARN_ON(!(seq & 1)); /* must be odd */
 
 		for (e = second; e; e = e->transaction.next) {
@@ -468,9 +472,8 @@ void bus1_transaction_commit(struct bus1_transaction *transaction)
 
 	/*
 	 * Now that all entries (but the first) are linked as in-flight, we
-	 * allocate the final, unique sequence number for our transaction. Then
-	 * we stamp all entries again and commit them into their respective
-	 * queues.
+	 * allocate the final sequence number for our transaction. Then  we
+	 * stamp all entries again and commit them into their respective queues.
 	 * Once we drop the peer-lock, each entry is owned by the peer and we
 	 * must not dereference it, anymore. It might get dequeued at any time.
 	 */
@@ -484,12 +487,20 @@ void bus1_transaction_commit(struct bus1_transaction *transaction)
 
 		mutex_lock(&peer->lock);
 		if (second == transaction->entries) { /* -> @e is first entry */
-			seq = atomic64_add_return(2, &transaction->domain->seq_ids);
+			if (second)
+				/* multicast messages get a unique final sequence number */
+				seq = atomic64_add_return(4, &transaction->domain->seq_ids);
+			else
+				/* unicast messages get a shared sequence number, strictly
+				 * between the previous and the next multicast message */
+				seq = atomic64_read(&transaction->domain->seq_ids) + 2;
 			WARN_ON(seq & 1); /* must be even */
 
 			wake = bus1_queue_link(&peer->queue, e, seq);
-		} else
+		} else {
+			WARN_ON(seq != 0); /* must be assigned */
 			wake = bus1_queue_relink(&peer->queue, e, seq);
+		}
 		mutex_unlock(&peer->lock);
 
 		if (wake)
