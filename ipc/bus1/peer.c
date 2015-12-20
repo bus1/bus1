@@ -185,7 +185,7 @@ static int bus1_peer_recv(struct bus1_peer *peer,
 	struct bus1_cmd_recv __user *uparam = (void __user *)arg;
 	struct bus1_queue_entry *entry;
 	struct bus1_cmd_recv param;
-	size_t wanted_fds, n_fds = 0;
+	size_t wanted_fds = 0, n_fds = 0;
 	int r, *t, *fds = NULL;
 	struct kvec vec;
 
