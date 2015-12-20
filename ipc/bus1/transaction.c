@@ -474,9 +474,6 @@ void bus1_transaction_commit(struct bus1_transaction *transaction)
 	 * Once we drop the peer-lock, each entry is owned by the peer and we
 	 * must not dereference it, anymore. It might get dequeued at any time.
 	 */
-	seq = atomic64_add_return(2, &transaction->domain->seq_ids);
-	WARN_ON(seq & 1); /* must be even */
-
 	while ((e = transaction->entries)) {
 		transaction->entries = e->transaction.next;
 		fs_peer = e->transaction.fs_peer;
@@ -486,9 +483,12 @@ void bus1_transaction_commit(struct bus1_transaction *transaction)
 		e->transaction.fs_peer = NULL;
 
 		mutex_lock(&peer->lock);
-		if (second == transaction->entries) /* -> @e is first entry */
+		if (second == transaction->entries) { /* -> @e is first entry */
+			seq = atomic64_add_return(2, &transaction->domain->seq_ids);
+			WARN_ON(seq & 1); /* must be even */
+
 			wake = bus1_queue_link(&peer->queue, e, seq);
-		else
+		} else
 			wake = bus1_queue_relink(&peer->queue, e, seq);
 		mutex_unlock(&peer->lock);
 
