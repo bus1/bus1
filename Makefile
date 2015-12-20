@@ -81,8 +81,8 @@ tests:
 # system. See the bus1/build.git repository for details. You must have all of
 # the core bus1 repositories checked out in a local bus1/ directory.
 #
-b: ../build/kernel-headers
-	$(MAKE) -C ../build/kernel-headers M=$(PWD) \
+b: ../build/linux
+	$(MAKE) -C ../build/linux M=$(PWD) \
 		EXTRA_CFLAGS="$(EXTRA_CFLAGS)" BUS1_EXT=1 CONFIG_BUS1=m
 .PHONY: b
 
