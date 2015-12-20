@@ -16,6 +16,7 @@
 # Both the actual module and the samples are added. The Documentation cannot be
 # added here, as the kernel doesn't support that for out-of-tree modules.
 #
+SHELL=/bin/bash
 
 obj-$(CONFIG_BUS1) += ipc/bus1/
 obj-$(CONFIG_SAMPLES) += samples/bus1/
@@ -83,6 +84,7 @@ tests:
 b: ../build/kernel-headers
 	$(MAKE) -C ../build/kernel-headers M=$(PWD) \
 		EXTRA_CFLAGS="$(EXTRA_CFLAGS)" BUS1_EXT=1 CONFIG_BUS1=m
+.PHONY: b
 
 #
 # Print Differences
