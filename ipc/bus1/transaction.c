@@ -161,7 +161,7 @@ bus1_transaction_import_vecs(struct bus1_transaction *transaction,
 
 	r = bus1_import_vecs(transaction->vecs,
 			     &transaction->length_vecs,
-			     (void __user *)param->ptr_vecs,
+			     (void __user *)(uintptr_t)param->ptr_vecs,
 			     param->n_vecs,
 			     is_compat);
 	if (r < 0)
@@ -182,7 +182,7 @@ bus1_transaction_import_files(struct bus1_transaction *transaction,
 		return -EINVAL;
 
 	for (i = 0; i < transaction->n_files; ++i) {
-		f = bus1_import_fd((int __user *)param->ptr_fds + i);
+		f = bus1_import_fd((int __user *)(uintptr_t)param->ptr_fds + i);
 		if (IS_ERR(f))
 			return PTR_ERR(f);
 
