@@ -294,8 +294,7 @@ static void bus1_fs_peer_cleanup(struct bus1_fs_peer *fs_peer,
 	lockdep_assert_held(&fs_domain->rwlock); /* write-locked */
 	WARN_ON(ctx->stale_peer);
 
-	peer = rcu_dereference_protected(fs_peer->peer,
-				lockdep_assert_held(&fs_domain->rwlock));
+	peer = rcu_dereference_protected(fs_peer->peer, &fs_domain->rwlock);
 	if (peer) {
 		while ((fs_name = bus1_fs_name_pop(fs_domain, fs_peer)))
 			bus1_fs_name_free(fs_name);
@@ -428,8 +427,9 @@ struct bus1_fs_peer *bus1_fs_peer_release(struct bus1_fs_peer *fs_peer)
  */
 struct bus1_peer *bus1_fs_peer_dereference(struct bus1_fs_peer *fs_peer)
 {
-	return rcu_dereference_protected(fs_peer->peer,
-					 lockdep_assert_held(&fs_peer->active));
+	lockdep_assert_held(&fs_peer->active);
+
+	return rcu_dereference_protected(fs_peer->peer, &fs_peer->active);
 }
 
 static int bus1_fs_peer_connect_new(struct bus1_fs_peer *fs_peer,
@@ -464,8 +464,8 @@ static int bus1_fs_peer_connect_new(struct bus1_fs_peer *fs_peer,
 	 * NULL. We still verify it, just to be safe.
 	 */
 	if (WARN_ON(rcu_dereference_protected(fs_peer->peer,
-				lockdep_assert_held(&fs_domain->active) &&
-				lockdep_assert_held(&fs_peer->rwlock))))
+					      &fs_domain->active &&
+					      &fs_peer->rwlock)))
 		return -EISCONN;
 
 	/* allocate new peer object */
@@ -565,8 +565,8 @@ static int bus1_fs_peer_connect_reset(struct bus1_fs_peer *fs_peer,
 	 * Be safe and verify it anyway.
 	 */
 	peer = rcu_dereference_protected(fs_peer->peer,
-				lockdep_assert_held(&fs_domain->active) &&
-				lockdep_assert_held(&fs_peer->rwlock));
+					 &fs_domain->active &&
+					 &fs_peer->rwlock);
 	if (WARN_ON(!peer))
 		return -ESHUTDOWN;
 
@@ -617,8 +617,8 @@ static int bus1_fs_peer_connect_query(struct bus1_fs_peer *fs_peer,
 	 * wait for us to finish. However, to be safe, check for NULL anyway.
 	 */
 	peer = rcu_dereference_protected(fs_peer->peer,
-				lockdep_assert_held(&fs_domain->active) &&
-				lockdep_assert_held(&fs_peer->rwlock));
+					 &fs_domain->active &&
+					 &fs_peer->rwlock);
 	if (WARN_ON(!peer))
 		return -ESHUTDOWN;
 

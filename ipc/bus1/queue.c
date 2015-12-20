@@ -144,9 +144,7 @@ bool bus1_queue_unlink(struct bus1_queue *queue,
 		return false;
 
 	bus1_queue_assert_held(queue);
-
-	node = rcu_dereference_protected(queue->front,
-					 bus1_queue_assert_held(queue));
+	node = rcu_dereference_protected(queue->front, queue);
 	if (node == &entry->rb) {
 		node = rb_next(node);
 		if (bus1_queue_entry(node)->seq & 1)
@@ -258,9 +256,9 @@ void bus1_queue_flush(struct bus1_queue *queue, struct bus1_pool *pool)
  */
 struct bus1_queue_entry *bus1_queue_peek(struct bus1_queue *queue)
 {
-	return bus1_queue_entry(
-		rcu_dereference_protected(queue->front,
-					  bus1_queue_assert_held(queue)));
+	bus1_queue_assert_held(queue);
+
+	return bus1_queue_entry(rcu_dereference_protected(queue->front, queue));
 }
 
 /**
