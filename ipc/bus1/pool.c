@@ -33,7 +33,7 @@ static struct bus1_pool_slice *bus1_pool_slice_new(size_t offset, size_t size)
 	if (offset > U32_MAX || size == 0 || size > BUS1_POOL_SLICE_SIZE_MAX)
 		return ERR_PTR(-EMSGSIZE);
 
-	slice = kmalloc(sizeof(*slice), GFP_KERNEL);
+	slice = kzalloc(sizeof(*slice), GFP_KERNEL);
 	if (!slice)
 		return ERR_PTR(-ENOMEM);
 
