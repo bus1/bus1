@@ -14,11 +14,42 @@
 int test_peer(const char *mount_path)
 {
 	struct b1_client *client = NULL;
+	const char *name1 = "foo", *name2 = "bar";
+	const char *names[] = { name1, name2 };
+	uint64_t id1, id2;
 	int r;
 
 	r = b1_client_new_from_mount(&client, mount_path);
 	assert(r >= 0);
 	assert(client);
+
+	id1 = b1_client_connect(client, NULL, 0);
+	assert(id1 >= 0);
+
+	r = b1_client_disconnect(client);
+	assert(r >= 0);
+
+	client = b1_client_free(client);
+	assert(!client);
+
+	r = b1_client_new_from_mount(&client, mount_path);
+	assert(r >= 0);
+	assert(client);
+
+	id2 = b1_client_connect(client, names, 2);
+	assert(id2 >= 0);
+	assert(id1 != id2);
+
+	r = b1_client_resolve(client, &id1, name1);
+	assert(r >= 0);
+	assert(id1 == id2);
+
+	r = b1_client_resolve(client, &id1, name2);
+	assert(r >= 0);
+	assert(id1 == id2);
+
+	r = b1_client_disconnect(client);
+	assert(r >= 0);
 
 	client = b1_client_free(client);
 	assert(!client);

@@ -94,6 +94,46 @@ struct b1_client *b1_client_free(struct b1_client *client)
 	return NULL;
 }
 
+int b1_client_connect(struct b1_client *client, const char **names, size_t n_names)
+{
+	struct bus1_cmd_connect *cmd;
+	char *name;
+	size_t nameslen;
+	unsigned i;
+	int r;
+
+	for (i = 0, nameslen = 0; i < n_names; i ++)
+		nameslen += strlen(names[i]) + 1;
+
+	cmd = alloca(sizeof(*cmd) + nameslen);
+	cmd->size = sizeof(*cmd) + nameslen;
+	cmd->flags = BUS1_CONNECT_FLAG_PEER | BUS1_CONNECT_FLAG_QUERY;
+	cmd->pool_size = 1024 * 8;
+	cmd->unique_id = 0;
+
+	for (i = 0, name = cmd->names; i < n_names; name += strlen(names[i]) + 1, i ++) {
+		memcpy(name, names[i], strlen(names[i]));
+		name[strlen(names[i])] = 0;
+	}
+
+	r = ioctl(client->fd, BUS1_CMD_CONNECT, cmd);
+	if (r < 0)
+		return -errno;
+
+	return cmd->unique_id;
+}
+
+int b1_client_disconnect(struct b1_client *client)
+{
+	int r;
+
+	r = ioctl(client->fd, BUS1_CMD_DISCONNECT, NULL);
+	if (r < 0)
+		return -errno;
+
+	return 0;
+}
+
 int b1_client_resolve(struct b1_client *client, uint64_t *out_id, const char *name)
 {
 	struct bus1_cmd_resolve *cmd;
