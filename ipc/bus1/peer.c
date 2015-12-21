@@ -113,6 +113,21 @@ void bus1_peer_reset(struct bus1_peer *peer, u64 id)
 	mutex_unlock(&peer->lock);
 }
 
+static int bus1_peer_ioctl_free(struct bus1_peer *peer, unsigned long arg)
+{
+	u64 offset;
+	int r;
+
+	if (bus1_import_fixed_ioctl(&offset, arg, sizeof(offset)))
+		return -EFAULT;
+
+	mutex_lock(&peer->lock);
+	r = bus1_pool_release_user(&peer->pool, offset);
+	mutex_unlock(&peer->lock);
+
+	return r;
+}
+
 static int bus1_peer_send(struct bus1_peer *peer,
 			  u64 peer_id,
 			  struct bus1_fs_domain *fs_domain,
@@ -398,7 +413,7 @@ int bus1_peer_ioctl(struct bus1_peer *peer,
 
 	switch (cmd) {
 	case BUS1_CMD_FREE:
-		r = 0; /* XXX */
+		r = bus1_peer_ioctl_free(peer, arg);
 		break;
 	case BUS1_CMD_TRACK:
 		r = 0; /* XXX */
