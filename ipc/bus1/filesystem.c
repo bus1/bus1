@@ -496,6 +496,9 @@ static int bus1_fs_peer_connect_new(struct bus1_fs_peer *fs_peer,
 			bus1_fs_name_free(fs_name);
 			goto error;
 		}
+
+		name += n + 1;
+		remaining -= n + 1;
 	}
 
 	/* link into rbtree, we know it must be at the tail */
