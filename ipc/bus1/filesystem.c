@@ -952,17 +952,16 @@ static int bus1_fs_domain_resolve(struct bus1_fs_domain *fs_domain,
 		goto exit;
 	}
 
-	/* name must be zero-terminated */
-	if (param->size <= sizeof(*param) ||
-	    param->name[param->size - 1] != 0) {
-		r = -EINVAL;
-		goto exit;
-	}
-
 	/* reject overlong/short names early */
 	namelen = param->size - sizeof(*param);
 	if (namelen < 2 || namelen > BUS1_NAME_MAX_SIZE) {
 		r = -ENXIO;
+		goto exit;
+	}
+
+	/* name must be zero-terminated */
+	if (param->name[namelen - 1] != 0) {
+		r = -EINVAL;
 		goto exit;
 	}
 
