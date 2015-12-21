@@ -108,13 +108,11 @@ int b1_client_connect(struct b1_client *client, const char **names, size_t n_nam
 	cmd = alloca(sizeof(*cmd) + nameslen);
 	cmd->size = sizeof(*cmd) + nameslen;
 	cmd->flags = BUS1_CONNECT_FLAG_PEER | BUS1_CONNECT_FLAG_QUERY;
-	cmd->pool_size = 1024 * 8;
+	cmd->pool_size = 1024 * 1024 * 8;
 	cmd->unique_id = 0;
 
-	for (i = 0, name = cmd->names; i < n_names; name += strlen(names[i]) + 1, i ++) {
-		memcpy(name, names[i], strlen(names[i]));
-		name[strlen(names[i])] = 0;
-	}
+	for (i = 0, name = cmd->names; i < n_names; name += strlen(names[i]) + 1, i ++)
+		memcpy(name, names[i], strlen(names[i]) + 1);
 
 	r = ioctl(client->fd, BUS1_CMD_CONNECT, cmd);
 	if (r < 0)
