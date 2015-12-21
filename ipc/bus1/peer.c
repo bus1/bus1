@@ -185,7 +185,7 @@ static int bus1_peer_recv(struct bus1_peer *peer,
 	struct bus1_cmd_recv __user *uparam = (void __user *)arg;
 	struct bus1_queue_entry *entry;
 	struct bus1_cmd_recv param;
-	size_t wanted_fds = 0, n_fds = 0;
+	size_t wanted_fds, n_fds = 0;
 	int r, *t, *fds = NULL;
 	struct kvec vec;
 
@@ -210,8 +210,7 @@ static int bus1_peer_recv(struct bus1_peer *peer,
 	 */
 	rcu_read_lock();
 	entry = bus1_queue_peek_rcu(&peer->queue);
-	if (entry)
-		wanted_fds = entry->n_files;
+	wanted_fds = entry ? entry->n_files : 0;
 	rcu_read_unlock();
 	if (!entry)
 		return -EAGAIN;
