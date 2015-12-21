@@ -284,14 +284,12 @@ struct bus1_queue_entry *bus1_queue_entry_new(size_t n_files)
 {
 	struct bus1_queue_entry *entry;
 
-	entry = kmalloc(sizeof(*entry) + n_files * sizeof(struct file *),
+	entry = kzalloc(sizeof(*entry) + n_files * sizeof(struct file *),
 			GFP_KERNEL);
 	if (!entry)
 		return ERR_PTR(-ENOMEM);
 
-	entry->seq = 0;
 	RB_CLEAR_NODE(&entry->rb);
-	entry->slice = NULL;
 	entry->n_files = n_files;
 	if (n_files > 0)
 		memset(entry->files, 0, sizeof(*entry->files) * n_files);
