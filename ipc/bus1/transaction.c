@@ -86,8 +86,6 @@ bus1_transaction_new(size_t n_vecs, size_t n_files)
 		return ERR_PTR(-ENOMEM);
 
 	/* only reserve space, don't claim it */
-	transaction->n_vecs = 0;
-	transaction->n_files = 0;
 	transaction->vecs = (void *)(transaction + 1);
 	transaction->files = (void *)(transaction->vecs + n_vecs);
 
