@@ -50,7 +50,7 @@ struct bus1_peer *bus1_peer_new(struct bus1_cmd_connect *param)
 	peer->pool = BUS1_POOL_NULL;
 	bus1_queue_init_for_peer(&peer->queue, peer);
 
-	r = bus1_pool_create(&peer->pool, param->pool_size);
+	r = bus1_pool_create_for_peer(&peer->pool, peer, param->pool_size);
 	if (r < 0)
 		goto error;
 

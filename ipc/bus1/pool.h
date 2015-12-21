@@ -42,7 +42,6 @@
 #include <linux/fs.h>
 #include <linux/kernel.h>
 #include <linux/list.h>
-#include <linux/mutex.h>
 #include <linux/rbtree.h>
 #include <linux/uio.h>
 
@@ -83,7 +82,6 @@ struct bus1_pool_slice {
  * @f:			backing shmem file
  * @size:		size of the file
  * @accounted_size:	currently accounted memory in bytes
- * @lock:		data lock
  * @slices:		all slices sorted by address
  * @slices_busy:	tree of allocated slices
  * @slices_free:	tree of free slices
@@ -92,7 +90,6 @@ struct bus1_pool {
 	struct file *f;
 	size_t size;
 	size_t accounted_size;
-	struct mutex lock;
 	struct list_head slices;
 	struct rb_root slices_busy;
 	struct rb_root slices_free;
@@ -100,7 +97,7 @@ struct bus1_pool {
 
 #define BUS1_POOL_NULL ((struct bus1_pool){ })
 
-int bus1_pool_create(struct bus1_pool *pool, size_t size);
+int bus1_pool_create_internal(struct bus1_pool *pool, size_t size);
 void bus1_pool_destroy(struct bus1_pool *pool);
 
 struct bus1_pool_slice *
@@ -126,5 +123,11 @@ ssize_t bus1_pool_write_kvec(struct bus1_pool *pool,
 			     struct kvec *iov,
 			     size_t n_iov,
 			     size_t total_len);
+
+/* see bus1_pool_create_internal() for details */
+#define bus1_pool_create_for_peer(_pool, _peer, _size) ({		\
+		BUILD_BUG_ON((_pool) != &(_peer)->pool);		\
+		bus1_pool_create_internal(&(_peer)->pool, (_size));	\
+	})
 
 #endif /* __BUS1_POOL_H */

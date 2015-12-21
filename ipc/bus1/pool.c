@@ -14,8 +14,8 @@
 #include <linux/fs.h>
 #include <linux/highmem.h>
 #include <linux/kernel.h>
+#include <linux/lockdep.h>
 #include <linux/mm.h>
-#include <linux/mutex.h>
 #include <linux/pagemap.h>
 #include <linux/rbtree.h>
 #include <linux/sched.h>
@@ -24,7 +24,12 @@
 #include <linux/slab.h>
 #include <linux/uaccess.h>
 #include <linux/uio.h>
+#include "peer.h"
 #include "pool.h"
+
+/* lockdep assertion to verify the parent peer is locked */
+#define bus1_pool_assert_held(_pool) \
+	lockdep_assert_held(&bus1_peer_from_pool(_pool)->lock)
 
 static struct bus1_pool_slice *bus1_pool_slice_new(size_t offset, size_t size)
 {
@@ -150,6 +155,12 @@ bus1_pool_slice_find_by_offset(struct bus1_pool *pool, size_t offset)
  * Initialize a new pool object. This allocates a backing shmem object with the
  * given name and size.
  *
+ * NOTE: All pools must be embedded into a parent bus1_peer object. The code
+ *       works fine, if you don't, but the lockdep-annotations will fail
+ *       horribly. They rely on bus1_peer_from_pool() to be valid on every
+ *       pool. Use the bus1_pool_create_for_peer() macro to make sure you
+ *       never violate this rule.
+ *
  * Return: 0 on success, negative error code on failure.
  */
 int bus1_pool_create(struct bus1_pool *pool, size_t size)
@@ -185,7 +196,6 @@ int bus1_pool_create(struct bus1_pool *pool, size_t size)
 	pool->f = f;
 	pool->size = size;
 	pool->accounted_size = 0;
-	mutex_init(&pool->lock);
 	INIT_LIST_HEAD(&pool->slices);
 	pool->slices_free = RB_ROOT;
 	pool->slices_busy = RB_ROOT;
@@ -268,27 +278,23 @@ bus1_pool_alloc(struct bus1_pool *pool, size_t size, bool accounted)
 	struct bus1_pool_slice *slice, *ps;
 	size_t slice_size;
 
+	bus1_pool_assert_held(pool);
+
 	slice_size = ALIGN(size, 8);
 	if (slice_size == 0 || slice_size > BUS1_POOL_SLICE_SIZE_MAX)
 		return ERR_PTR(-EMSGSIZE);
 
-	mutex_lock(&pool->lock);
-
 	/* find smallest suitable, free slice */
 	slice = bus1_pool_slice_find_by_size(pool, slice_size);
-	if (!slice) {
-		slice = ERR_PTR(-EXFULL);
-		goto exit;
-	}
+	if (!slice)
+		return ERR_PTR(-EXFULL);
 
 	/* split slice if it doesn't match exactly */
 	if (slice_size < slice->size) {
 		ps = bus1_pool_slice_new(slice->offset + slice_size,
 					 slice->size - slice_size);
-		if (IS_ERR(ps)) {
-			slice = ERR_CAST(ps);
-			goto exit;
-		}
+		if (IS_ERR(ps))
+			return ERR_CAST(ps);
 
 		list_add(&ps->entry, &slice->entry); /* add after @slice */
 		bus1_pool_slice_link_free(ps, pool);
@@ -307,8 +313,6 @@ bus1_pool_alloc(struct bus1_pool *pool, size_t size, bool accounted)
 	slice->free = false;
 	slice->accounted = accounted;
 
-exit:
-	mutex_unlock(&pool->lock);
 	return slice;
 }
 
@@ -371,20 +375,20 @@ static void bus1_pool_free(struct bus1_pool *pool,
 struct bus1_pool_slice *
 bus1_pool_release_kernel(struct bus1_pool *pool, struct bus1_pool_slice *slice)
 {
-	if (!slice)
+	if (!slice || WARN_ON(!slice->ref_kernel))
 		return NULL;
 
-	mutex_lock(&pool->lock);
+	bus1_pool_assert_held(pool);
+
 	/* kernel must own a ref to @slice */
-	if (!WARN_ON(!slice->ref_kernel)) {
-		slice->ref_kernel = false;
-		/* no longer kernel-owned, de-account slice */
-		if (slice->accounted &&
-		    !WARN_ON(slice->size > pool->accounted_size))
-			pool->accounted_size -= slice->size;
-	}
+	slice->ref_kernel = false;
+
+	/* no longer kernel-owned, de-account slice */
+	if (slice->accounted &&
+	    !WARN_ON(slice->size > pool->accounted_size))
+		pool->accounted_size -= slice->size;
+
 	bus1_pool_free(pool, slice);
-	mutex_unlock(&pool->lock);
 
 	return NULL;
 }
@@ -406,7 +410,8 @@ void bus1_pool_publish(struct bus1_pool *pool,
 		       u64 *out_offset,
 		       u64 *out_size)
 {
-	mutex_lock(&pool->lock);
+	bus1_pool_assert_held(pool);
+
 	/* kernel must own a ref to @slice to publish it */
 	WARN_ON(!slice->ref_kernel);
 	slice->ref_user = true;
@@ -414,7 +419,6 @@ void bus1_pool_publish(struct bus1_pool *pool,
 		*out_offset = slice->offset;
 	if (out_size)
 		*out_size = slice->size;
-	mutex_unlock(&pool->lock);
 }
 
 /**
@@ -434,20 +438,17 @@ void bus1_pool_publish(struct bus1_pool *pool,
 int bus1_pool_release_user(struct bus1_pool *pool, size_t offset)
 {
 	struct bus1_pool_slice *slice;
-	int ret;
 
-	mutex_lock(&pool->lock);
+	bus1_pool_assert_held(pool);
+
 	slice = bus1_pool_slice_find_by_offset(pool, offset);
-	if (slice && slice->ref_user) {
-		slice->ref_user = false;
-		bus1_pool_free(pool, slice);
-		ret = 0;
-	} else {
-		ret = -ENXIO;
-	}
-	mutex_unlock(&pool->lock);
+	if (!slice || !slice->ref_user)
+		return -ENXIO;
 
-	return ret;
+	slice->ref_user = false;
+	bus1_pool_free(pool, slice);
+
+	return 0;
 }
 
 /**
@@ -462,7 +463,7 @@ void bus1_pool_flush(struct bus1_pool *pool)
 	struct bus1_pool_slice *slice;
 	struct rb_node *node, *t;
 
-	mutex_lock(&pool->lock);
+	bus1_pool_assert_held(pool);
 
 	for (node = rb_first(&pool->slices_busy);
 	     node && ((t = rb_next(node)), true);
@@ -480,8 +481,6 @@ void bus1_pool_flush(struct bus1_pool *pool)
 		slice->ref_user = false;
 		bus1_pool_free(pool, slice);
 	}
-
-	mutex_unlock(&pool->lock);
 }
 
 /**
