@@ -451,6 +451,40 @@ int bus1_pool_release_user(struct bus1_pool *pool, size_t offset)
 }
 
 /**
+ * bus1_pool_flush() - flush all user references
+ * @pool:	pool to flush
+ *
+ * This flushes all user-references to any slice in @pool. Kernel references
+ * are left untouched.
+ */
+void bus1_pool_flush(struct bus1_pool *pool)
+{
+	struct bus1_pool_slice *slice;
+	struct rb_node *node, *t;
+
+	mutex_lock(&pool->lock);
+
+	for (node = rb_first(&pool->slices_busy);
+	     node && ((t = rb_next(node)), true);
+	     node = t) {
+		slice = container_of(node, struct bus1_pool_slice, rb);
+		if (!slice->ref_user)
+			continue;
+
+		/*
+		 * @slice (or the logically previous/next slice) might be freed
+		 * by bus1_pool_free(). However, this only ever affects 'free'
+		 * slices, never busy slices. Hence, @t is protected from
+		 * removal.
+		 */
+		slice->ref_user = false;
+		bus1_pool_free(pool, slice);
+	}
+
+	mutex_unlock(&pool->lock);
+}
+
+/**
  * bus1_pool_slice_copy_iovec() - copy user memory to a slice
  * @pool:		pool to operate on
  * @slice:		slice to write to

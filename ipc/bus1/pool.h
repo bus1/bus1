@@ -112,6 +112,7 @@ void bus1_pool_publish(struct bus1_pool *pool,
 		       u64 *out_offset,
 		       u64 *out_size);
 int bus1_pool_release_user(struct bus1_pool *pool, size_t offset);
+void bus1_pool_flush(struct bus1_pool *pool);
 
 ssize_t bus1_pool_write_iovec(struct bus1_pool *pool,
 			      struct bus1_pool_slice *slice,
