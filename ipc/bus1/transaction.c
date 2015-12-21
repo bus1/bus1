@@ -154,16 +154,15 @@ bus1_transaction_import_vecs(struct bus1_transaction *transaction,
 			     struct bus1_cmd_send *param,
 			     bool is_compat)
 {
+	const struct iovec __user *ptr_vecs;
 	int r;
 
 	if (WARN_ON(transaction->n_vecs > 0))
 		return -EINVAL;
 
-	r = bus1_import_vecs(transaction->vecs,
-			     &transaction->length_vecs,
-			     (void __user *)(uintptr_t)param->ptr_vecs,
-			     param->n_vecs,
-			     is_compat);
+	ptr_vecs = (const struct iovec __user *)(unsigned long)param->ptr_vecs;
+	r = bus1_import_vecs(transaction->vecs, &transaction->length_vecs,
+			     ptr_vecs, param->n_vecs, is_compat);
 	if (r < 0)
 		return r;
 
@@ -175,14 +174,16 @@ static int
 bus1_transaction_import_files(struct bus1_transaction *transaction,
 			      struct bus1_cmd_send *param)
 {
+	const int __user *ptr_fds;
 	struct file *f;
 	size_t i;
 
 	if (WARN_ON(transaction->n_files > 0))
 		return -EINVAL;
 
+	ptr_fds = (const int __user *)(unsigned long)param->ptr_fds;
 	for (i = 0; i < transaction->n_files; ++i) {
-		f = bus1_import_fd((int __user *)(uintptr_t)param->ptr_fds + i);
+		f = bus1_import_fd(ptr_fds + i);
 		if (IS_ERR(f))
 			return PTR_ERR(f);
 

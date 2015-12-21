@@ -121,6 +121,7 @@ static int bus1_peer_send(struct bus1_peer *peer,
 			  bool is_compat)
 {
 	struct bus1_transaction *transaction = NULL;
+	const u64 __user *ptr_dest;
 	struct bus1_cmd_send param;
 	u64 destination;
 	size_t i;
@@ -141,12 +142,12 @@ static int bus1_peer_send(struct bus1_peer *peer,
 		return -EMSGSIZE;
 
 	/* 32bit pointer validity checks */
-	if (unlikely(param.ptr_destinations != (uintptr_t)
-		     (void __user *)(uintptr_t)param.ptr_destinations) ||
-	    unlikely(param.ptr_vecs != (uintptr_t)
-		     (void __user *)(uintptr_t)param.ptr_vecs) ||
-	    unlikely(param.ptr_fds != (uintptr_t)
-		     (void __user *)(uintptr_t)param.ptr_fds))
+	if (unlikely(param.ptr_destinations !=
+		     (u64)(unsigned long)param.ptr_destinations) ||
+	    unlikely(param.ptr_vecs !=
+		     (u64)(unsigned long)param.ptr_vecs) ||
+	    unlikely(param.ptr_fds !=
+		     (u64)(unsigned long)param.ptr_fds))
 		return -EFAULT;
 
 	transaction = bus1_transaction_new_from_user(fs_domain, domain,
@@ -155,10 +156,10 @@ static int bus1_peer_send(struct bus1_peer *peer,
 	if (IS_ERR(transaction))
 		return PTR_ERR(transaction);
 
+	ptr_dest = (const u64 __user *)(unsigned long)param.ptr_destinations;
 	for (i = 0; i < param.n_destinations; ++i) {
 		/* faults are always fatal for any transaction */
-		if (get_user(destination, (u64 __user *)(uintptr_t)
-					  param.ptr_destinations + i)) {
+		if (get_user(destination, ptr_dest + i)) {
 			r = -EFAULT;
 			goto exit;
 		}
