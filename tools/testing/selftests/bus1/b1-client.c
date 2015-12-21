@@ -113,11 +113,12 @@ int b1_client_resolve(struct b1_client *client, uint64_t *out_id, const char *na
 	cmd->unique_id = 0;
 	memcpy(cmd->name, name, namelen);
 
-	r = ioctl(client->fd, BUS1_CMD_RESOLVE, &cmd);
+	r = ioctl(client->fd, BUS1_CMD_RESOLVE, cmd);
 	if (r < 0)
 		return -errno;
 
 	if (out_id)
 		*out_id = cmd->unique_id;
+
 	return 0;
 }
