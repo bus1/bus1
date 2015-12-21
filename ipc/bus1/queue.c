@@ -209,34 +209,41 @@ bool bus1_queue_relink(struct bus1_queue *queue,
  * bus1_queue_flush() - flush all entries from a queue
  * @queue:	queue to flush
  * @pool:	pool associated with this queue
+ * @peer_id:	new peer ID
  *
- * This drops all queued entries, both staging and non-staging entries. The
- * caller must provide the pool that all the slices were allocated on.
+ * This drops all queued entries that are not targetted at @peer_id. Staging
+ * entries are ignored. The caller must provide a pointer to the pool that was
+ * used to allocate the slices for the stored entries.
+ *
+ * This call should be used after a peer reset. It flushes all old entries, but
+ * leaves and new entries linked. However, note that transactions might race
+ * this call, therefore, callers must make sure to drop entries during
+ * reception, in case they don't match their ID.
+ *
+ * Set @peer_id to 0 to flush all non-staging entries.
  *
  * The caller must hold the write-side peer-lock of the parent peer.
  */
-void bus1_queue_flush(struct bus1_queue *queue, struct bus1_pool *pool)
+void bus1_queue_flush(struct bus1_queue *queue,
+		      struct bus1_pool *pool,
+		      u64 peer_id)
 {
-	struct bus1_queue_entry *entry, *t;
+	struct bus1_queue_entry *entry;
+	struct rb_node *node, *t;
 
-	/*
-	 * Flush all entries out of the queue. No need to keep the tree
-	 * balanced, but rather just traverse it in post-order and clear each
-	 * node to prevent a WARN_ON() in bus1_queue_entry_free().
-	 */
+	bus1_queue_assert_held(queue);
 
-	if (RB_EMPTY_ROOT(&queue->messages))
-		return;
+	for (node = rb_first(&queue->messages);
+	     node && ((t = rb_next(node)), true);
+	     node = t) {
+		entry = bus1_queue_entry(node);
+		if ((entry->seq & 1) || peer_id != entry->destination_id)
+			continue;
 
-	rcu_assign_pointer(queue->front, NULL);
-
-	rbtree_postorder_for_each_entry_safe(entry, t, &queue->messages, rb) {
-		RB_CLEAR_NODE(&entry->rb);
-		bus1_pool_release_kernel(pool, entry->slice);
+		bus1_queue_unlink(queue, entry);
+		entry->slice = bus1_pool_release_kernel(pool, entry->slice);
 		bus1_queue_entry_free(entry);
 	}
-
-	queue->messages = RB_ROOT;
 }
 
 /**

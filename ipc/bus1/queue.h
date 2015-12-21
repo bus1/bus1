@@ -164,7 +164,9 @@ bool bus1_queue_unlink(struct bus1_queue *queue,
 bool bus1_queue_relink(struct bus1_queue *queue,
 		       struct bus1_queue_entry *entry,
 		       u64 seq);
-void bus1_queue_flush(struct bus1_queue *queue, struct bus1_pool *pool);
+void bus1_queue_flush(struct bus1_queue *queue,
+		      struct bus1_pool *pool,
+		      u64 peer_id);
 struct bus1_queue_entry *bus1_queue_peek(struct bus1_queue *queue);
 
 struct bus1_queue_entry *bus1_queue_entry_new(size_t n_files);
