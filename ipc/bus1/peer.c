@@ -157,21 +157,33 @@ static int bus1_peer_send(struct bus1_peer *peer,
 		return PTR_ERR(transaction);
 
 	ptr_dest = (const u64 __user *)(unsigned long)param.ptr_destinations;
-	for (i = 0; i < param.n_destinations; ++i) {
-		/* faults are always fatal for any transaction */
-		if (get_user(destination, ptr_dest + i)) {
-			r = -EFAULT;
+	if (param.n_destinations == 1) { /* Fastpath: unicast */
+		if (get_user(destination, ptr_dest)) {
+			r = -EFAULT; /* faults are always fatal */
 			goto exit;
 		}
 
-		r = bus1_transaction_instantiate_for_id(transaction,
-							destination,
-							param.flags);
+		r = bus1_transaction_commit_for_id(transaction, destination,
+						   param.flags);
 		if (r < 0)
 			goto exit;
+	} else { /* Slowpath: any message */
+		for (i = 0; i < param.n_destinations; ++i) {
+			if (get_user(destination, ptr_dest + i)) {
+				r = -EFAULT; /* faults are always fatal */
+				goto exit;
+			}
+
+			r = bus1_transaction_instantiate_for_id(transaction,
+								destination,
+								param.flags);
+			if (r < 0)
+				goto exit;
+		}
+
+		bus1_transaction_commit(transaction);
 	}
 
-	bus1_transaction_commit(transaction);
 	r = 0;
 
 exit:

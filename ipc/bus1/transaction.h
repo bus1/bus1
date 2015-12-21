@@ -36,5 +36,8 @@ int bus1_transaction_instantiate_for_id(struct bus1_transaction *transaction,
 					u64 peer_id,
 					u64 flags);
 void bus1_transaction_commit(struct bus1_transaction *transaction);
+int bus1_transaction_commit_for_id(struct bus1_transaction *transaction,
+				   u64 peer_id,
+				   u64 flags);
 
 #endif /* __BUS1_TRANSACTION_H */

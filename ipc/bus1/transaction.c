@@ -510,3 +510,28 @@ void bus1_transaction_commit(struct bus1_transaction *transaction)
 		bus1_fs_peer_release(fs_peer);
 	}
 }
+
+/**
+ * bus1_transaction_commit_for_id() - instantiate and commit unicast
+ * @transaction:	transaction to use
+ * @peer_id:		destination ID
+ * @flags:		BUS1_CMD_SEND_* flags
+ *
+ * This is a fast-path for unicast messages. It is equivalent to calling
+ * bus1_transaction_instantiate_for_id(), followed by a commit.
+ *
+ * Return: 0 on success, negative error code on failure.
+ */
+int bus1_transaction_commit_for_id(struct bus1_transaction *transaction,
+				   u64 peer_id,
+				   u64 flags)
+{
+	int r;
+
+	r = bus1_transaction_instantiate_for_id(transaction, peer_id, flags);
+	if (r < 0)
+		return r;
+
+	bus1_transaction_commit(transaction);
+	return 0;
+}
