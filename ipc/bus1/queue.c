@@ -237,7 +237,7 @@ void bus1_queue_flush(struct bus1_queue *queue,
 	     node && ((t = rb_next(node)), true);
 	     node = t) {
 		entry = bus1_queue_entry(node);
-		if ((entry->seq & 1) || peer_id != entry->destination_id)
+		if ((entry->seq & 1) || peer_id == entry->destination_id)
 			continue;
 
 		bus1_queue_unlink(queue, entry);
