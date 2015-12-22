@@ -488,15 +488,9 @@ void bus1_transaction_commit(struct bus1_transaction *transaction)
 
 		mutex_lock(&peer->lock);
 		if (second == transaction->entries) { /* -> @e is first entry */
-			if (second)
-				/* multicast messages get a unique final sequence number */
-				seq = atomic64_add_return(4, &transaction->domain->seq_ids);
-			else
-				/* unicast messages get a shared sequence number, strictly
-				 * between the previous and the next multicast message */
-				seq = atomic64_read(&transaction->domain->seq_ids) + 2;
+			seq = atomic64_add_return(4,
+						&transaction->domain->seq_ids);
 			WARN_ON(seq & 1); /* must be even */
-
 			wake = bus1_queue_link(&peer->queue, e, seq);
 		} else {
 			WARN_ON(seq != 0); /* must be assigned */
@@ -526,12 +520,52 @@ int bus1_transaction_commit_for_id(struct bus1_transaction *transaction,
 				   u64 peer_id,
 				   u64 flags)
 {
+	struct bus1_fs_peer *fs_peer;
+	struct bus1_queue_entry *e;
+	struct bus1_peer *peer;
+	bool wake;
+	u64 seq;
 	int r;
+
+	/* reject busy transactions */
+	if (WARN_ON(transaction->entries))
+		return -EINVAL;
 
 	r = bus1_transaction_instantiate_for_id(transaction, peer_id, flags);
 	if (r < 0)
 		return r;
 
-	bus1_transaction_commit(transaction);
+	e = transaction->entries;
+	if (e) {
+		if (WARN_ON(e->transaction.next)) {
+			/* how did that happen? fall back to multicast */
+			bus1_transaction_commit(transaction);
+		} else {
+			transaction->entries = NULL;
+
+			fs_peer = e->transaction.fs_peer;
+			peer = bus1_fs_peer_dereference(fs_peer);
+
+			e->transaction.next = NULL;
+			e->transaction.fs_peer = NULL;
+
+			/*
+			 * Unicast messages get a shared sequence number,
+			 * strictly between the previous and the next multicast
+			 * message.
+			 */
+			mutex_lock(&peer->lock);
+			seq = atomic64_read(&transaction->domain->seq_ids) + 2;
+			WARN_ON(seq & 1); /* must be even */
+			wake = bus1_queue_link(&peer->queue, e, seq);
+			mutex_unlock(&peer->lock);
+
+			if (wake)
+				/* XXX: wake up peer */ ;
+
+			bus1_fs_peer_release(fs_peer);
+		}
+	}
+
 	return 0;
 }
