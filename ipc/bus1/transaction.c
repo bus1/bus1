@@ -300,50 +300,24 @@ error:
 	return ERR_PTR(r);
 }
 
-/**
- * bus1_transaction_instantiate_for_id() - instantiate a message
- * @transaction:	transaction to work with
- * @peer_id:		destination
- * @flags:		BUS1_SEND_FLAG_* to affect behavior
- *
- * Instantiate the message from the given transaction for the peer given as
- * @peer_id. A new pool-slice is allocated, a queue entry is created and the
- * message is queued as in-flight message on the transaction object. The
- * message is not linked on the destination, yet. You need to commit the
- * transaction to actually link it on the destination queue.
- *
- * Return: 0 on success, negative error code on failure.
- */
-int bus1_transaction_instantiate_for_id(struct bus1_transaction *transaction,
-					u64 peer_id,
-					u64 flags)
+static struct bus1_queue_entry *
+bus1_transaction_instantiate(struct bus1_transaction *transaction,
+			     struct bus1_peer *peer,
+			     u64 peer_id)
 {
-	struct bus1_queue_entry *entry = NULL;
-	struct bus1_pool_slice *slice = NULL;
-	struct bus1_fs_peer *fs_peer;
-	struct bus1_peer *peer;
+	struct bus1_queue_entry *entry;
+	struct bus1_pool_slice *slice;
 	size_t i;
 	int r;
 
-	/* unknown peers are only ignored, if explicitly told so */
-	fs_peer = bus1_fs_peer_acquire_by_id(transaction->fs_domain, peer_id);
-	if (!fs_peer)
-		return (flags & BUS1_SEND_FLAG_IGNORE_UNKNOWN) ? 0 : -ENXIO;
-
-	peer = bus1_fs_peer_dereference(fs_peer);
-
-	/* allocate new, unlinked queue entry */
 	entry = bus1_queue_entry_new(transaction->n_files);
-	if (IS_ERR(entry)) {
-		r = PTR_ERR(entry);
-		entry = NULL;
-		goto error;
-	}
+	if (IS_ERR(entry))
+		return ERR_CAST(entry);
 
 	/*
-	 * Allocate pool slice and link queue entry as in-flight message. We
-	 * need enough space to store the message *and* the trailing FD array.
-	 * Overflows are already checked by the importer.
+	 * Allocate unlinked pool slice. We need enough space to store the
+	 * message *and* the trailing FD array. Overflows are already checked
+	 * by the importer.
 	 */
 	mutex_lock(&peer->lock);
 	slice = bus1_pool_alloc(&peer->pool,
@@ -379,11 +353,8 @@ int bus1_transaction_instantiate_for_id(struct bus1_transaction *transaction,
 	/* message was fully instantiated, store data and return */
 	entry->slice = slice;
 	entry->destination_id = peer_id;
-	entry->transaction.next = transaction->entries;
-	entry->transaction.fs_peer = fs_peer;
-	transaction->entries = entry;
 
-	return 0;
+	return entry;
 
 error:
 	if (slice) {
@@ -392,6 +363,53 @@ error:
 		mutex_unlock(&peer->lock);
 	}
 	bus1_queue_entry_free(entry); /* fput()s entry->files[] */
+	return ERR_PTR(r);
+}
+
+/**
+ * bus1_transaction_instantiate_for_id() - instantiate a message
+ * @transaction:	transaction to work with
+ * @peer_id:		destination
+ * @flags:		BUS1_SEND_FLAG_* to affect behavior
+ *
+ * Instantiate the message from the given transaction for the peer given as
+ * @peer_id. A new pool-slice is allocated, a queue entry is created and the
+ * message is queued as in-flight message on the transaction object. The
+ * message is not linked on the destination, yet. You need to commit the
+ * transaction to actually link it on the destination queue.
+ *
+ * Return: 0 on success, negative error code on failure.
+ */
+int bus1_transaction_instantiate_for_id(struct bus1_transaction *transaction,
+					u64 peer_id,
+					u64 flags)
+{
+	struct bus1_queue_entry *entry;
+	struct bus1_fs_peer *fs_peer;
+	int r;
+
+	/* unknown peers are only ignored, if explicitly told so */
+	fs_peer = bus1_fs_peer_acquire_by_id(transaction->fs_domain, peer_id);
+	if (!fs_peer)
+		return (flags & BUS1_SEND_FLAG_IGNORE_UNKNOWN) ? 0 : -ENXIO;
+
+	entry = bus1_transaction_instantiate(transaction,
+					     bus1_fs_peer_dereference(fs_peer),
+					     peer_id);
+	if (IS_ERR(entry)) {
+		r = PTR_ERR(entry);
+		entry = NULL;
+		goto error;
+	}
+
+	/* link message into transaction */
+	entry->transaction.next = transaction->entries;
+	entry->transaction.fs_peer = fs_peer;
+	transaction->entries = entry;
+
+	return 0;
+
+error:
 	if (flags & BUS1_SEND_FLAG_CONVEY_ERRORS) {
 		/* XXX: convey error to @fs_peer */
 		r = 0;
