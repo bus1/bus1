@@ -110,7 +110,7 @@ bus1_pool_slice_find_by_size(struct bus1_pool *pool, size_t size)
 	struct bus1_pool_slice *ps, *closest = NULL;
 	struct rb_node *n;
 
-	n = pool->slices_busy.rb_node;
+	n = pool->slices_free.rb_node;
 	while (n) {
 		ps = container_of(n, struct bus1_pool_slice, rb);
 		if (size < ps->size) {
