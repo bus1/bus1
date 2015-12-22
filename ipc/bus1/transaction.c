@@ -202,16 +202,16 @@ bus1_transaction_import_message(struct bus1_transaction *transaction,
 		      transaction->length_vecs);
 
 	/*
-	 * The header is cleared in the constructor, so if it is short, we know
-	 * its missing tail is zeroed. According to the spec, the default
-	 * values must be assumed, which luckily is equivalent to treating it
-	 * as zeroed data, in case of fixed-size objects. Therefore, short
-	 * copies are fine, if they succeeded.
+	 * The specs says short, fixed-size types should default to their
+	 * pre-defined values. Luckily, those pre-defined values equal all 0,
+	 * so we are good if the user specified a short message.
+	 * We just need to make sure we didn't fault in this copy operation. In
+	 * this case, the user tried to supply more but failed.
 	 */
 	l = copy_from_iter(&transaction->header,
 			   sizeof(transaction->header),
 			   &iter);
-	if (l < transaction->length_vecs && l < sizeof(transaction->header))
+	if (l < sizeof(transaction->header) && l != transaction->length_vecs)
 		return -EFAULT;
 
 	/* make sure user-space clears values that we fill in */
@@ -221,15 +221,13 @@ bus1_transaction_import_message(struct bus1_transaction *transaction,
 	    transaction->header.gid != 0)
 		return -EPERM;
 
-	/* sender is the same at all times, rest depends on destination */
-	transaction->header.sender = sender_id;
-
 	/*
 	 * We copied the header into kernel space, to fill in trusted data.
 	 * Hence, those vecs must be skipped on the final copy.
 	 * copy_from_iter() already adjusted the iterator, so all we have to do
 	 * is merge that information back into our own information.
 	 */
+	transaction->length_vecs -= l;
 	transaction->n_vecs -= iter.iov - transaction->vecs;
 	transaction->vecs = (struct iovec *)iter.iov;
 	if (iter.iov_offset > 0) {
@@ -250,6 +248,10 @@ bus1_transaction_import_message(struct bus1_transaction *transaction,
 	++transaction->n_vecs;
 	transaction->vecs->iov_base = &transaction->header;
 	transaction->vecs->iov_len = sizeof(transaction->header);
+	transaction->length_vecs += sizeof(transaction->header);
+
+	/* fill in header */
+	transaction->header.sender = sender_id;
 
 	return 0;
 }
