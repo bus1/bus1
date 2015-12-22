@@ -81,6 +81,10 @@ struct bus1_peer *bus1_peer_free(struct bus1_peer *peer)
 	if (!peer)
 		return NULL;
 
+	mutex_lock(&peer->lock); /* lock peer to make lockdep happy */
+	bus1_queue_flush(&peer->queue, &peer->pool, 0);
+	mutex_unlock(&peer->lock);
+
 	bus1_queue_destroy(&peer->queue);
 	bus1_pool_destroy(&peer->pool);
 
@@ -109,7 +113,8 @@ struct bus1_peer *bus1_peer_free(struct bus1_peer *peer)
 void bus1_peer_reset(struct bus1_peer *peer, u64 id)
 {
 	mutex_lock(&peer->lock);
-	/* XXX: flush outdated queue entries */
+	bus1_queue_flush(&peer->queue, &peer->pool, id);
+	bus1_pool_flush(&peer->pool);
 	mutex_unlock(&peer->lock);
 }
 
