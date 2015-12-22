@@ -169,13 +169,13 @@ int b1_client_send(struct b1_client *client, uint64_t *dests, size_t n_dests, vo
 		.iov_len = len,
 	};
 	struct bus1_cmd_send cmd = {
-		.ptr_destinations = (uint64_t)dests,
+		.ptr_destinations = (unsigned long)dests,
 		.n_destinations = n_dests,
 	};
 	int r;
 
 	if (payload) {
-		cmd.ptr_vecs = (uint64_t)&vec;
+		cmd.ptr_vecs = (unsigned long)&vec;
 		cmd.n_vecs = 1;
 	}
 
