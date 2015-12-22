@@ -148,7 +148,7 @@ bus1_pool_slice_find_by_offset(struct bus1_pool *pool, size_t offset)
 }
 
 /**
- * bus1_pool_create() - create memory pool
+ * bus1_pool_create_internal() - create memory pool
  * @pool:	(uninitialized) pool to operate on
  * @size:	size of the pool
  *
@@ -163,7 +163,7 @@ bus1_pool_slice_find_by_offset(struct bus1_pool *pool, size_t offset)
  *
  * Return: 0 on success, negative error code on failure.
  */
-int bus1_pool_create(struct bus1_pool *pool, size_t size)
+int bus1_pool_create_internal(struct bus1_pool *pool, size_t size)
 {
 	struct bus1_pool_slice *slice;
 	struct file *f;
