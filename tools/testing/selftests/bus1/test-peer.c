@@ -25,7 +25,7 @@ int test_peer(const char *mount_path)
 	assert(client);
 
 	id1 = b1_client_connect(client, NULL, 0);
-	assert(id1 >= 0);
+	assert(id1 > 0);
 
 	r = b1_client_disconnect(client);
 	assert(r >= 0);
@@ -38,7 +38,7 @@ int test_peer(const char *mount_path)
 	assert(client);
 
 	id2 = b1_client_connect(client, names, 2);
-	assert(id2 >= 0);
+	assert(id2 > 0);
 	assert(id1 != id2);
 
 	r = b1_client_resolve(client, &id1, name1);
@@ -53,7 +53,7 @@ int test_peer(const char *mount_path)
 	assert(r == -EAGAIN);
 
 	dests[0] = id1;
-	r = b1_client_send(client, dests, 1);
+	r = b1_client_send(client, dests, 1, NULL, 0);
 	assert(r >= 0);
 
 	r = b1_client_recv(client);
@@ -64,10 +64,10 @@ int test_peer(const char *mount_path)
 
 	dests[1] = id1;
 	dests[2] = id1;
-	r = b1_client_send(client, dests, 1);
+	r = b1_client_send(client, dests, 1, NULL, 0);
 	assert(r >= 0);
 
-	r = b1_client_send(client, dests, 3);
+	r = b1_client_send(client, dests, 3, NULL, 0);
 	assert(r >= 0);
 
 	r = b1_client_recv(client);

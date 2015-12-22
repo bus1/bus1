@@ -16,6 +16,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <sys/uio.h>
 #include <sys/mman.h>
 #include <unistd.h>
 #include "b1-client.h"
@@ -161,13 +162,22 @@ int b1_client_resolve(struct b1_client *client, uint64_t *out_id, const char *na
 	return 0;
 }
 
-int b1_client_send(struct b1_client *client, uint64_t *dests, size_t n_dests)
+int b1_client_send(struct b1_client *client, uint64_t *dests, size_t n_dests, void *payload, size_t len)
 {
+	struct iovec vec = {
+		.iov_base = payload,
+		.iov_len = len,
+	};
 	struct bus1_cmd_send cmd = {
-		.ptr_destinations = dests,
+		.ptr_destinations = (uint64_t)dests,
 		.n_destinations = n_dests,
 	};
 	int r;
+
+	if (payload) {
+		cmd.ptr_vecs = (uint64_t)&vec;
+		cmd.n_vecs = 1;
+	}
 
 	r = ioctl(client->fd, BUS1_CMD_SEND, &cmd);
 	if (r < 0)
