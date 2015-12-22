@@ -301,6 +301,11 @@ bus1_pool_alloc(struct bus1_pool *pool, size_t size, bool accounted)
 		if (IS_ERR(ps))
 			return ERR_CAST(ps);
 
+		ps->free = true;
+		ps->accounted = false;
+		ps->ref_kernel = false;
+		ps->ref_user = false;
+
 		list_add(&ps->entry, &slice->entry); /* add after @slice */
 		bus1_pool_slice_link_free(ps, pool);
 
