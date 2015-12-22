@@ -216,8 +216,8 @@ bool bus1_queue_relink(struct bus1_queue *queue,
  * used to allocate the slices for the stored entries.
  *
  * This call should be used after a peer reset. It flushes all old entries, but
- * leaves and new entries linked. However, note that transactions might race
- * this call, therefore, callers must make sure to drop entries during
+ * leaves any new entries linked. However, note that transactions might race
+ * with this call, therefore, callers must make sure to drop entries during
  * reception, in case they don't match their ID.
  *
  * Set @peer_id to 0 to flush all non-staging entries.

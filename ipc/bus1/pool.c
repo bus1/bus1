@@ -226,7 +226,7 @@ error_put_file:
  * but not created via bus1_pool_create(), yet), then this is a no-op.
  *
  * The caller must make sure that no kernel reference to any slice exists. Any
- * pending user-space refernce to any slice is dropped by this function.
+ * pending user-space reference to any slice is dropped by this function.
  */
 void bus1_pool_destroy(struct bus1_pool *pool)
 {
