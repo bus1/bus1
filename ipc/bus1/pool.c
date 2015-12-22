@@ -38,7 +38,7 @@ static struct bus1_pool_slice *bus1_pool_slice_new(size_t offset, size_t size)
 	if (offset > U32_MAX || size == 0 || size > BUS1_POOL_SLICE_SIZE_MAX)
 		return ERR_PTR(-EMSGSIZE);
 
-	slice = kzalloc(sizeof(*slice), GFP_KERNEL);
+	slice = kmalloc(sizeof(*slice), GFP_KERNEL);
 	if (!slice)
 		return ERR_PTR(-ENOMEM);
 
@@ -192,6 +192,11 @@ int bus1_pool_create(struct bus1_pool *pool, size_t size)
 		r = PTR_ERR(slice);
 		goto error_put_write;
 	}
+
+	slice->free = true;
+	slice->accounted = false;
+	slice->ref_kernel = false;
+	slice->ref_user = false;
 
 	pool->f = f;
 	pool->size = size;
