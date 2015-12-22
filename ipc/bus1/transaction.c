@@ -543,45 +543,40 @@ int bus1_transaction_commit_for_id(struct bus1_transaction *transaction,
 	u64 seq;
 	int r;
 
-	/* reject busy transactions */
-	if (WARN_ON(transaction->entries))
-		return -EINVAL;
+	/* unknown peers are only ignored, if explicitly told so */
+	fs_peer = bus1_fs_peer_acquire_by_id(transaction->fs_domain, peer_id);
+	if (!fs_peer)
+		return (flags & BUS1_SEND_FLAG_IGNORE_UNKNOWN) ? 0 : -ENXIO;
 
-	r = bus1_transaction_instantiate_for_id(transaction, peer_id, flags);
-	if (r < 0)
-		return r;
+	peer = bus1_fs_peer_dereference(fs_peer);
 
-	e = transaction->entries;
-	if (e) {
-		if (WARN_ON(e->transaction.next)) {
-			/* how did that happen? fall back to multicast */
-			bus1_transaction_commit(transaction);
-		} else {
-			transaction->entries = NULL;
-
-			fs_peer = e->transaction.fs_peer;
-			peer = bus1_fs_peer_dereference(fs_peer);
-
-			e->transaction.next = NULL;
-			e->transaction.fs_peer = NULL;
-
-			/*
-			 * Unicast messages get a shared sequence number,
-			 * strictly between the previous and the next multicast
-			 * message.
-			 */
-			mutex_lock(&peer->lock);
-			seq = atomic64_read(&transaction->domain->seq_ids) + 2;
-			WARN_ON(seq & 1); /* must be even */
-			wake = bus1_queue_link(&peer->queue, e, seq);
-			mutex_unlock(&peer->lock);
-
-			if (wake)
-				/* XXX: wake up peer */ ;
-
-			bus1_fs_peer_release(fs_peer);
-		}
+	e = bus1_transaction_instantiate(transaction, peer, peer_id);
+	if (IS_ERR(e)) {
+		r = PTR_ERR(e);
+		e = NULL;
+		goto exit;
 	}
 
-	return 0;
+	/*
+	 * Unicast messages get a shared sequence number, strictly between the
+	 * previous and the next multicast message.
+	 */
+	mutex_lock(&peer->lock);
+	seq = atomic64_read(&transaction->domain->seq_ids) + 2;
+	WARN_ON(seq & 1); /* must be even */
+	wake = bus1_queue_link(&peer->queue, e, seq);
+	mutex_unlock(&peer->lock);
+
+	if (wake)
+		/* XXX: wake up peer */ ;
+
+	r = 0;
+
+exit:
+	if (r < 0 && (flags & BUS1_SEND_FLAG_CONVEY_ERRORS)) {
+		/* XXX: convey error to @fs_peer */
+		r = 0;
+	}
+	bus1_fs_peer_release(fs_peer);
+	return r;
 }
