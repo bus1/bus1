@@ -170,6 +170,10 @@ static int bus1_peer_send(struct bus1_peer *peer,
 		     (u64)(unsigned long)param.ptr_fds))
 		return -EFAULT;
 
+	/* if there are no destinations there is nothing to do */
+	if (unlikely(param.n_destinations == 0))
+		return 0;
+
 	transaction = bus1_transaction_new_from_user(fs_domain, domain,
 						     peer_id, &param,
 						     is_compat);
