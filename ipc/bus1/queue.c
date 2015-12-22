@@ -147,7 +147,7 @@ bool bus1_queue_unlink(struct bus1_queue *queue,
 	node = rcu_dereference_protected(queue->front, queue);
 	if (node == &entry->rb) {
 		node = rb_next(node);
-		if (bus1_queue_entry(node)->seq & 1)
+		if (node && bus1_queue_entry(node)->seq & 1)
 			node = NULL;
 		rcu_assign_pointer(queue->front, node);
 	} else {
