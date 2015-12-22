@@ -511,7 +511,7 @@ void bus1_transaction_commit(struct bus1_transaction *transaction)
 			WARN_ON(seq & 1); /* must be even */
 			wake = bus1_queue_link(&peer->queue, e, seq);
 		} else {
-			WARN_ON(seq != 0); /* must be assigned */
+			WARN_ON(seq == 0); /* must be assigned */
 			wake = bus1_queue_relink(&peer->queue, e, seq);
 		}
 		mutex_unlock(&peer->lock);
