@@ -160,3 +160,30 @@ int b1_client_resolve(struct b1_client *client, uint64_t *out_id, const char *na
 
 	return 0;
 }
+
+int b1_client_send(struct b1_client *client, uint64_t *dests, size_t n_dests)
+{
+	struct bus1_cmd_send cmd = {
+		.ptr_destinations = dests,
+		.n_destinations = n_dests,
+	};
+	int r;
+
+	r = ioctl(client->fd, BUS1_CMD_SEND, &cmd);
+	if (r < 0)
+		return -errno;
+
+	return 0;
+}
+
+int b1_client_recv(struct b1_client *client)
+{
+	struct bus1_cmd_recv cmd = {};
+	int r;
+
+	r = ioctl(client->fd, BUS1_CMD_RECV, &cmd);
+	if (r < 0)
+		return -errno;
+
+	return cmd.msg_size;
+}

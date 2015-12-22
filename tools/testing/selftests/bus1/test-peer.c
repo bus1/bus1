@@ -16,6 +16,7 @@ int test_peer(const char *mount_path)
 	struct b1_client *client = NULL;
 	const char *name1 = "foo", *name2 = "bar";
 	const char *names[] = { name1, name2 };
+	uint64_t dests[3] = { };
 	uint64_t id1, id2;
 	int r;
 
@@ -47,6 +48,42 @@ int test_peer(const char *mount_path)
 	r = b1_client_resolve(client, &id1, name2);
 	assert(r >= 0);
 	assert(id1 == id2);
+
+	r = b1_client_recv(client);
+	assert(r == -EAGAIN);
+
+	dests[0] = id1;
+	r = b1_client_send(client, dests, 1);
+	assert(r >= 0);
+
+	r = b1_client_recv(client);
+	assert(r == 24);
+
+	r = b1_client_recv(client);
+	assert(r == -EAGAIN);
+
+	dests[1] = id1;
+	dests[2] = id1;
+	r = b1_client_send(client, dests, 1);
+	assert(r >= 0);
+
+	r = b1_client_send(client, dests, 3);
+	assert(r >= 0);
+
+	r = b1_client_recv(client);
+	assert(r == 24);
+
+	r = b1_client_recv(client);
+	assert(r == 24);
+
+	r = b1_client_recv(client);
+	assert(r == 24);
+
+	r = b1_client_recv(client);
+	assert(r == 24);
+
+	r = b1_client_recv(client);
+	assert(r == -EAGAIN);
 
 	r = b1_client_disconnect(client);
 	assert(r >= 0);
