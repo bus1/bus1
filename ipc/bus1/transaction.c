@@ -452,8 +452,10 @@ void bus1_transaction_commit(struct bus1_transaction *transaction)
 	if (!transaction->entries)
 		return;
 
-	/* second destination, or NULL; used to select fast-paths */
+	/* second destination; in the unicast case, we should be using
+	 * bus1_transaction_commit_for_id() instead */
 	second = transaction->entries->transaction.next;
+	WARN_ON(!second);
 
 	/*
 	 * Stamp all entries with a staging sequence number, and link them into
@@ -467,26 +469,21 @@ void bus1_transaction_commit(struct bus1_transaction *transaction)
 	 * skip the first entry, and immediately start staging with the second
 	 * entry.
 	 *
-	 * For unicast fast-paths, we even skip fetching the sequence-number,
-	 * which might be a heavy operation, depending on the architecture.
-	 */
-	if (second) {
-		/* pick a temporary sequence number greater than all messages
-		 * (including unicast ones) delivered before the next
-		 * multicast message and smaller than the next multicast
-		 * message */
-		seq = atomic64_read(&transaction->domain->seq_ids) + 3;
-		WARN_ON(!(seq & 1)); /* must be odd */
+	 * We pick a temporary sequence number greater than all messages
+	 * (including unicast ones) delivered before the next
+	 * multicast message and smaller than the next multicast
+	 * message */
+	seq = atomic64_read(&transaction->domain->seq_ids) + 3;
+	WARN_ON(!(seq & 1)); /* must be odd */
 
-		for (e = second; e; e = e->transaction.next) {
-			peer = bus1_fs_peer_dereference(e->transaction.fs_peer);
+	for (e = second; e; e = e->transaction.next) {
+		peer = bus1_fs_peer_dereference(e->transaction.fs_peer);
 
-			mutex_lock(&peer->lock);
-			wake = bus1_queue_link(&peer->queue, e, seq);
-			mutex_unlock(&peer->lock);
+		mutex_lock(&peer->lock);
+		wake = bus1_queue_link(&peer->queue, e, seq);
+		mutex_unlock(&peer->lock);
 
-			WARN_ON(wake); /* in-flight; cannot cause a wake-up */
-		}
+		WARN_ON(wake); /* in-flight; cannot cause a wake-up */
 	}
 
 	/*
