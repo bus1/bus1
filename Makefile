@@ -107,7 +107,7 @@ clean:
 	rm -f samples/bus1/{*.o,modules.order,Module.symvers}
 	rm -rf samples/bus1/{.*.cmd,.tmp_versions}
 	rm -f Documentation/bus1/{*.7,*.html}
-	rm -f tools/testing/selftests/bus1/{*.o}
+	rm -f tools/testing/selftests/bus1/*.o
 	rm -rf .tmp_versions Modules.symvers $(hostprogs-y)
 .PHONY: clean
 
