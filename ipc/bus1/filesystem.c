@@ -428,7 +428,7 @@ static int bus1_fs_peer_connect_new(struct bus1_fs_peer *fs_peer,
 				    struct bus1_fs_domain *fs_domain,
 				    struct bus1_cmd_connect *param)
 {
-	struct bus1_fs_name *fs_name;
+	struct bus1_fs_name *fs_name, *names = NULL;
 	struct bus1_peer *peer;
 	struct rb_node *last;
 	size_t n, remaining;
@@ -483,19 +483,22 @@ static int bus1_fs_peer_connect_new(struct bus1_fs_peer *fs_peer,
 			goto error;
 		}
 
+		/* insert into names list */
+		fs_name->next = names;
+		names = fs_name;
+
 		r = bus1_fs_name_push(fs_domain, fs_name);
 		if (r < 0) {
 			bus1_fs_name_free(fs_name);
 			goto error;
 		}
 
-		/* insert into peer */
-		fs_name->next = fs_peer->names;
-		fs_peer->names = fs_name;
-
 		name += n + 1;
 		remaining -= n + 1;
 	}
+
+	/* link into peer */
+	fs_peer->names = names;
 
 	/* link into rbtree, we know it must be at the tail */
 	last = rb_last(&fs_domain->map_peers);
@@ -519,11 +522,12 @@ static int bus1_fs_peer_connect_new(struct bus1_fs_peer *fs_peer,
 	return 0;
 
 error:
-	while ((fs_name = fs_peer->names)) {
-		fs_peer->names = fs_peer->names->next;
+	while ((fs_name = names)) {
+		names = names->next;
 		bus1_fs_name_pop(fs_domain, fs_name);
 		bus1_fs_name_free(fs_name);
 	}
+	fs_peer->names = NULL;
 
 	up_write(&fs_domain->rwlock);
 	bus1_peer_free(peer);
