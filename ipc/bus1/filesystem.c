@@ -129,10 +129,13 @@ bus1_fs_domain_acquire(struct bus1_fs_domain *fs_domain);
 static struct bus1_fs_domain *
 bus1_fs_domain_release(struct bus1_fs_domain *fs_domain);
 
-static struct bus1_fs_name *bus1_fs_name_new(const char *name)
+static struct bus1_fs_name *bus1_fs_name_new(const char *name, struct bus1_fs_peer *fs_peer)
 {
 	struct bus1_fs_name *fs_name;
 	size_t namelen;
+
+	if (WARN_ON(!fs_peer))
+		return ERR_PTR(-EINVAL);
 
 	namelen = strlen(name) + 1;
 	if (namelen < 2 || namelen > BUS1_NAME_MAX_SIZE)
@@ -143,7 +146,7 @@ static struct bus1_fs_name *bus1_fs_name_new(const char *name)
 		return ERR_PTR(-ENOMEM);
 
 	fs_name->next = NULL;
-	fs_name->fs_peer = NULL;
+	fs_name->fs_peer = fs_peer;
 	RB_CLEAR_NODE(&fs_name->rb);
 	memcpy(fs_name->name, name, namelen);
 
@@ -156,7 +159,6 @@ static struct bus1_fs_name *bus1_fs_name_free(struct bus1_fs_name *fs_name)
 		return NULL;
 
 	WARN_ON(!RB_EMPTY_NODE(&fs_name->rb));
-	WARN_ON(fs_name->fs_peer);
 	WARN_ON(fs_name->next);
 	kfree(fs_name);
 
@@ -164,7 +166,6 @@ static struct bus1_fs_name *bus1_fs_name_free(struct bus1_fs_name *fs_name)
 }
 
 static int bus1_fs_name_push(struct bus1_fs_domain *fs_domain,
-			     struct bus1_fs_peer *fs_peer,
 			     struct bus1_fs_name *fs_name)
 {
 	struct rb_node *prev, **slot;
@@ -172,6 +173,9 @@ static int bus1_fs_name_push(struct bus1_fs_domain *fs_domain,
 	int v;
 
 	lockdep_assert_held(&fs_domain->rwlock); /* write-locked */
+
+	if (WARN_ON(!fs_name->fs_peer))
+		return -EINVAL;
 
 	if (WARN_ON(!RB_EMPTY_NODE(&fs_name->rb)))
 		return -EINVAL;
@@ -196,9 +200,8 @@ static int bus1_fs_name_push(struct bus1_fs_domain *fs_domain,
 	rb_insert_color(&fs_name->rb, &fs_domain->map_names);
 
 	/* insert into peer */
-	fs_name->fs_peer = fs_peer;
-	fs_name->next = fs_peer->names;
-	fs_peer->names = fs_name;
+	fs_name->next = fs_name->fs_peer->names;
+	fs_name->fs_peer->names = fs_name;
 
 	++fs_domain->n_names;
 	return 0;
@@ -220,7 +223,6 @@ static struct bus1_fs_name *bus1_fs_name_pop(struct bus1_fs_domain *fs_domain,
 	RB_CLEAR_NODE(&fs_name->rb);
 	fs_peer->names = fs_name->next;
 	fs_name->next = NULL;
-	fs_name->fs_peer = NULL;
 
 	--fs_domain->n_names;
 	return fs_name;
@@ -485,13 +487,13 @@ static int bus1_fs_peer_connect_new(struct bus1_fs_peer *fs_peer,
 			goto error;
 		}
 
-		fs_name = bus1_fs_name_new(name);
+		fs_name = bus1_fs_name_new(name, fs_peer);
 		if (IS_ERR(fs_name)) {
 			r = PTR_ERR(fs_name);
 			goto error;
 		}
 
-		r = bus1_fs_name_push(fs_domain, fs_peer, fs_name);
+		r = bus1_fs_name_push(fs_domain, fs_name);
 		if (r < 0) {
 			bus1_fs_name_free(fs_name);
 			goto error;
