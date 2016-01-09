@@ -465,9 +465,7 @@ static int bus1_fs_peer_connect_new(struct bus1_fs_peer *fs_peer,
 	if (IS_ERR(peer))
 		return PTR_ERR(peer);
 
-	down_write(&fs_domain->rwlock);
-
-	/* insert names */
+	/* allocate names */
 	name = param->names;
 	remaining = param->size - sizeof(*param);
 	while (remaining > 0) {
@@ -487,14 +485,19 @@ static int bus1_fs_peer_connect_new(struct bus1_fs_peer *fs_peer,
 		fs_name->next = names;
 		names = fs_name;
 
+		name += n + 1;
+		remaining -= n + 1;
+	}
+
+	down_write(&fs_domain->rwlock);
+
+	/* link into names rbtree */
+	for (fs_name = names; fs_name; fs_name = fs_name->next) {
 		r = bus1_fs_name_push(fs_domain, fs_name);
 		if (r < 0) {
 			bus1_fs_name_free(fs_name);
 			goto error;
 		}
-
-		name += n + 1;
-		remaining -= n + 1;
 	}
 
 	/* link into peer */
