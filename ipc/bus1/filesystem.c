@@ -159,7 +159,6 @@ static struct bus1_fs_name *bus1_fs_name_free(struct bus1_fs_name *fs_name)
 		return NULL;
 
 	WARN_ON(!RB_EMPTY_NODE(&fs_name->rb));
-	WARN_ON(fs_name->next);
 	kfree(fs_name);
 
 	return NULL;
@@ -199,33 +198,21 @@ static int bus1_fs_name_push(struct bus1_fs_domain *fs_domain,
 	rb_link_node(&fs_name->rb, prev, slot);
 	rb_insert_color(&fs_name->rb, &fs_domain->map_names);
 
-	/* insert into peer */
-	fs_name->next = fs_name->fs_peer->names;
-	fs_name->fs_peer->names = fs_name;
-
 	++fs_domain->n_names;
 	return 0;
 }
 
-static struct bus1_fs_name *bus1_fs_name_pop(struct bus1_fs_domain *fs_domain,
-					     struct bus1_fs_peer *fs_peer)
+static void bus1_fs_name_pop(struct bus1_fs_domain *fs_domain,
+			    struct bus1_fs_name *fs_name)
 {
-	struct bus1_fs_name *fs_name;
-
 	lockdep_assert_held(&fs_domain->rwlock); /* write-locked */
-
-	/* pop first entry, if there is one */
-	fs_name = fs_peer->names;
-	if (!fs_name)
-		return NULL;
 
 	rb_erase(&fs_name->rb, &fs_domain->map_names);
 	RB_CLEAR_NODE(&fs_name->rb);
-	fs_peer->names = fs_name->next;
-	fs_name->next = NULL;
 
 	--fs_domain->n_names;
-	return fs_name;
+
+	return;
 }
 
 static struct bus1_fs_peer *bus1_fs_peer_new(void)
@@ -298,8 +285,11 @@ static void bus1_fs_peer_cleanup(struct bus1_fs_peer *fs_peer,
 
 	peer = rcu_dereference_protected(fs_peer->peer, &fs_domain->rwlock);
 	if (peer) {
-		while ((fs_name = bus1_fs_name_pop(fs_domain, fs_peer)))
+		while ((fs_name = fs_peer->names)) {
+			fs_peer->names = fs_peer->names->next;
+			bus1_fs_name_pop(fs_domain, fs_name);
 			bus1_fs_name_free(fs_name);
+		}
 
 		if (drop_from_tree)
 			rb_erase(&fs_peer->rb, &fs_domain->map_peers);
@@ -499,6 +489,10 @@ static int bus1_fs_peer_connect_new(struct bus1_fs_peer *fs_peer,
 			goto error;
 		}
 
+		/* insert into peer */
+		fs_name->next = fs_peer->names;
+		fs_peer->names = fs_name;
+
 		name += n + 1;
 		remaining -= n + 1;
 	}
@@ -525,8 +519,12 @@ static int bus1_fs_peer_connect_new(struct bus1_fs_peer *fs_peer,
 	return 0;
 
 error:
-	while ((fs_name = bus1_fs_name_pop(fs_domain, fs_peer)))
+	while ((fs_name = fs_peer->names)) {
+		fs_peer->names = fs_peer->names->next;
+		bus1_fs_name_pop(fs_domain, fs_name);
 		bus1_fs_name_free(fs_name);
+	}
+
 	up_write(&fs_domain->rwlock);
 	bus1_peer_free(peer);
 	return r;
