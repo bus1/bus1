@@ -24,6 +24,7 @@
 #include <linux/rcupdate.h>
 #include <linux/rwsem.h>
 #include <linux/sched.h>
+#include <linux/seqlock.h>
 #include <linux/slab.h>
 #include <linux/wait.h>
 #include <uapi/linux/bus1.h>
@@ -106,12 +107,17 @@ struct bus1_fs_peer {
  * need a read-lock to lookup peers or names. You need a write-lock to
  * link/unlink peers or names.
  *
+ * @seqcount is used to allow lockless read of @map_peers and @map_names, it
+ * must be taken when @rwlock is taken for writing, and may be used in a retry
+ * loop instead of @rwlock for reading.
+ *
  * Technically, the rb-trees could be moved into @domain, as they don't belong
  * to the handle itself. However, for performance reasons, we avoid the
  * additional dereference and just allow fast lookups on domains.
  */
 struct bus1_fs_domain {
 	struct rw_semaphore rwlock;
+	seqcount_t seqcount;
 	wait_queue_head_t waitq;
 	struct bus1_active active;
 	struct bus1_domain *domain;
@@ -172,6 +178,7 @@ static int bus1_fs_name_push(struct bus1_fs_domain *fs_domain,
 	int v;
 
 	lockdep_assert_held(&fs_domain->rwlock); /* write-locked */
+	lockdep_assert_held(&fs_domain->seqcount);
 
 	if (WARN_ON(!fs_name->fs_peer))
 		return -EINVAL;
@@ -206,6 +213,7 @@ static void bus1_fs_name_pop(struct bus1_fs_domain *fs_domain,
 			    struct bus1_fs_name *fs_name)
 {
 	lockdep_assert_held(&fs_domain->rwlock); /* write-locked */
+	lockdep_assert_held(&fs_domain->seqcount);
 
 	rb_erase(&fs_name->rb, &fs_domain->map_names);
 	RB_CLEAR_NODE(&fs_name->rb);
@@ -281,6 +289,7 @@ static void bus1_fs_peer_cleanup(struct bus1_fs_peer *fs_peer,
 	 */
 
 	lockdep_assert_held(&fs_domain->rwlock); /* write-locked */
+	lockdep_assert_held(&fs_domain->seqcount);
 	WARN_ON(ctx->stale_peer);
 
 	peer = rcu_dereference_protected(fs_peer->peer, &fs_domain->rwlock);
@@ -490,6 +499,7 @@ static int bus1_fs_peer_connect_new(struct bus1_fs_peer *fs_peer,
 	}
 
 	down_write(&fs_domain->rwlock);
+	write_seqcount_begin(&fs_domain->seqcount);
 
 	/* link into names rbtree */
 	for (fs_name = names; fs_name; fs_name = fs_name->next) {
@@ -521,6 +531,7 @@ static int bus1_fs_peer_connect_new(struct bus1_fs_peer *fs_peer,
 	/* provide ID for caller, pool-size is already set */
 	param->unique_id = fs_peer->id;
 
+	write_seqcount_end(&fs_domain->seqcount);
 	up_write(&fs_domain->rwlock);
 	return 0;
 
@@ -532,6 +543,7 @@ error:
 	}
 	fs_peer->names = NULL;
 
+	write_seqcount_end(&fs_domain->seqcount);
 	up_write(&fs_domain->rwlock);
 	bus1_peer_free(peer);
 	return r;
@@ -581,6 +593,7 @@ static int bus1_fs_peer_connect_reset(struct bus1_fs_peer *fs_peer,
 		return -ESHUTDOWN;
 
 	down_write(&fs_domain->rwlock);
+	write_seqcount_begin(&fs_domain->seqcount);
 
 	/* remove from rb-tree, and change the ID */
 	rb_erase(&fs_peer->rb, &fs_domain->map_peers);
@@ -599,6 +612,7 @@ static int bus1_fs_peer_connect_reset(struct bus1_fs_peer *fs_peer,
 	param->unique_id = fs_peer->id;
 	param->pool_size = peer->pool.size;
 
+	write_seqcount_end(&fs_domain->seqcount);
 	up_write(&fs_domain->rwlock);
 
 	/* safe to call outside of domain-lock; we still hold the peer-lock */
@@ -724,6 +738,7 @@ static int bus1_fs_peer_disconnect(struct bus1_fs_peer *fs_peer,
 
 	/* lock domain and then release the peer */
 	down_write(&fs_domain->rwlock);
+	write_seqcount_begin(&fs_domain->seqcount);
 
 	/*
 	 * We must not sleep on the fs_peer->waitq, it could deadlock
@@ -737,6 +752,7 @@ static int bus1_fs_peer_disconnect(struct bus1_fs_peer *fs_peer,
 	else
 		r = -ESHUTDOWN;
 
+	write_seqcount_end(&fs_domain->seqcount);
 	up_write(&fs_domain->rwlock);
 	up_write(&fs_peer->rwlock);
 
@@ -782,6 +798,7 @@ static struct bus1_fs_domain *bus1_fs_domain_new(void)
 	bus1_active_init(&fs_domain->active);
 	fs_domain->domain = NULL;
 	init_rwsem(&fs_domain->rwlock);
+	seqcount_init(&fs_domain->seqcount);
 	fs_domain->n_peers = 0;
 	fs_domain->n_names = 0;
 	fs_domain->map_peers = RB_ROOT;
@@ -855,12 +872,14 @@ static void bus1_fs_domain_teardown(struct bus1_fs_domain *fs_domain)
 	 *     fs_domain.active.try-read
 	 *       fs_peer.rwlock.write
 	 *         fs_domain.rwlock.write
+	 *           fs_domain.seqcount.write
 	 *
 	 *   Peer disconnect:
 	 *     fs_peer.rwlock.write
 	 *       fs_peer.active.write
 	 *       fs_domain.rwlock.write
-	 *         fs_peer.active.try-write
+	 *         fs_domain.seqcount.write
+	 *           fs_peer.active.try-write
 	 *
 	 *   Peer send:
 	 *     fs_peer.rwlock.read
@@ -873,7 +892,8 @@ static void bus1_fs_domain_teardown(struct bus1_fs_domain *fs_domain)
 	 *     fs_domain.rwlock.read
 	 *       fs_peer.active.write
 	 *     fs_domain.rwlock.write
-	 *       fs_peer.active.try-write
+	 *       fs_domain.seqcount.write
+	 *         fs_peer.active.try-write
 	 *     fs_domain.active.write
 	 *
 	 *   There is exactly one lock inversion, which is the peer lookup
@@ -895,6 +915,7 @@ static void bus1_fs_domain_teardown(struct bus1_fs_domain *fs_domain)
 	up_read(&fs_domain->rwlock);
 
 	down_write(&fs_domain->rwlock);
+	write_seqcount_begin(&fs_domain->seqcount);
 	for (n = rb_first(&fs_domain->map_peers); n; n = rb_next(n)) {
 		fs_peer = container_of(n, struct bus1_fs_peer, rb);
 
@@ -928,6 +949,7 @@ static void bus1_fs_domain_teardown(struct bus1_fs_domain *fs_domain)
 	WARN_ON(fs_domain->n_names > 0);
 	WARN_ON(fs_domain->n_peers > 0);
 	fs_domain->map_peers = RB_ROOT;
+	write_seqcount_end(&fs_domain->seqcount);
 	up_write(&fs_domain->rwlock);
 
 	bus1_active_cleanup(&fs_domain->active, &fs_domain->waitq,
