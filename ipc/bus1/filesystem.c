@@ -365,21 +365,23 @@ bus1_fs_peer_acquire_by_id(struct bus1_fs_domain *fs_domain, u64 id)
 {
 	struct bus1_fs_peer *fs_peer, *res = NULL;
 	struct rb_node *n;
+	unsigned seq;
 
-	down_read(&fs_domain->rwlock);
-	n = fs_domain->map_peers.rb_node;
-	while (n) {
-		fs_peer = container_of(n, struct bus1_fs_peer, rb);
-		if (id == fs_peer->id) {
-			res = bus1_fs_peer_acquire(fs_peer);
-			break;
-		} else if (id < fs_peer->id) {
+	do {
+		seq = read_seqcount_begin(&fs_domain->seqcount);
+		n = fs_domain->map_peers.rb_node;
+		while (n) {
+			fs_peer = container_of(n, struct bus1_fs_peer, rb);
+			if (id == fs_peer->id) {
+				res = bus1_fs_peer_acquire(fs_peer);
+				break;
+			} else if (id < fs_peer->id) {
 			n = n->rb_left;
-		} else /* if (id > fs_peer->id) */ {
-			n = n->rb_right;
+			} else /* if (id > fs_peer->id) */ {
+				n = n->rb_right;
+			}
 		}
-	}
-	up_read(&fs_domain->rwlock);
+	} while (!res && read_seqcount_retry(&fs_domain->seqcount, seq));
 
 	return res;
 }
@@ -884,7 +886,7 @@ static void bus1_fs_domain_teardown(struct bus1_fs_domain *fs_domain)
 	 *   Peer send:
 	 *     fs_peer.rwlock.read
 	 *       fs_peer.active.try-read
-	 *         fs_domain.rwlock.read        # lock inversion
+	 *         fs_domain.seqcount.read        # lock inversion
 	 *           fs_peer.active.try-read
 	 *
 	 *   Domain teardown:
@@ -897,10 +899,10 @@ static void bus1_fs_domain_teardown(struct bus1_fs_domain *fs_domain)
 	 *     fs_domain.active.write
 	 *
 	 *   There is exactly one lock inversion, which is the peer lookup
-	 *   during send that read-locks the domain to look up the destination
-	 *   while holding a peer reference on the sender. Therefore, all
-	 *   paths that drain a peer must make sure to never hold a write-lock
-	 *   on the domain, but read-locks are fine.
+	 *   during send that takes a read seqcount on the domain to look up
+	 *   the destination while holding a peer reference on the sender.
+	 *   Therefore, all paths that drain a peer must make sure to never
+	 *   hold a write seqcount on the domain, but a lock is fine.
 	 */
 
 	bus1_active_deactivate(&fs_domain->active);
@@ -964,6 +966,7 @@ static int bus1_fs_domain_resolve(struct bus1_fs_domain *fs_domain,
 	struct bus1_fs_name *fs_name;
 	struct rb_node *n;
 	size_t namelen;
+	unsigned seq;
 	int r, v;
 
 	lockdep_assert_held(&fs_domain->active);
@@ -998,22 +1001,23 @@ static int bus1_fs_domain_resolve(struct bus1_fs_domain *fs_domain,
 	}
 
 	/* find unique-id of named peer */
-	down_read(&fs_domain->rwlock);
-	n = fs_domain->map_names.rb_node;
-	while (n) {
-		fs_name = container_of(n, struct bus1_fs_name, rb);
-		v = strcmp(param->name, fs_name->name);
-		if (v == 0) {
-			if (bus1_active_is_active(&fs_name->fs_peer->active))
-				param->unique_id = fs_name->fs_peer->id;
-			break;
-		} else if (v < 0) {
-			n = n->rb_left;
-		} else /* if (v > 0) */ {
-			n = n->rb_right;
+	do {
+		seq = read_seqcount_begin(&fs_domain->seqcount);
+		n = fs_domain->map_names.rb_node;
+		while (n) {
+			fs_name = container_of(n, struct bus1_fs_name, rb);
+			v = strcmp(param->name, fs_name->name);
+			if (v == 0) {
+				if (bus1_active_is_active(&fs_name->fs_peer->active))
+					param->unique_id = fs_name->fs_peer->id;
+				break;
+			} else if (v < 0) {
+				n = n->rb_left;
+			} else /* if (v > 0) */ {
+				n = n->rb_right;
+			}
 		}
-	}
-	up_read(&fs_domain->rwlock);
+	} while (!n && read_seqcount_retry(&fs_domain->seqcount, seq));
 
 	if (!n)
 		r = -ENXIO; /* not found, or deactivated */
