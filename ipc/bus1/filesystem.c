@@ -864,9 +864,9 @@ static void bus1_fs_domain_teardown(struct bus1_fs_domain *fs_domain)
 	 * peers so we're guaranteed all their operations are done.
 	 *
 	 * At this point, we know that all our objects are drained. However,
-	 * they might not have been cleaned up, yet. Therefore, we write-lock
-	 * the domain and now release every peer, lastly followed by a release
-	 * of the domain.
+	 * they might not have been cleaned up, yet. Therefore, we now take
+	 * the domain write seqcount and release every peer, lastly followed
+	 * by a release of the domain.
 	 *
 	 * Possible locking scenarios:
 	 *
@@ -891,9 +891,8 @@ static void bus1_fs_domain_teardown(struct bus1_fs_domain *fs_domain)
 	 *
 	 *   Domain teardown:
 	 *     fs_domain.active.write
-	 *     fs_domain.rwlock.read
-	 *       fs_peer.active.write
 	 *     fs_domain.rwlock.write
+	 *       fs_peer.active.write
 	 *       fs_domain.seqcount.write
 	 *         fs_peer.active.try-write
 	 *     fs_domain.active.write
@@ -908,15 +907,15 @@ static void bus1_fs_domain_teardown(struct bus1_fs_domain *fs_domain)
 	bus1_active_deactivate(&fs_domain->active);
 	bus1_active_drain(&fs_domain->active, &fs_domain->waitq);
 
-	down_read(&fs_domain->rwlock);
+	down_write(&fs_domain->rwlock);
 	for (n = rb_first(&fs_domain->map_peers); n; n = rb_next(n)) {
 		fs_peer = container_of(n, struct bus1_fs_peer, rb);
 		bus1_active_deactivate(&fs_peer->active);
 		bus1_active_drain(&fs_peer->active, &fs_peer->waitq);
 	}
-	up_read(&fs_domain->rwlock);
 
-	down_write(&fs_domain->rwlock);
+	/* Don't hold the write seqcount when draining the peer. It is ok not
+         * to, as the domain maps are not changed whilst draining the peers. */
 	write_seqcount_begin(&fs_domain->seqcount);
 	for (n = rb_first(&fs_domain->map_peers); n; n = rb_next(n)) {
 		fs_peer = container_of(n, struct bus1_fs_peer, rb);
