@@ -852,8 +852,9 @@ static void bus1_fs_domain_teardown(struct bus1_fs_domain *fs_domain)
 	 * Possible locking scenarios:
 	 *
 	 *   Peer connect:
-	 *     fs_peer.rwlock.write
-	 *       fs_domain.rwlock.write
+	 *     fs_domain.active.try-read
+	 *       fs_peer.rwlock.write
+	 *         fs_domain.rwlock.write
 	 *
 	 *   Peer disconnect:
 	 *     fs_peer.rwlock.write
@@ -861,10 +862,11 @@ static void bus1_fs_domain_teardown(struct bus1_fs_domain *fs_domain)
 	 *       fs_domain.rwlock.write
 	 *         fs_peer.active.try-write
 	 *
-	 *   Peer lookup:
+	 *   Peer send:
 	 *     fs_peer.rwlock.read
 	 *       fs_peer.active.try-read
 	 *         fs_domain.rwlock.read        # lock inversion
+	 *           fs_peer.active.try-read
 	 *
 	 *   Domain teardown:
 	 *     fs_domain.active.write
@@ -872,12 +874,13 @@ static void bus1_fs_domain_teardown(struct bus1_fs_domain *fs_domain)
 	 *       fs_peer.active.write
 	 *     fs_domain.rwlock.write
 	 *       fs_peer.active.try-write
-	 *     fs_domain.active.try-write
+	 *     fs_domain.active.write
 	 *
-	 *   There is exactly one lock inversion, which is the peer lookup that
-	 *   read-locks the domain while holding a peer reference. Therefore,
-	 *   all paths that drain a peer must make sure to never hold a
-	 *   write-lock on the domain, but read-locks are fine.
+	 *   There is exactly one lock inversion, which is the peer lookup
+	 *   during send that read-locks the domain to look up the destination
+	 *   while holding a peer reference on the sender. Therefore, all
+	 *   paths that drain a peer must make sure to never hold a write-lock
+	 *   on the domain, but read-locks are fine.
 	 */
 
 	bus1_active_deactivate(&fs_domain->active);
