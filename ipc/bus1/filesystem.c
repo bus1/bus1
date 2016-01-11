@@ -55,6 +55,7 @@ struct bus1_fs_name {
 	struct bus1_fs_name *next;
 	struct bus1_fs_peer *fs_peer;
 	struct rb_node rb;
+	struct rcu_head rcu;
 	char name[];
 };
 
@@ -90,6 +91,7 @@ struct bus1_fs_peer {
 	struct bus1_peer __rcu *peer;
 	struct bus1_fs_name *names;
 	struct rb_node rb;
+	struct rcu_head rcu;
 	u64 id;
 };
 
@@ -164,7 +166,7 @@ static struct bus1_fs_name *bus1_fs_name_free(struct bus1_fs_name *fs_name)
 		return NULL;
 
 	WARN_ON(!RB_EMPTY_NODE(&fs_name->rb));
-	kfree(fs_name);
+	kfree_rcu(fs_name, rcu);
 
 	return NULL;
 }
@@ -201,7 +203,7 @@ static int bus1_fs_name_push(struct bus1_fs_domain *fs_domain,
 	}
 
 	/* insert into tree */
-	rb_link_node(&fs_name->rb, prev, slot);
+	rb_link_node_rcu(&fs_name->rb, prev, slot);
 	rb_insert_color(&fs_name->rb, &fs_domain->map_names);
 
 	++fs_domain->n_names;
@@ -251,7 +253,7 @@ bus1_fs_peer_free(struct bus1_fs_peer *fs_peer)
 	WARN_ON(fs_peer->names);
 	WARN_ON(rcu_access_pointer(fs_peer->peer));
 	bus1_active_destroy(&fs_peer->active);
-	kfree(fs_peer);
+	kfree_rcu(fs_peer, rcu);
 
 	return NULL;
 }
@@ -368,18 +370,20 @@ bus1_fs_peer_acquire_by_id(struct bus1_fs_domain *fs_domain, u64 id)
 
 	do {
 		seq = read_seqcount_begin(&fs_domain->seqcount);
-		n = fs_domain->map_peers.rb_node;
+		rcu_read_lock();
+		n = rcu_dereference(fs_domain->map_peers.rb_node);
 		while (n) {
 			fs_peer = container_of(n, struct bus1_fs_peer, rb);
 			if (id == fs_peer->id) {
 				res = bus1_fs_peer_acquire(fs_peer);
 				break;
 			} else if (id < fs_peer->id) {
-			n = n->rb_left;
+				n = rcu_dereference(n->rb_left);
 			} else /* if (id > fs_peer->id) */ {
-				n = n->rb_right;
+				n = rcu_dereference(n->rb_right);
 			}
 		}
+		rcu_read_unlock();
 	} while (!res && read_seqcount_retry(&fs_domain->seqcount, seq));
 
 	return res;
@@ -517,10 +521,10 @@ static int bus1_fs_peer_connect_new(struct bus1_fs_peer *fs_peer,
 	/* link into rbtree, we know it must be at the tail */
 	last = rb_last(&fs_domain->map_peers);
 	if (last)
-		rb_link_node(&fs_peer->rb, last, &last->rb_right);
+		rb_link_node_rcu(&fs_peer->rb, last, &last->rb_right);
 	else
-		rb_link_node(&fs_peer->rb, NULL,
-			     &fs_domain->map_peers.rb_node);
+		rb_link_node_rcu(&fs_peer->rb, NULL,
+				 &fs_domain->map_peers.rb_node);
 	rb_insert_color(&fs_peer->rb, &fs_domain->map_peers);
 
 	/* acquire ID and activate handle */
@@ -603,10 +607,10 @@ static int bus1_fs_peer_connect_reset(struct bus1_fs_peer *fs_peer,
 	/* insert at the tail again */
 	last = rb_last(&fs_domain->map_peers);
 	if (last)
-		rb_link_node(&fs_peer->rb, last, &last->rb_right);
+		rb_link_node_rcu(&fs_peer->rb, last, &last->rb_right);
 	else
-		rb_link_node(&fs_peer->rb, NULL,
-			     &fs_domain->map_peers.rb_node);
+		rb_link_node_rcu(&fs_peer->rb, NULL,
+				 &fs_domain->map_peers.rb_node);
 	rb_insert_color(&fs_peer->rb, &fs_domain->map_peers);
 
 	/* provide information for caller */
@@ -1001,7 +1005,8 @@ static int bus1_fs_domain_resolve(struct bus1_fs_domain *fs_domain,
 	/* find unique-id of named peer */
 	do {
 		seq = read_seqcount_begin(&fs_domain->seqcount);
-		n = fs_domain->map_names.rb_node;
+		rcu_read_lock();
+		n = rcu_dereference(fs_domain->map_names.rb_node);
 		while (n) {
 			fs_name = container_of(n, struct bus1_fs_name, rb);
 			v = strcmp(param->name, fs_name->name);
@@ -1010,11 +1015,12 @@ static int bus1_fs_domain_resolve(struct bus1_fs_domain *fs_domain,
 					param->unique_id = fs_name->fs_peer->id;
 				break;
 			} else if (v < 0) {
-				n = n->rb_left;
+				n = rcu_dereference(n->rb_left);
 			} else /* if (v > 0) */ {
-				n = n->rb_right;
+				n = rcu_dereference(n->rb_right);
 			}
 		}
+		rcu_read_unlock();
 	} while (!n && read_seqcount_retry(&fs_domain->seqcount, seq));
 
 	if (!n)
