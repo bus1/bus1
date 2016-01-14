@@ -20,7 +20,6 @@
 #include <linux/wait.h>
 #include <uapi/linux/bus1.h>
 #include "domain.h"
-#include "filesystem.h"
 #include "peer.h"
 #include "pool.h"
 #include "queue.h"
