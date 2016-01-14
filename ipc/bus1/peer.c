@@ -188,6 +188,9 @@ static void bus1_peer_name_remove(struct bus1_peer_name *peer_name,
 /**
  * bus1_peer_new() - allocate new peer
  *
+ * Allocate a new peer handle. The handle is *not* activated, nor linked to any
+ * domain. The caller owns the only pointer to the new peer.
+ *
  * Return: Pointer to peer, ERR_PTR on failure.
  */
 struct bus1_peer *bus1_peer_new(void)
@@ -212,6 +215,12 @@ struct bus1_peer *bus1_peer_new(void)
 /**
  * bus1_peer_free() - destroy peer
  * @peer:	peer to destroy, or NULL
+ *
+ * Destroy a peer object that was previously allocated via bus1_peer_new(). If
+ * the peer object was activated, then the caller must make sure it was
+ * properly torn down before destroying it.
+ *
+ * If NULL is passed, this is a no-op.
  *
  * Return: NULL is returned.
  */
@@ -316,24 +325,22 @@ int bus1_peer_teardown(struct bus1_peer *peer, struct bus1_domain *domain)
 	bus1_active_deactivate(&peer->active);
 	bus1_active_drain(&peer->active, &peer->waitq);
 
-	/* lock domain and then release the peer */
-	mutex_lock(&domain->lock);
-	write_seqcount_begin(&domain->seqcount);
-
 	/*
 	 * We must not sleep on the peer->waitq, it could deadlock
 	 * since we already hold the domain-lock. However, luckily all
 	 * peer-releases are locked against the domain, so we wouldn't
-	 * gain anything by passing the waitq in.
+	 * gain anything by passing the waitq in. Pass NULL instead.
 	 */
+	mutex_lock(&domain->lock);
+	write_seqcount_begin(&domain->seqcount);
 	if (bus1_active_cleanup(&peer->active, NULL,
 				bus1_peer_cleanup_runtime, &ctx))
 		r = 0;
 	else
 		r = -ESHUTDOWN;
-
 	write_seqcount_end(&domain->seqcount);
 	mutex_unlock(&domain->lock);
+
 	up_write(&peer->rwlock);
 
 	/*
@@ -414,7 +421,12 @@ void bus1_peer_teardown_domain(struct bus1_peer *peer,
 
 /**
  * bus1_peer_acquire() - acquire active reference to peer
- * @peer:	peer to operate on
+ * @peer:	peer to operate on, or NULL
+ *
+ * Acquire a new active reference to the given peer. If the peer was not
+ * activated yet, or if it was already deactivated, this will fail.
+ *
+ * If NULL is passed, this is a no-op.
  *
  * Return: Pointer to peer, NULL on failure.
  */
@@ -589,29 +601,27 @@ static int bus1_peer_connect_new(struct bus1_peer *peer,
 			goto error_unlock;
 	}
 
-	/* link into peer */
-	peer->names = names;
-
 	/* link into rbtree, we know it must be at the tail */
 	last = rb_last(&domain->map_peers);
 	if (last)
 		rb_link_node_rcu(&peer->rb, last, &last->rb_right);
 	else
-		rb_link_node_rcu(&peer->rb, NULL,
-				 &domain->map_peers.rb_node);
+		rb_link_node_rcu(&peer->rb, NULL, &domain->map_peers.rb_node);
 	rb_insert_color(&peer->rb, &domain->map_peers);
 
 	/* acquire ID and activate handle */
 	peer->id = ++domain->info->peer_ids;
+	peer->names = names;
 	rcu_assign_pointer(peer->info, peer_info);
 	++domain->n_peers;
 	bus1_active_activate(&peer->active);
 
+	write_seqcount_end(&domain->seqcount);
+	mutex_unlock(&domain->lock);
+
 	/* provide ID for caller, pool-size is already set */
 	param->unique_id = peer->id;
 
-	write_seqcount_end(&domain->seqcount);
-	mutex_unlock(&domain->lock);
 	return 0;
 
 error_unlock:
@@ -687,12 +697,12 @@ static int bus1_peer_connect_reset(struct bus1_peer *peer,
 				 &domain->map_peers.rb_node);
 	rb_insert_color(&peer->rb, &domain->map_peers);
 
+	write_seqcount_end(&domain->seqcount);
+	mutex_unlock(&domain->lock);
+
 	/* provide information for caller */
 	param->unique_id = peer->id;
 	param->pool_size = peer_info->pool.size;
-
-	write_seqcount_end(&domain->seqcount);
-	mutex_unlock(&domain->lock);
 
 	/* safe to call outside of domain-lock; we still hold the peer-lock */
 	bus1_peer_info_reset(peer_info, peer->id);
