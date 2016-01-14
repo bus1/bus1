@@ -78,7 +78,7 @@ static int bus1_fs_bus_fop_release(struct inode *inode, struct file *file)
 	struct bus1_domain *domain = inode->i_sb->s_fs_info;
 	struct bus1_peer *peer = file->private_data;
 
-	bus1_peer_disconnect(peer, domain);
+	bus1_peer_teardown(peer, domain);
 	bus1_peer_free(peer);
 
 	return 0;

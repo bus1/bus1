@@ -338,6 +338,50 @@ static void bus1_peer_cleanup_runtime(struct bus1_active *active,
 	return bus1_peer_cleanup(peer, userdata, true);
 }
 
+int bus1_peer_teardown(struct bus1_peer *peer, struct bus1_domain *domain)
+{
+	struct bus1_peer_cleanup_context ctx = { .domain = domain, };
+	int r;
+
+	/* lock against parallel CONNECT/DISCONNECT */
+	down_write(&peer->rwlock);
+
+	/* deactivate and wait for any outstanding operations */
+	bus1_active_deactivate(&peer->active);
+	bus1_active_drain(&peer->active, &peer->waitq);
+
+	/* lock domain and then release the peer */
+	mutex_lock(&domain->lock);
+	write_seqcount_begin(&domain->seqcount);
+
+	/*
+	 * We must not sleep on the peer->waitq, it could deadlock
+	 * since we already hold the domain-lock. However, luckily all
+	 * peer-releases are locked against the domain, so we wouldn't
+	 * gain anything by passing the waitq in.
+	 */
+	if (bus1_active_cleanup(&peer->active, NULL,
+				bus1_peer_cleanup_runtime, &ctx))
+		r = 0;
+	else
+		r = -ESHUTDOWN;
+
+	write_seqcount_end(&domain->seqcount);
+	mutex_unlock(&domain->lock);
+	up_write(&peer->rwlock);
+
+	/*
+	 * bus1_peer_cleanup() returns the now stale peer pointer via the
+	 * context (but only if it really released the peer, otherwise it is
+	 * NULL). It allows us to drop the locks before calling into
+	 * bus1_peer_info_free(). This is not strictly necessary, but reduces
+	 * lock-contention on @domain->lock.
+	 */
+	bus1_peer_info_free(ctx.stale_info);
+
+	return r;
+}
+
 /**
  * bus1_peer_acquire() - acquire active reference to peer
  * @peer:	peer to operate on
@@ -724,50 +768,6 @@ static int bus1_peer_ioctl_connect(struct bus1_peer *peer,
 	}
 
 	kfree(param);
-	return r;
-}
-
-int bus1_peer_disconnect(struct bus1_peer *peer, struct bus1_domain *domain)
-{
-	struct bus1_peer_cleanup_context ctx = { .domain = domain, };
-	int r;
-
-	/* lock against parallel CONNECT/DISCONNECT */
-	down_write(&peer->rwlock);
-
-	/* deactivate and wait for any outstanding operations */
-	bus1_active_deactivate(&peer->active);
-	bus1_active_drain(&peer->active, &peer->waitq);
-
-	/* lock domain and then release the peer */
-	mutex_lock(&domain->lock);
-	write_seqcount_begin(&domain->seqcount);
-
-	/*
-	 * We must not sleep on the peer->waitq, it could deadlock
-	 * since we already hold the domain-lock. However, luckily all
-	 * peer-releases are locked against the domain, so we wouldn't
-	 * gain anything by passing the waitq in.
-	 */
-	if (bus1_active_cleanup(&peer->active, NULL,
-				bus1_peer_cleanup_runtime, &ctx))
-		r = 0;
-	else
-		r = -ESHUTDOWN;
-
-	write_seqcount_end(&domain->seqcount);
-	mutex_unlock(&domain->lock);
-	up_write(&peer->rwlock);
-
-	/*
-	 * bus1_peer_cleanup() returns the now stale peer pointer via the
-	 * context (but only if it really released the peer, otherwise it is
-	 * NULL). It allows us to drop the locks before calling into
-	 * bus1_peer_info_free(). This is not strictly necessary, but reduces
-	 * lock-contention on @domain->lock.
-	 */
-	bus1_peer_info_free(ctx.stale_info);
-
 	return r;
 }
 
@@ -1163,7 +1163,7 @@ int bus1_peer_ioctl(struct bus1_peer *peer,
 		if (arg != 0)
 			return -EINVAL;
 
-		return bus1_peer_disconnect(peer, domain);
+		return bus1_peer_teardown(peer, domain);
 
 	case BUS1_CMD_FREE:
 	case BUS1_CMD_TRACK:
