@@ -771,6 +771,82 @@ static int bus1_peer_ioctl_connect(struct bus1_peer *peer,
 	return r;
 }
 
+static int bus1_peer_ioctl_resolve(struct bus1_peer *peer,
+				   struct bus1_domain *domain,
+				   unsigned long arg)
+{
+	struct bus1_cmd_resolve __user *uparam = (void __user *)arg;
+	struct bus1_cmd_resolve *param;
+	struct bus1_peer_name *peer_name;
+	struct rb_node *n;
+	size_t namelen;
+	unsigned seq;
+	int r, v;
+
+	lockdep_assert_held(&domain->active);
+
+	param = bus1_import_dynamic_ioctl(arg, sizeof(*param));
+	if (IS_ERR(param))
+		return PTR_ERR(param);
+
+	/* no flags are known at this time */
+	if (param->flags) {
+		r = -EINVAL;
+		goto exit;
+	}
+
+	/* result must be cleared by caller */
+	if (param->unique_id != 0) {
+		r = -EINVAL;
+		goto exit;
+	}
+
+	/* reject overlong/short names early */
+	namelen = param->size - sizeof(*param);
+	if (namelen < 2 || namelen > BUS1_NAME_MAX_SIZE) {
+		r = -ENXIO;
+		goto exit;
+	}
+
+	/* name must be zero-terminated */
+	if (param->name[namelen - 1] != 0) {
+		r = -EINVAL;
+		goto exit;
+	}
+
+	/* find unique-id of named peer */
+	do {
+		seq = read_seqcount_begin(&domain->seqcount);
+		rcu_read_lock();
+		n = rcu_dereference(domain->map_names.rb_node);
+		while (n) {
+			peer_name = container_of(n, struct bus1_peer_name, rb);
+			v = strcmp(param->name, peer_name->name);
+			if (v == 0) {
+				if (bus1_active_is_active(&peer_name->peer->active))
+					param->unique_id = peer_name->peer->id;
+				break;
+			} else if (v < 0) {
+				n = rcu_dereference(n->rb_left);
+			} else /* if (v > 0) */ {
+				n = rcu_dereference(n->rb_right);
+			}
+		}
+		rcu_read_unlock();
+	} while (!n && read_seqcount_retry(&domain->seqcount, seq));
+
+	if (!n)
+		r = -ENXIO; /* not found, or deactivated */
+	else if (put_user(param->unique_id, &uparam->unique_id))
+		r = -EFAULT;
+	else
+		r = 0;
+
+exit:
+	kfree(param);
+	return r;
+}
+
 static int bus1_peer_ioctl_free(struct bus1_peer *peer, unsigned long arg)
 {
 	struct bus1_peer_info *peer_info = bus1_peer_dereference(peer);
@@ -1040,82 +1116,6 @@ exit:
 	while (n_fds > 0)
 		put_unused_fd(fds[--n_fds]);
 	kfree(fds);
-	return r;
-}
-
-static int bus1_peer_ioctl_resolve(struct bus1_peer *peer,
-				   struct bus1_domain *domain,
-				   unsigned long arg)
-{
-	struct bus1_cmd_resolve __user *uparam = (void __user *)arg;
-	struct bus1_cmd_resolve *param;
-	struct bus1_peer_name *peer_name;
-	struct rb_node *n;
-	size_t namelen;
-	unsigned seq;
-	int r, v;
-
-	lockdep_assert_held(&domain->active);
-
-	param = bus1_import_dynamic_ioctl(arg, sizeof(*param));
-	if (IS_ERR(param))
-		return PTR_ERR(param);
-
-	/* no flags are known at this time */
-	if (param->flags) {
-		r = -EINVAL;
-		goto exit;
-	}
-
-	/* result must be cleared by caller */
-	if (param->unique_id != 0) {
-		r = -EINVAL;
-		goto exit;
-	}
-
-	/* reject overlong/short names early */
-	namelen = param->size - sizeof(*param);
-	if (namelen < 2 || namelen > BUS1_NAME_MAX_SIZE) {
-		r = -ENXIO;
-		goto exit;
-	}
-
-	/* name must be zero-terminated */
-	if (param->name[namelen - 1] != 0) {
-		r = -EINVAL;
-		goto exit;
-	}
-
-	/* find unique-id of named peer */
-	do {
-		seq = read_seqcount_begin(&domain->seqcount);
-		rcu_read_lock();
-		n = rcu_dereference(domain->map_names.rb_node);
-		while (n) {
-			peer_name = container_of(n, struct bus1_peer_name, rb);
-			v = strcmp(param->name, peer_name->name);
-			if (v == 0) {
-				if (bus1_active_is_active(&peer_name->peer->active))
-					param->unique_id = peer_name->peer->id;
-				break;
-			} else if (v < 0) {
-				n = rcu_dereference(n->rb_left);
-			} else /* if (v > 0) */ {
-				n = rcu_dereference(n->rb_right);
-			}
-		}
-		rcu_read_unlock();
-	} while (!n && read_seqcount_retry(&domain->seqcount, seq));
-
-	if (!n)
-		r = -ENXIO; /* not found, or deactivated */
-	else if (put_user(param->unique_id, &uparam->unique_id))
-		r = -EFAULT;
-	else
-		r = 0;
-
-exit:
-	kfree(param);
 	return r;
 }
 
