@@ -50,10 +50,6 @@ struct bus1_peer_info {
 #define bus1_peer_info_from_queue(_queue) \
 	container_of((_queue), struct bus1_peer_info, queue)
 
-struct bus1_peer_info *bus1_peer_info_new(struct bus1_cmd_connect *param);
-struct bus1_peer_info *bus1_peer_info_free(struct bus1_peer_info *peer_info);
-void bus1_peer_info_reset(struct bus1_peer_info *peer_info, u64 id);
-
 /**
  * struct bus1_peer - peer handle
  * @rwlock:		runtime lock

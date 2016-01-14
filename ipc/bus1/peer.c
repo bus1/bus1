@@ -35,17 +35,31 @@ struct bus1_peer_name {
 	char name[];
 };
 
-/**
- * bus1_peer_info_new() - create new peer information
- * @param:	parameter for peer
- *
- * Allocate a new peer information object with the given parameters. The object
- * is not linked into any peer or domain, nor is any locking required for this
- * call.
- *
- * Return: Pointer to new object, or ERR_PTR on failure.
- */
-struct bus1_peer_info *bus1_peer_info_new(struct bus1_cmd_connect *param)
+static struct bus1_peer_info *
+bus1_peer_info_free(struct bus1_peer_info *peer_info)
+{
+	if (!peer_info)
+		return NULL;
+
+	mutex_lock(&peer_info->lock); /* lock peer to make lockdep happy */
+	bus1_queue_flush(&peer_info->queue, &peer_info->pool, 0);
+	mutex_unlock(&peer_info->lock);
+
+	bus1_queue_destroy(&peer_info->queue);
+	bus1_pool_destroy(&peer_info->pool);
+
+	/*
+	 * Make sure the object is freed in a delayed-manner. Some
+	 * embedded members (like the queue) must be accessible for an entire
+	 * rcu read-side critical section.
+	 */
+	kfree_rcu(peer_info, rcu);
+
+	return NULL;
+}
+
+static struct bus1_peer_info *
+bus1_peer_info_new(struct bus1_cmd_connect *param)
 {
 	struct bus1_peer_info *peer_info;
 	int r;
@@ -74,56 +88,7 @@ error:
 	return ERR_PTR(r);
 }
 
-/**
- * bus1_peer_info_free() - destroy peer information object
- * @peer_info:	object to destroy, or NULL
- *
- * This destroys and deallocates a peer inforation object, which was previously
- * created via bus1_peer_info_new(). The caller must make sure no-one else is
- * accessing the object, anymore.
- *
- * The object is released in an rcu-delayed manner. That is, the object
- * will stay accessible for at least one rcu grace period.
- *
- * If NULL is passed, this is a no-op.
- *
- * Return: NULL is returned.
- */
-struct bus1_peer_info *bus1_peer_info_free(struct bus1_peer_info *peer_info)
-{
-	if (!peer_info)
-		return NULL;
-
-	mutex_lock(&peer_info->lock); /* lock peer to make lockdep happy */
-	bus1_queue_flush(&peer_info->queue, &peer_info->pool, 0);
-	mutex_unlock(&peer_info->lock);
-
-	bus1_queue_destroy(&peer_info->queue);
-	bus1_pool_destroy(&peer_info->pool);
-
-	/*
-	 * Make sure the object is freed in a delayed-manner. Some
-	 * embedded members (like the queue) must be accessible for an entire
-	 * rcu read-side critical section.
-	 */
-	kfree_rcu(peer_info, rcu);
-
-	return NULL;
-}
-
-/**
- * bus1_peer_info_reset() - reset peer information object
- * @peer_info:	peer information object to reset
- * @id:		ID of peer
- *
- * Reset a peer information object. The caller must provide the new peer ID as
- * @id. This function will flush all data on the peer, which is tagged with an
- * ID that does not match the new ID @id.
- *
- * No locking is required by the caller. However, the caller obviously must
- * make sure they own the object.
- */
-void bus1_peer_info_reset(struct bus1_peer_info *peer_info, u64 id)
+static void bus1_peer_info_reset(struct bus1_peer_info *peer_info, u64 id)
 {
 	mutex_lock(&peer_info->lock);
 	bus1_queue_flush(&peer_info->queue, &peer_info->pool, id);
