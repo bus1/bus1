@@ -91,56 +91,8 @@ static long bus1_fs_bus_fop_ioctl(struct file *file,
 {
 	struct bus1_domain *domain = file_inode(file)->i_sb->s_fs_info;
 	struct bus1_peer *peer = file->private_data;
-	long r;
 
-	switch (cmd) {
-	case BUS1_CMD_CONNECT:
-	case BUS1_CMD_RESOLVE:
-		/* lock against domain shutdown */
-		if (!bus1_domain_acquire(domain))
-			return -ESHUTDOWN;
-
-		if (cmd == BUS1_CMD_CONNECT)
-			r = bus1_peer_connect(peer, domain, arg);
-		else if (cmd == BUS1_CMD_RESOLVE)
-			r = bus1_domain_resolve(domain, arg);
-		else
-			r = -ENOTTY;
-
-		bus1_domain_release(domain);
-		break;
-
-	case BUS1_CMD_DISCONNECT:
-		/* no arguments allowed, it behaves like the last close() */
-		if (arg != 0)
-			return -EINVAL;
-
-		return bus1_peer_disconnect(peer, domain);
-
-	case BUS1_CMD_FREE:
-	case BUS1_CMD_TRACK:
-	case BUS1_CMD_UNTRACK:
-	case BUS1_CMD_SEND:
-	case BUS1_CMD_RECV:
-		down_read(&peer->rwlock);
-		if (!bus1_peer_acquire(peer)) {
-			r = -ESHUTDOWN;
-		} else {
-			r = bus1_peer_info_ioctl(bus1_peer_dereference(peer),
-						 peer->id,
-						 domain, domain->info,
-						 cmd, arg, is_compat);
-			bus1_peer_release(peer);
-		}
-		up_read(&peer->rwlock);
-		break;
-
-	default:
-		/* handle ENOTTY on the top-level, so user-space can probe */
-		return -ENOTTY;
-	}
-
-	return r;
+	return bus1_peer_ioctl(peer, domain, cmd, arg, is_compat);
 }
 
 static unsigned int bus1_fs_bus_fop_poll(struct file *file,

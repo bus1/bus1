@@ -397,60 +397,6 @@ exit:
 	return r;
 }
 
-/**
- * bus1_peer_info_ioctl() - handle peer ioctl
- * @peer_info:		peer to work on
- * @peer_id:		current ID of this peer
- * @domain:		parent domain handle
- * @domain_info:	parent domain
- * @cmd:		ioctl command
- * @arg:		ioctl argument
- * @is_compat:		compat ioctl
- *
- * This handles the given ioctl (cmd+arg) on the passed peer @peer_info. The
- * caller must make sure the peer is pinned, its current ID is provided as
- * @peer_id, its parent domain handle is pinned as @domain, and dereferenced
- * as @domain_info.
- *
- * Multiple ioctls can be called in parallel just fine. No locking is needed.
- *
- * Return: 0 on success, negative error code on failure.
- */
-int bus1_peer_info_ioctl(struct bus1_peer_info *peer_info,
-			 u64 peer_id,
-			 struct bus1_domain *domain,
-			 struct bus1_domain_info *domain_info,
-			 unsigned int cmd,
-			 unsigned long arg,
-			 bool is_compat)
-{
-	int r;
-
-	switch (cmd) {
-	case BUS1_CMD_FREE:
-		r = bus1_peer_info_ioctl_free(peer_info, arg);
-		break;
-	case BUS1_CMD_TRACK:
-		r = 0; /* XXX */
-		break;
-	case BUS1_CMD_UNTRACK:
-		r = 0; /* XXX */
-		break;
-	case BUS1_CMD_SEND:
-		r = bus1_peer_info_send(peer_info, peer_id, domain,
-					domain_info, arg, is_compat);
-		break;
-	case BUS1_CMD_RECV:
-		r = bus1_peer_info_recv(peer_info, peer_id, arg);
-		break;
-	default:
-		r = -ENOTTY;
-		break;
-	}
-
-	return r;
-}
-
 static struct bus1_peer_name *
 bus1_peer_name_new(const char *name, struct bus1_peer *peer)
 {
@@ -1087,6 +1033,87 @@ int bus1_peer_disconnect(struct bus1_peer *peer, struct bus1_domain *domain)
 	 * lock-contention on @domain->lock.
 	 */
 	bus1_peer_info_free(ctx.stale_info);
+
+	return r;
+}
+
+/**
+ * bus1_peer_ioctl() - handle peer ioctl
+ * @peer:		peer to work on
+ * @domain:		parent domain
+ * @cmd:		ioctl command
+ * @arg:		ioctl argument
+ * @is_compat:		compat ioctl
+ *
+ * This handles the given ioctl (cmd+arg) on the passed peer. @domain must be
+ * the parent domain of @peer. The caller must not hold an active reference to
+ * either.
+ *
+ * Multiple ioctls can be called in parallel just fine. No locking is needed.
+ *
+ * Return: 0 on success, negative error code on failure.
+ */
+int bus1_peer_ioctl(struct bus1_peer *peer,
+		    struct bus1_domain *domain,
+		    unsigned int cmd,
+		    unsigned long arg,
+		    bool is_compat)
+{
+	struct bus1_peer_info *peer_info;
+	int r = -ENOTTY;
+
+	switch (cmd) {
+	case BUS1_CMD_CONNECT:
+	case BUS1_CMD_RESOLVE:
+		/* lock against domain shutdown */
+		if (!bus1_domain_acquire(domain))
+			return -ESHUTDOWN;
+
+		if (cmd == BUS1_CMD_CONNECT)
+			r = bus1_peer_connect(peer, domain, arg);
+		else if (cmd == BUS1_CMD_RESOLVE)
+			r = bus1_domain_resolve(domain, arg);
+
+		bus1_domain_release(domain);
+		break;
+
+	case BUS1_CMD_DISCONNECT:
+		/* no arguments allowed, it behaves like the last close() */
+		if (arg != 0)
+			return -EINVAL;
+
+		return bus1_peer_disconnect(peer, domain);
+
+	case BUS1_CMD_FREE:
+	case BUS1_CMD_TRACK:
+	case BUS1_CMD_UNTRACK:
+	case BUS1_CMD_SEND:
+	case BUS1_CMD_RECV:
+		down_read(&peer->rwlock);
+		if (!bus1_peer_acquire(peer)) {
+			r = -ESHUTDOWN;
+		} else {
+			peer_info = bus1_peer_dereference(peer);
+
+			if (cmd == BUS1_CMD_FREE)
+				r = bus1_peer_info_ioctl_free(peer_info, arg);
+			else if (cmd == BUS1_CMD_TRACK)
+				r = 0; /* XXX */
+			else if (cmd == BUS1_CMD_UNTRACK)
+				r = 0; /* XXX */
+			else if (cmd == BUS1_CMD_SEND)
+				r = bus1_peer_info_send(peer_info, peer->id,
+							domain, domain->info,
+							arg, is_compat);
+			else if (cmd == BUS1_CMD_RECV)
+				r = bus1_peer_info_recv(peer_info, peer->id,
+							arg);
+
+			bus1_peer_release(peer);
+		}
+		up_read(&peer->rwlock);
+		break;
+	}
 
 	return r;
 }

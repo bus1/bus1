@@ -56,14 +56,6 @@ struct bus1_peer_info *bus1_peer_info_new(struct bus1_cmd_connect *param);
 struct bus1_peer_info *bus1_peer_info_free(struct bus1_peer_info *peer_info);
 void bus1_peer_info_reset(struct bus1_peer_info *peer_info, u64 id);
 
-int bus1_peer_info_ioctl(struct bus1_peer_info *peer_info,
-			 u64 peer_id,
-			 struct bus1_domain *domain,
-			 struct bus1_domain_info *domain_info,
-			 unsigned int cmd,
-			 unsigned long arg,
-			 bool is_compat);
-
 struct bus1_peer {
 	struct rw_semaphore rwlock;
 	wait_queue_head_t waitq;
@@ -101,5 +93,10 @@ int bus1_peer_connect(struct bus1_peer *peer,
 		      struct bus1_domain *domain,
 		      unsigned long arg);
 int bus1_peer_disconnect(struct bus1_peer *peer, struct bus1_domain *domain);
+int bus1_peer_ioctl(struct bus1_peer *peer,
+		    struct bus1_domain *domain,
+		    unsigned int cmd,
+		    unsigned long arg,
+		    bool is_compat);
 
 #endif /* __BUS1_PEER_H */
