@@ -67,14 +67,6 @@ struct bus1_peer {
 	u64 id;
 };
 
-struct bus1_peer_name {
-	struct rcu_head rcu;
-	struct bus1_peer_name *next;
-	struct bus1_peer *peer;
-	struct rb_node rb;
-	char name[];
-};
-
 struct bus1_peer_cleanup_context {
 	struct bus1_domain *domain;
 	struct bus1_peer_info *stale_info;
