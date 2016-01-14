@@ -171,41 +171,6 @@ void bus1_domain_teardown(struct bus1_domain *domain)
 	 * they might not have been cleaned up, yet. Therefore, we now take
 	 * the domain write seqcount and release every peer, lastly followed
 	 * by a release of the domain.
-	 *
-	 * Possible locking scenarios:
-	 *
-	 *   Peer connect:
-	 *     domain.active.try-read
-	 *       peer.rwlock.write
-	 *         domain.lock
-	 *           domain.seqcount.write
-	 *
-	 *   Peer disconnect:
-	 *     peer.rwlock.write
-	 *       peer.active.write
-	 *       domain.lock
-	 *         domain.seqcount.write
-	 *           peer.active.try-write
-	 *
-	 *   Peer send:
-	 *     peer.rwlock.read
-	 *       peer.active.try-read
-	 *         domain.seqcount.read        # lock inversion
-	 *           peer.active.try-read
-	 *
-	 *   Domain teardown:
-	 *     domain.active.write
-	 *     domain.lock
-	 *       peer.active.write
-	 *       domain.seqcount.write
-	 *         peer.active.try-write
-	 *     domain.active.write
-	 *
-	 *   There is exactly one lock inversion, which is the peer lookup
-	 *   during send that takes a read seqcount on the domain to look up
-	 *   the destination while holding a peer reference on the sender.
-	 *   Therefore, all paths that drain a peer must make sure to never
-	 *   hold a write seqcount on the domain, but a lock is fine.
 	 */
 
 	bus1_active_deactivate(&domain->active);

@@ -23,22 +23,20 @@
  * ordered. Not all orders are explicitly defined (e.g., they might define
  * orthogonal hierarchies), but this list tries to give a rough overview:
  *
- * (A) API handle locking:
- *  +--+ bus1_domain.active.write               # domain teardown
+ * (A)                                          # Examples:
+ *  +--+ bus1_domain.active.write               #   domain teardown
  *  |                                           #
- *  +--+ bus1_domain.active.read                # mount entry
- *     +--+ bus1_peer.rwlock.read_write         # ioctl entry
+ *  +--+ bus1_domain.active.read                #   mount entry
+ *     +--+ bus1_peer.rwlock.read_write         #   ioctl entry
  *        +--+ bus1_peer.active.read            #
- *        |  +--+ ... (B) ...                   # peer ioctls
- *        |     +--+ bus1_domain.rwlock.read    # peer lookup; inverse (i1)
+ *        |  +--+ bus1_peer_info.lock           #   ioctl handlers
+ *        |  |                                  #
+ *        |  +--+ bus1_domain.seqcount.read     #   send ioctl
  *        |                                     #
- *        +--+ bus1_domain.rwlock.write         # peer connect/disconnect
- *        |                                     #
- *        +--+ bus1_domain.rwlock.read          # peer resolve
- *           +--+ bus1_peer.active.write        # peer teardown; inverse (i1)
- *
- * (B) Implementation locking
- *  +--+ (XXX)
+ *        +--+ bus1_domain.lock                 #   peer connect/disconnect
+ *           +--+ bus1_peer.active.write        #   domain teardown
+ *           |                                  #
+ *           +--+ bus1_domain.seqcount.write    #   domain teardown
  */
 
 #define BUS1_IOCTL_MAX_SIZE (4096)
