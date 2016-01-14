@@ -656,9 +656,9 @@ static int bus1_peer_connect_query(struct bus1_peer *peer,
 	return 0;
 }
 
-int bus1_peer_connect(struct bus1_peer *peer,
-		      struct bus1_domain *domain,
-		      unsigned long arg)
+static int bus1_peer_ioctl_connect(struct bus1_peer *peer,
+				   struct bus1_domain *domain,
+				   unsigned long arg)
 {
 	struct bus1_cmd_connect __user *uparam = (void __user *)arg;
 	struct bus1_cmd_connect *param;
@@ -1151,7 +1151,7 @@ int bus1_peer_ioctl(struct bus1_peer *peer,
 			return -ESHUTDOWN;
 
 		if (cmd == BUS1_CMD_CONNECT)
-			r = bus1_peer_connect(peer, domain, arg);
+			r = bus1_peer_ioctl_connect(peer, domain, arg);
 		else if (cmd == BUS1_CMD_RESOLVE)
 			r = bus1_peer_ioctl_resolve(peer, domain, arg);
 

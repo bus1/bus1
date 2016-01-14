@@ -81,9 +81,6 @@ struct bus1_peer *bus1_peer_acquire(struct bus1_peer *peer);
 struct bus1_peer *bus1_peer_acquire_by_id(struct bus1_domain *domain, u64 id);
 struct bus1_peer *bus1_peer_release(struct bus1_peer *peer);
 struct bus1_peer_info *bus1_peer_dereference(struct bus1_peer *peer);
-int bus1_peer_connect(struct bus1_peer *peer,
-		      struct bus1_domain *domain,
-		      unsigned long arg);
 int bus1_peer_disconnect(struct bus1_peer *peer, struct bus1_domain *domain);
 int bus1_peer_ioctl(struct bus1_peer *peer,
 		    struct bus1_domain *domain,
