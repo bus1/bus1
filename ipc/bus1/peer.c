@@ -584,7 +584,7 @@ static int bus1_peer_connect_new(struct bus1_peer *peer,
 	for (peer_name = names; peer_name; peer_name = peer_name->next) {
 		r = bus1_peer_name_add(peer_name, domain);
 		if (r < 0)
-			goto error;
+			goto error_unlock;
 	}
 
 	/* link into peer */
@@ -612,16 +612,16 @@ static int bus1_peer_connect_new(struct bus1_peer *peer,
 	mutex_unlock(&domain->lock);
 	return 0;
 
+error_unlock:
+	for (peer_name = names; peer_name; peer_name = peer_name->next)
+		bus1_peer_name_remove(peer_name, domain);
+	write_seqcount_end(&domain->seqcount);
+	mutex_unlock(&domain->lock);
 error:
 	while ((peer_name = names)) {
 		names = names->next;
-		bus1_peer_name_remove(peer_name, domain);
 		bus1_peer_name_free(peer_name);
 	}
-	peer->names = NULL;
-
-	write_seqcount_end(&domain->seqcount);
-	mutex_unlock(&domain->lock);
 	bus1_peer_info_free(peer_info);
 	return r;
 }
