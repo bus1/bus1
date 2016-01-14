@@ -112,7 +112,7 @@ struct bus1_transaction *
 bus1_transaction_free(struct bus1_transaction *transaction)
 {
 	struct bus1_queue_entry *entry;
-	struct bus1_fs_peer *fs_peer;
+	struct bus1_peer *peer;
 	struct bus1_peer_info *peer_info;
 	size_t i;
 
@@ -122,18 +122,18 @@ bus1_transaction_free(struct bus1_transaction *transaction)
 	/* release all in-flight queue entries and their pinned peers */
 	while ((entry = transaction->entries)) {
 		transaction->entries = entry->transaction.next;
-		fs_peer = entry->transaction.fs_peer;
-		entry->transaction.fs_peer = NULL;
+		peer = entry->transaction.peer;
+		entry->transaction.peer = NULL;
 		entry->transaction.next = NULL;
 
-		peer_info = bus1_fs_peer_dereference(fs_peer);
+		peer_info = bus1_peer_dereference(peer);
 
 		mutex_lock(&peer_info->lock);
 		entry->slice = bus1_pool_release_kernel(&peer_info->pool,
 							entry->slice);
 		mutex_unlock(&peer_info->lock);
 
-		bus1_fs_peer_release(fs_peer);
+		bus1_peer_release(peer);
 		bus1_queue_entry_free(entry); /* fput()s entry->files[] */
 	}
 
@@ -387,16 +387,16 @@ int bus1_transaction_instantiate_for_id(struct bus1_transaction *transaction,
 					u64 flags)
 {
 	struct bus1_queue_entry *entry;
-	struct bus1_fs_peer *fs_peer;
+	struct bus1_peer *peer;
 	int r;
 
 	/* unknown peers are only ignored, if explicitly told so */
-	fs_peer = bus1_fs_peer_acquire_by_id(transaction->domain, peer_id);
-	if (!fs_peer)
+	peer = bus1_peer_acquire_by_id(transaction->domain, peer_id);
+	if (!peer)
 		return (flags & BUS1_SEND_FLAG_IGNORE_UNKNOWN) ? 0 : -ENXIO;
 
 	entry = bus1_transaction_instantiate(transaction,
-					     bus1_fs_peer_dereference(fs_peer),
+					     bus1_peer_dereference(peer),
 					     peer_id);
 	if (IS_ERR(entry)) {
 		r = PTR_ERR(entry);
@@ -406,17 +406,17 @@ int bus1_transaction_instantiate_for_id(struct bus1_transaction *transaction,
 
 	/* link message into transaction */
 	entry->transaction.next = transaction->entries;
-	entry->transaction.fs_peer = fs_peer;
+	entry->transaction.peer = peer;
 	transaction->entries = entry;
 
 	return 0;
 
 error:
 	if (flags & BUS1_SEND_FLAG_CONVEY_ERRORS) {
-		/* XXX: convey error to @fs_peer */
+		/* XXX: convey error to @peer */
 		r = 0;
 	}
-	bus1_fs_peer_release(fs_peer);
+	bus1_peer_release(peer);
 	return r;
 }
 
@@ -443,7 +443,7 @@ error:
 void bus1_transaction_commit(struct bus1_transaction *transaction)
 {
 	struct bus1_queue_entry *e, *second;
-	struct bus1_fs_peer *fs_peer;
+	struct bus1_peer *peer;
 	struct bus1_peer_info *peer_info;
 	bool wake;
 	u64 seq = 0;
@@ -477,7 +477,7 @@ void bus1_transaction_commit(struct bus1_transaction *transaction)
 	WARN_ON(!(seq & 1)); /* must be odd */
 
 	for (e = second; e; e = e->transaction.next) {
-		peer_info = bus1_fs_peer_dereference(e->transaction.fs_peer);
+		peer_info = bus1_peer_dereference(e->transaction.peer);
 
 		mutex_lock(&peer_info->lock);
 		wake = bus1_queue_link(&peer_info->queue, e, seq);
@@ -495,11 +495,11 @@ void bus1_transaction_commit(struct bus1_transaction *transaction)
 	 */
 	while ((e = transaction->entries)) {
 		transaction->entries = e->transaction.next;
-		fs_peer = e->transaction.fs_peer;
-		peer_info = bus1_fs_peer_dereference(fs_peer);
+		peer = e->transaction.peer;
+		peer_info = bus1_peer_dereference(peer);
 
 		e->transaction.next = NULL;
-		e->transaction.fs_peer = NULL;
+		e->transaction.peer = NULL;
 
 		mutex_lock(&peer_info->lock);
 		if (second == transaction->entries) { /* -> @e is first entry */
@@ -516,7 +516,7 @@ void bus1_transaction_commit(struct bus1_transaction *transaction)
 		if (wake)
 			/* XXX: wake up peer */ ;
 
-		bus1_fs_peer_release(fs_peer);
+		bus1_peer_release(peer);
 	}
 }
 
@@ -535,7 +535,7 @@ int bus1_transaction_commit_for_id(struct bus1_transaction *transaction,
 				   u64 peer_id,
 				   u64 flags)
 {
-	struct bus1_fs_peer *fs_peer;
+	struct bus1_peer *peer;
 	struct bus1_queue_entry *e;
 	struct bus1_peer_info *peer_info;
 	bool wake;
@@ -543,11 +543,11 @@ int bus1_transaction_commit_for_id(struct bus1_transaction *transaction,
 	int r;
 
 	/* unknown peers are only ignored, if explicitly told so */
-	fs_peer = bus1_fs_peer_acquire_by_id(transaction->domain, peer_id);
-	if (!fs_peer)
+	peer = bus1_peer_acquire_by_id(transaction->domain, peer_id);
+	if (!peer)
 		return (flags & BUS1_SEND_FLAG_IGNORE_UNKNOWN) ? 0 : -ENXIO;
 
-	peer_info = bus1_fs_peer_dereference(fs_peer);
+	peer_info = bus1_peer_dereference(peer);
 
 	e = bus1_transaction_instantiate(transaction, peer_info, peer_id);
 	if (IS_ERR(e)) {
@@ -573,9 +573,9 @@ int bus1_transaction_commit_for_id(struct bus1_transaction *transaction,
 
 exit:
 	if (r < 0 && (flags & BUS1_SEND_FLAG_CONVEY_ERRORS)) {
-		/* XXX: convey error to @fs_peer */
+		/* XXX: convey error to @peer */
 		r = 0;
 	}
-	bus1_fs_peer_release(fs_peer);
+	bus1_peer_release(peer);
 	return r;
 }

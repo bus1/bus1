@@ -324,7 +324,7 @@ bus1_queue_entry_free(struct bus1_queue_entry *entry)
 			fput(entry->files[i]);
 
 	WARN_ON(entry->slice);
-	WARN_ON(entry->transaction.fs_peer);
+	WARN_ON(entry->transaction.peer);
 	WARN_ON(entry->transaction.next);
 
 	/*

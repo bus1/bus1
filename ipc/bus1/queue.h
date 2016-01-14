@@ -107,7 +107,7 @@
 #include <linux/rbtree.h>
 #include <linux/rcupdate.h>
 
-struct bus1_fs_peer;
+struct bus1_peer;
 struct bus1_pool_slice;
 struct bus1_queue_entry;
 struct file;
@@ -117,7 +117,7 @@ struct file;
  * @seq:			sequence number
  * @destination_id:		destination ID used for the message
  * @transaction.next:		transaction: links all instances, or NULL
- * @transaction.fs_peer:	transaction: pins destination peer, or NULL
+ * @transaction.peer:		transaction: pins destination peer, or NULL
  * @rb:				link into the queue
  * @rcu:			rcu-head
  * @slice:			carried data, or NULL
@@ -129,7 +129,7 @@ struct bus1_queue_entry {
 	u64 destination_id;
 	struct {
 		struct bus1_queue_entry *next;
-		struct bus1_fs_peer *fs_peer;
+		struct bus1_peer *peer;
 	} transaction;
 	union {
 		struct rb_node rb;

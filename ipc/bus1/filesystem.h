@@ -45,17 +45,16 @@
 #include <linux/kernel.h>
 
 struct bus1_domain;
+struct bus1_peer;
 struct bus1_peer_info;
-struct bus1_fs_peer;
 
 extern const struct file_operations bus1_fs_bus_fops;
 
 int bus1_fs_init(void);
 void bus1_fs_exit(void);
 
-struct bus1_fs_peer *
-bus1_fs_peer_acquire_by_id(struct bus1_domain *domain, u64 id);
-struct bus1_fs_peer *bus1_fs_peer_release(struct bus1_fs_peer *fs_peer);
-struct bus1_peer_info *bus1_fs_peer_dereference(struct bus1_fs_peer *fs_peer);
+struct bus1_peer *bus1_peer_acquire_by_id(struct bus1_domain *domain, u64 id);
+struct bus1_peer *bus1_peer_release(struct bus1_peer *peer);
+struct bus1_peer_info *bus1_peer_dereference(struct bus1_peer *peer);
 
 #endif /* __BUS1_FILESYSTEM_H */
