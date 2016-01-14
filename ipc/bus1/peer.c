@@ -13,8 +13,11 @@
 #include <linux/fs.h>
 #include <linux/kernel.h>
 #include <linux/mutex.h>
+#include <linux/rbtree.h>
+#include <linux/rwsem.h>
 #include <linux/slab.h>
 #include <linux/uaccess.h>
+#include <linux/wait.h>
 #include <uapi/linux/bus1.h>
 #include "domain.h"
 #include "filesystem.h"
@@ -444,6 +447,646 @@ int bus1_peer_info_ioctl(struct bus1_peer_info *peer_info,
 		r = -ENOTTY;
 		break;
 	}
+
+	return r;
+}
+
+static struct bus1_peer_name *
+bus1_peer_name_new(const char *name, struct bus1_peer *peer)
+{
+	struct bus1_peer_name *peer_name;
+	size_t namelen;
+
+	if (WARN_ON(!peer))
+		return ERR_PTR(-EINVAL);
+
+	namelen = strlen(name) + 1;
+	if (namelen < 2 || namelen > BUS1_NAME_MAX_SIZE)
+		return ERR_PTR(-EMSGSIZE);
+
+	peer_name = kmalloc(sizeof(*peer_name) + namelen, GFP_KERNEL);
+	if (!peer_name)
+		return ERR_PTR(-ENOMEM);
+
+	peer_name->next = NULL;
+	peer_name->peer = peer;
+	RB_CLEAR_NODE(&peer_name->rb);
+	memcpy(peer_name->name, name, namelen);
+
+	return peer_name;
+}
+
+static struct bus1_peer_name *
+bus1_peer_name_free(struct bus1_peer_name *peer_name)
+{
+	if (!peer_name)
+		return NULL;
+
+	WARN_ON(!RB_EMPTY_NODE(&peer_name->rb));
+	kfree_rcu(peer_name, rcu);
+
+	return NULL;
+}
+
+static int bus1_peer_name_add(struct bus1_peer_name *peer_name,
+			      struct bus1_domain *domain)
+{
+	struct rb_node *prev, **slot;
+	struct bus1_peer_name *iter;
+	int v;
+
+	lockdep_assert_held(&domain->lock);
+	lockdep_assert_held(&domain->seqcount);
+
+	if (WARN_ON(!RB_EMPTY_NODE(&peer_name->rb)))
+		return -EINVAL;
+
+	/* find rb-tree entry and check for possible duplicates first */
+	slot = &domain->map_names.rb_node;
+	prev = NULL;
+	while (*slot) {
+		prev = *slot;
+		iter = container_of(prev, struct bus1_peer_name, rb);
+		v = strcmp(peer_name->name, iter->name);
+		if (!v)
+			return -EISNAM;
+		else if (v < 0)
+			slot = &prev->rb_left;
+		else /* if (v > 0) */
+			slot = &prev->rb_right;
+	}
+
+	/* insert into tree */
+	rb_link_node_rcu(&peer_name->rb, prev, slot);
+	rb_insert_color(&peer_name->rb, &domain->map_names);
+
+	++domain->n_names;
+	return 0;
+}
+
+static void bus1_peer_name_remove(struct bus1_peer_name *peer_name,
+				  struct bus1_domain *domain)
+{
+	lockdep_assert_held(&domain->lock);
+	lockdep_assert_held(&domain->seqcount);
+
+	if (RB_EMPTY_NODE(&peer_name->rb))
+		return;
+
+	rb_erase(&peer_name->rb, &domain->map_names);
+	RB_CLEAR_NODE(&peer_name->rb);
+
+	--domain->n_names;
+}
+
+/**
+ * bus1_peer_new() - allocate new peer
+ *
+ * Return: Pointer to peer, ERR_PTR on failure.
+ */
+struct bus1_peer *bus1_peer_new(void)
+{
+	struct bus1_peer *peer;
+
+	peer = kmalloc(sizeof(*peer), GFP_KERNEL);
+	if (!peer)
+		return ERR_PTR(-ENOMEM);
+
+	init_rwsem(&peer->rwlock);
+	init_waitqueue_head(&peer->waitq);
+	bus1_active_init(&peer->active);
+	rcu_assign_pointer(peer->info, NULL);
+	peer->names = NULL;
+	RB_CLEAR_NODE(&peer->rb);
+	peer->id = 0;
+
+	return peer;
+}
+
+/**
+ * bus1_peer_free() - destroy peer
+ * @peer:	peer to destroy, or NULL
+ *
+ * Return: NULL is returned.
+ */
+struct bus1_peer *bus1_peer_free(struct bus1_peer *peer)
+{
+	if (!peer)
+		return NULL;
+
+	/* peer->rb might be stray */
+	WARN_ON(peer->names);
+	WARN_ON(rcu_access_pointer(peer->info));
+	bus1_active_destroy(&peer->active);
+	kfree_rcu(peer, rcu);
+
+	return NULL;
+}
+
+/**
+ * bus1_peer_cleanup() - cleanup peer
+ * @peer:		peer to operate on
+ * @ctx:		cleanup context from caller
+ * @drop_from_tree:	whether to drop the peer from the domain map
+ */
+void bus1_peer_cleanup(struct bus1_peer *peer,
+		       struct bus1_peer_cleanup_context *ctx,
+		       bool drop_from_tree)
+{
+	struct bus1_domain *domain = ctx->domain;
+	struct bus1_peer_name *peer_name;
+	struct bus1_peer_info *peer_info;
+
+	/*
+	 * This function is called by bus1_active_cleanup(), once all active
+	 * references to the handle are drained. In that case, we know that
+	 * no-one can hold a pointer to the peer, anymore. Hence, we can simply
+	 * drop all the peer information and destroy the peer.
+	 *
+	 * During domain teardown, we avoid dropping peers from the tree, so we
+	 * can safely iterate the tree and reset it afterwards.
+	 *
+	 * If this released the peer, the peer information object is returned
+	 * to the caller via the passed in context. The caller must destroy it
+	 * by calling bus1_peer_info_free(). We skip this step here, to allow
+	 * the caller to drop locks before freeing the peer, and thus reducing
+	 * lock contention.
+	 * The caller really ought to initialize @ctx->stale_info to NULL, so
+	 * it can check whether this call actually released the peer or not.
+	 */
+
+	lockdep_assert_held(&domain->lock);
+	lockdep_assert_held(&domain->seqcount);
+	WARN_ON(ctx->stale_info);
+
+	peer_info = rcu_dereference_protected(peer->info, &domain->lock);
+	if (peer_info) {
+		while ((peer_name = peer->names)) {
+			peer->names = peer->names->next;
+			bus1_peer_name_remove(peer_name, domain);
+			bus1_peer_name_free(peer_name);
+		}
+
+		if (drop_from_tree)
+			rb_erase(&peer->rb, &domain->map_peers);
+
+		--domain->n_peers;
+
+		/*
+		 * Reset @peer->info so any racing rcu-call will get NULL
+		 * before the peer is released via kfree_rcu().
+		 *
+		 * Instead of calling into bus1_peer_info_free(), return the
+		 * stale peer via the context to the caller. The object is
+		 * fully unlinked (except for harmless rcu queries), so the
+		 * caller can drop their locks before calling into
+		 * bus1_peer_info_free().
+		 */
+		rcu_assign_pointer(peer->info, NULL);
+		ctx->stale_info = peer_info;
+	} else {
+		WARN_ON(peer->names);
+	}
+}
+
+static void bus1_peer_cleanup_runtime(struct bus1_active *active,
+				      void *userdata)
+{
+	struct bus1_peer *peer = container_of(active, struct bus1_peer,
+					      active);
+
+	return bus1_peer_cleanup(peer, userdata, true);
+}
+
+/**
+ * bus1_peer_acquire() - acquire active reference to peer
+ * @peer:	peer to operate on
+ *
+ * Return: Pointer to peer, NULL on failure.
+ */
+struct bus1_peer *bus1_peer_acquire(struct bus1_peer *peer)
+{
+	if (peer && bus1_active_acquire(&peer->active))
+		return peer;
+	return NULL;
+}
+
+/**
+ * bus1_peer_acquire_by_id() - acquire peer by id
+ * @domain:		domain to search
+ * @id:			id to look for
+ *
+ * Find a peer handle that is registered under the given id and domain. If
+ * found, acquire an active reference and return the handle. If not found, NULL
+ * is returned.
+ *
+ * Return: Active reference to matching handle, or NULL.
+ */
+struct bus1_peer *bus1_peer_acquire_by_id(struct bus1_domain *domain, u64 id)
+{
+	struct bus1_peer *peer, *res = NULL;
+	struct rb_node *n;
+	unsigned seq;
+
+	do {
+		seq = read_seqcount_begin(&domain->seqcount);
+		rcu_read_lock();
+		n = rcu_dereference(domain->map_peers.rb_node);
+		while (n) {
+			peer = container_of(n, struct bus1_peer, rb);
+			if (id == peer->id) {
+				res = bus1_peer_acquire(peer);
+				break;
+			} else if (id < peer->id) {
+				n = rcu_dereference(n->rb_left);
+			} else /* if (id > peer->id) */ {
+				n = rcu_dereference(n->rb_right);
+			}
+		}
+		rcu_read_unlock();
+	} while (!res && read_seqcount_retry(&domain->seqcount, seq));
+
+	return res;
+}
+
+/**
+ * bus1_peer_release() - release an active reference
+ * @peer:	handle to release, or NULL
+ *
+ * This releases an active reference to a peer, acquired previously via one
+ * of the lookup functions.
+ *
+ * If NULL is passed, this is a no-op.
+ *
+ * Return: NULL is returned.
+ */
+struct bus1_peer *bus1_peer_release(struct bus1_peer *peer)
+{
+	if (peer)
+		bus1_active_release(&peer->active, &peer->waitq);
+	return NULL;
+}
+
+/**
+ * bus1_peer_dereference() - dereference a peer handle
+ * @peer:	handle to dereference
+ *
+ * Dereference a peer handle to get access to the underlying peer object. This
+ * function simply returns the pointer to the linked peer information object,
+ * which then can be accessed directly by the caller. The caller must hold an
+ * active reference to the handle, and retain it as long as the peer object is
+ * used.
+ *
+ * Note: If you weren't called through this handle, but rather retrieved it via
+ *       other means (eg., domain lookup), you must be aware that this handle
+ *       might be reset at any time. Hence, any operation you perform on the
+ *       handle must be tagged by the actual peer ID (which you should have
+ *       retrieved via the same means as the handle itself).
+ *       If the peer is reset midway through your operation, it gets a new ID,
+ *       notifies any peer that tracked it, and automatically discards any
+ *       operation that was tagged with an old ID (or, if the operation wasn't
+ *       finished, it will be discarded later on). A reset is a lossy operation
+ *       so any pending operation is discarded silently. The origin of the
+ *       operation thus gets the impression that it succeeded (and should be
+ *       tracking the peer to get notified about the reset, if interested).
+ *
+ * Return: Pointer to the underlying peer information object is returned.
+ */
+struct bus1_peer_info *bus1_peer_dereference(struct bus1_peer *peer)
+{
+	lockdep_assert_held(&peer->active);
+
+	return rcu_dereference_protected(peer->info, &peer->active);
+}
+
+static int bus1_peer_connect_new(struct bus1_peer *peer,
+				 struct bus1_domain *domain,
+				 struct bus1_cmd_connect *param)
+{
+	struct bus1_peer_name *peer_name, *names = NULL;
+	struct bus1_peer_info *peer_info;
+	struct rb_node *last;
+	size_t n, remaining;
+	const char *name;
+	int r;
+
+	/*
+	 * Connect a new peer. We first allocate the peer object, then
+	 * lock the whole domain and link the names and the peer
+	 * itself. If either fails, revert everything we did so far and
+	 * bail out.
+	 */
+
+	lockdep_assert_held(&domain->active);
+	lockdep_assert_held(&peer->rwlock);
+
+	/* cannot connect a peer that is already connected */
+	if (!bus1_active_is_new(&peer->active))
+		return -EISCONN;
+
+	/*
+	 * The domain-reference and peer-lock guarantee that no other
+	 * connect, disconnect, or teardown can race us (they wait for us). We
+	 * also verified that the peer is NEW. Hence, peer->info must be
+	 * NULL. We still verify it, just to be safe.
+	 */
+	if (WARN_ON(rcu_dereference_protected(peer->info,
+					      &domain->active &&
+					      &peer->rwlock)))
+		return -EISCONN;
+
+	/* allocate new peer_info object */
+	peer_info = bus1_peer_info_new(param);
+	if (IS_ERR(peer_info))
+		return PTR_ERR(peer_info);
+
+	/* allocate names */
+	name = param->names;
+	remaining = param->size - sizeof(*param);
+	while (remaining > 0) {
+		n = strnlen(name, remaining);
+		if (n == 0 || n == remaining) {
+			r = -EMSGSIZE;
+			goto error;
+		}
+
+		peer_name = bus1_peer_name_new(name, peer);
+		if (IS_ERR(peer_name)) {
+			r = PTR_ERR(peer_name);
+			goto error;
+		}
+
+		/* insert into names list */
+		peer_name->next = names;
+		names = peer_name;
+
+		name += n + 1;
+		remaining -= n + 1;
+	}
+
+	mutex_lock(&domain->lock);
+	write_seqcount_begin(&domain->seqcount);
+
+	/* link into names rbtree */
+	for (peer_name = names; peer_name; peer_name = peer_name->next) {
+		r = bus1_peer_name_add(peer_name, domain);
+		if (r < 0)
+			goto error;
+	}
+
+	/* link into peer */
+	peer->names = names;
+
+	/* link into rbtree, we know it must be at the tail */
+	last = rb_last(&domain->map_peers);
+	if (last)
+		rb_link_node_rcu(&peer->rb, last, &last->rb_right);
+	else
+		rb_link_node_rcu(&peer->rb, NULL,
+				 &domain->map_peers.rb_node);
+	rb_insert_color(&peer->rb, &domain->map_peers);
+
+	/* acquire ID and activate handle */
+	peer->id = ++domain->info->peer_ids;
+	rcu_assign_pointer(peer->info, peer_info);
+	++domain->n_peers;
+	bus1_active_activate(&peer->active);
+
+	/* provide ID for caller, pool-size is already set */
+	param->unique_id = peer->id;
+
+	write_seqcount_end(&domain->seqcount);
+	mutex_unlock(&domain->lock);
+	return 0;
+
+error:
+	while ((peer_name = names)) {
+		names = names->next;
+		bus1_peer_name_remove(peer_name, domain);
+		bus1_peer_name_free(peer_name);
+	}
+	peer->names = NULL;
+
+	write_seqcount_end(&domain->seqcount);
+	mutex_unlock(&domain->lock);
+	bus1_peer_info_free(peer_info);
+	return r;
+}
+
+static int bus1_peer_connect_reset(struct bus1_peer *peer,
+				   struct bus1_domain *domain,
+				   struct bus1_cmd_connect *param)
+{
+	struct bus1_peer_info *peer_info;
+	struct rb_node *last;
+
+	/*
+	 * If a RESET is requested, we atomically DISCONNECT and
+	 * CONNECT the peer. Luckily, all we have to do is allocate a
+	 * new ID and re-add it to the rb-tree. Then we tell the peer
+	 * itself to flush any pending data. There might be operations
+	 * in-flight, that finish after we reset the peer. All those
+	 * operations must be tagged with the old id, though (see
+	 * bus1_peer_dereference() for details). Therefore, those
+	 * operations can be silently ignored and will be gc'ed later
+	 * on if their tag is outdated.
+	 */
+
+	lockdep_assert_held(&domain->active);
+	lockdep_assert_held(&peer->rwlock);
+
+	/* cannot reset a peer that was never connected */
+	if (bus1_active_is_new(&peer->active))
+		return -ENOTCONN;
+
+	/* verify pool-size is unset and no names are appended */
+	if (param->pool_size != 0 || param->size > sizeof(*param))
+		return -EINVAL;
+
+	/*
+	 * We hold domain reference and peer-lock, hence domain/peer teardown
+	 * must wait for us. Our caller already verified we haven't been torn
+	 * down, yet. We verified that the peer is not NEW. Hence, the peer
+	 * pointer must be valid.
+	 * Be safe and verify it anyway.
+	 */
+	peer_info = rcu_dereference_protected(peer->info,
+					      &domain->active &&
+					      &peer->rwlock);
+	if (WARN_ON(!peer_info))
+		return -ESHUTDOWN;
+
+	mutex_lock(&domain->lock);
+	write_seqcount_begin(&domain->seqcount);
+
+	/* remove from rb-tree, and change the ID */
+	rb_erase(&peer->rb, &domain->map_peers);
+	peer->id = ++domain->info->peer_ids;
+
+	/* insert at the tail again */
+	last = rb_last(&domain->map_peers);
+	if (last)
+		rb_link_node_rcu(&peer->rb, last, &last->rb_right);
+	else
+		rb_link_node_rcu(&peer->rb, NULL,
+				 &domain->map_peers.rb_node);
+	rb_insert_color(&peer->rb, &domain->map_peers);
+
+	/* provide information for caller */
+	param->unique_id = peer->id;
+	param->pool_size = peer_info->pool.size;
+
+	write_seqcount_end(&domain->seqcount);
+	mutex_unlock(&domain->lock);
+
+	/* safe to call outside of domain-lock; we still hold the peer-lock */
+	bus1_peer_info_reset(peer_info, peer->id);
+
+	return 0;
+}
+
+static int bus1_peer_connect_query(struct bus1_peer *peer,
+				   struct bus1_domain *domain,
+				   struct bus1_cmd_connect *param)
+{
+	struct bus1_peer_info *peer_info;
+
+	lockdep_assert_held(&domain->active);
+	lockdep_assert_held(&peer->rwlock);
+
+	/* cannot query a peer that was never connected */
+	if (bus1_active_is_new(&peer->active))
+		return -ENOTCONN;
+
+	/*
+	 * We hold a domain-reference and peer-lock, the caller already
+	 * verified we're not disconnected. Barriers guarantee that the peer is
+	 * accessible, and both the domain teardown and peer-disconnect have to
+	 * wait for us to finish. However, to be safe, check for NULL anyway.
+	 */
+	peer_info = rcu_dereference_protected(peer->info,
+					      &domain->active &&
+					      &peer->rwlock);
+	if (WARN_ON(!peer_info))
+		return -ESHUTDOWN;
+
+	param->unique_id = peer->id;
+	param->pool_size = peer_info->pool.size;
+
+	return 0;
+}
+
+int bus1_peer_connect(struct bus1_peer *peer,
+		      struct bus1_domain *domain,
+		      unsigned long arg)
+{
+	struct bus1_cmd_connect __user *uparam = (void __user *)arg;
+	struct bus1_cmd_connect *param;
+	int r;
+
+	/*
+	 * The domain-active-reference guarantees that a domain teardown waits
+	 * for us, before it starts the force-disconnect on all clients.
+	 */
+	lockdep_assert_held(&domain->active);
+
+	param = bus1_import_dynamic_ioctl(arg, sizeof(*param));
+	if (IS_ERR(param))
+		return PTR_ERR(param);
+
+	/* check for validity of all flags */
+	if (param->flags & ~(BUS1_CONNECT_FLAG_PEER |
+			     BUS1_CONNECT_FLAG_MONITOR |
+			     BUS1_CONNECT_FLAG_QUERY |
+			     BUS1_CONNECT_FLAG_RESET))
+		return -EINVAL;
+	/* only one mode can be specified */
+	if (!!(param->flags & BUS1_CONNECT_FLAG_PEER) +
+	    !!(param->flags & BUS1_CONNECT_FLAG_MONITOR) +
+	    !!(param->flags & BUS1_CONNECT_FLAG_RESET) > 1)
+		return -EINVAL;
+	/* unique-id is never used as input */
+	if (param->unique_id != 0)
+		return -EINVAL;
+
+	/* lock against parallel CONNECT/DISCONNECT */
+	down_write(&peer->rwlock);
+
+	if (bus1_active_is_deactivated(&peer->active)) {
+		/* all fails, if the peer was already disconnected */
+		r = -ESHUTDOWN;
+	} else if (param->flags & (BUS1_CONNECT_FLAG_PEER |
+				   BUS1_CONNECT_FLAG_MONITOR)) {
+		/* fresh connect of a new peer */
+		r = bus1_peer_connect_new(peer, domain, param);
+	} else if (param->flags & BUS1_CONNECT_FLAG_RESET) {
+		/* reset of the peer requested */
+		r = bus1_peer_connect_reset(peer, domain, param);
+	} else if (param->flags & BUS1_CONNECT_FLAG_QUERY) {
+		/* fallback: no special operation specified, just query */
+		r = bus1_peer_connect_query(peer, domain, param);
+	} else {
+		r = -EINVAL; /* no mode specified */
+	}
+
+	up_write(&peer->rwlock);
+
+	/*
+	 * QUERY can be combined with any CONNECT operation. On success, it
+	 * causes the peer-id and pool-size to be copied back to user-space.
+	 * All handlers above must provide that information in @param for this
+	 * to copy it back.
+	 */
+	if (r >= 0 && (param->flags & BUS1_CONNECT_FLAG_QUERY)) {
+		if (put_user(param->unique_id, &uparam->unique_id) ||
+		    put_user(param->pool_size, &uparam->pool_size))
+			r = -EFAULT; /* Don't care.. keep what we did so far */
+	}
+
+	kfree(param);
+	return r;
+}
+
+int bus1_peer_disconnect(struct bus1_peer *peer, struct bus1_domain *domain)
+{
+	struct bus1_peer_cleanup_context ctx = { .domain = domain, };
+	int r;
+
+	/* lock against parallel CONNECT/DISCONNECT */
+	down_write(&peer->rwlock);
+
+	/* deactivate and wait for any outstanding operations */
+	bus1_active_deactivate(&peer->active);
+	bus1_active_drain(&peer->active, &peer->waitq);
+
+	/* lock domain and then release the peer */
+	mutex_lock(&domain->lock);
+	write_seqcount_begin(&domain->seqcount);
+
+	/*
+	 * We must not sleep on the peer->waitq, it could deadlock
+	 * since we already hold the domain-lock. However, luckily all
+	 * peer-releases are locked against the domain, so we wouldn't
+	 * gain anything by passing the waitq in.
+	 */
+	if (bus1_active_cleanup(&peer->active, NULL,
+				bus1_peer_cleanup_runtime, &ctx))
+		r = 0;
+	else
+		r = -ESHUTDOWN;
+
+	write_seqcount_end(&domain->seqcount);
+	mutex_unlock(&domain->lock);
+	up_write(&peer->rwlock);
+
+	/*
+	 * bus1_peer_cleanup() returns the now stale peer pointer via the
+	 * context (but only if it really released the peer, otherwise it is
+	 * NULL). It allows us to drop the locks before calling into
+	 * bus1_peer_info_free(). This is not strictly necessary, but reduces
+	 * lock-contention on @domain->lock.
+	 */
+	bus1_peer_info_free(ctx.stale_info);
 
 	return r;
 }

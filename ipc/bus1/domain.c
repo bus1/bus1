@@ -20,7 +20,6 @@
 #include <linux/wait.h>
 #include "active.h"
 #include "domain.h"
-#include "filesystem.h"
 #include "peer.h"
 #include "util.h"
 
@@ -314,7 +313,7 @@ int bus1_domain_resolve(struct bus1_domain *domain, unsigned long arg)
 {
 	struct bus1_cmd_resolve __user *uparam = (void __user *)arg;
 	struct bus1_cmd_resolve *param;
-	struct bus1_fs_name *fs_name;
+	struct bus1_peer_name *peer_name;
 	struct rb_node *n;
 	size_t namelen;
 	unsigned seq;
@@ -357,11 +356,11 @@ int bus1_domain_resolve(struct bus1_domain *domain, unsigned long arg)
 		rcu_read_lock();
 		n = rcu_dereference(domain->map_names.rb_node);
 		while (n) {
-			fs_name = container_of(n, struct bus1_fs_name, rb);
-			v = strcmp(param->name, fs_name->name);
+			peer_name = container_of(n, struct bus1_peer_name, rb);
+			v = strcmp(param->name, peer_name->name);
 			if (v == 0) {
-				if (bus1_active_is_active(&fs_name->peer->active))
-					param->unique_id = fs_name->peer->id;
+				if (bus1_active_is_active(&peer_name->peer->active))
+					param->unique_id = peer_name->peer->id;
 				break;
 			} else if (v < 0) {
 				n = rcu_dereference(n->rb_left);

@@ -19,12 +19,17 @@
 #include <linux/kernel.h>
 #include <linux/mutex.h>
 #include <linux/rcupdate.h>
+#include <linux/rbtree.h>
+#include <linux/rwsem.h>
+#include <linux/wait.h>
 #include <uapi/linux/bus1.h>
+#include "active.h"
 #include "pool.h"
 #include "queue.h"
 
 struct bus1_domain;
 struct bus1_domain_info;
+struct bus1_peer_name;
 
 /**
  * struct bus1_peer_info - peer information
@@ -58,5 +63,43 @@ int bus1_peer_info_ioctl(struct bus1_peer_info *peer_info,
 			 unsigned int cmd,
 			 unsigned long arg,
 			 bool is_compat);
+
+struct bus1_peer {
+	struct rw_semaphore rwlock;
+	wait_queue_head_t waitq;
+	struct bus1_active active;
+	struct bus1_peer_info __rcu *info;
+	struct bus1_peer_name *names;
+	struct rb_node rb;
+	struct rcu_head rcu;
+	u64 id;
+};
+
+struct bus1_peer_name {
+	struct rcu_head rcu;
+	struct bus1_peer_name *next;
+	struct bus1_peer *peer;
+	struct rb_node rb;
+	char name[];
+};
+
+struct bus1_peer_cleanup_context {
+	struct bus1_domain *domain;
+	struct bus1_peer_info *stale_info;
+};
+
+struct bus1_peer *bus1_peer_new(void);
+struct bus1_peer *bus1_peer_free(struct bus1_peer *peer);
+void bus1_peer_cleanup(struct bus1_peer *peer,
+		       struct bus1_peer_cleanup_context *ctx,
+		       bool drop_from_tree);
+struct bus1_peer *bus1_peer_acquire(struct bus1_peer *peer);
+struct bus1_peer *bus1_peer_acquire_by_id(struct bus1_domain *domain, u64 id);
+struct bus1_peer *bus1_peer_release(struct bus1_peer *peer);
+struct bus1_peer_info *bus1_peer_dereference(struct bus1_peer *peer);
+int bus1_peer_connect(struct bus1_peer *peer,
+		      struct bus1_domain *domain,
+		      unsigned long arg);
+int bus1_peer_disconnect(struct bus1_peer *peer, struct bus1_domain *domain);
 
 #endif /* __BUS1_PEER_H */
