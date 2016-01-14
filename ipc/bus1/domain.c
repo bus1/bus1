@@ -129,14 +129,6 @@ static void bus1_domain_cleanup(struct bus1_active *active, void *userdata)
 	domain->info = bus1_domain_info_free(domain->info);
 }
 
-static void bus1_domain_cleanup_peer(struct bus1_active *active, void *userdata)
-{
-	struct bus1_peer *peer = container_of(active, struct bus1_peer,
-					      active);
-
-	bus1_peer_cleanup(peer, userdata, false);
-}
-
 /**
  * bus1_domain_teardown() - deactivate and tear down a domain
  * @domain:	domain to tear down
@@ -152,7 +144,6 @@ static void bus1_domain_cleanup_peer(struct bus1_active *active, void *userdata)
  */
 void bus1_domain_teardown(struct bus1_domain *domain)
 {
-	struct bus1_peer_cleanup_context ctx = { .domain = domain, };
 	struct bus1_peer *peer;
 	struct rb_node *n;
 
@@ -185,32 +176,7 @@ void bus1_domain_teardown(struct bus1_domain *domain)
 	write_seqcount_begin(&domain->seqcount);
 	for (n = rb_first(&domain->map_peers); n; n = rb_next(n)) {
 		peer = container_of(n, struct bus1_peer, rb);
-
-		/*
-		 * We must not sleep on the peer->waitq, it could deadlock
-		 * since we already hold the domain-lock. However, luckily all
-		 * peer-releases are locked against the domain, so we wouldn't
-		 * gain anything by passing the waitq in.
-		 *
-		 * We use a custom cleanup-callback which does the normal peer
-		 * cleanup, but leaves the rb-tree untouched. This simplifies
-		 * our iterator, as long as we properly reset the tree
-		 * afterwards.
-		 */
-		ctx.stale_info = NULL;
-		bus1_active_cleanup(&peer->active, NULL,
-				    bus1_domain_cleanup_peer, &ctx);
-
-		/*
-		 * bus1_peer_cleanup() returns the now stale info object via
-		 * the context (but only if it really released the object, so
-		 * it might be NULL). This allows us to drop @domain->lock
-		 * before calling into bus1_peer_info_free(). It reduces lock
-		 * contention during peer disconnects. However, during domain
-		 * teardown, we couldn't care less, so we simply release it
-		 * directly.
-		 */
-		bus1_peer_info_free(ctx.stale_info);
+		bus1_peer_teardown_domain(peer, domain);
 	}
 	WARN_ON(!RB_EMPTY_ROOT(&domain->map_names));
 	WARN_ON(domain->n_names > 0);

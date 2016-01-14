@@ -76,17 +76,11 @@ struct bus1_peer {
 	u64 id;
 };
 
-struct bus1_peer_cleanup_context {
-	struct bus1_domain *domain;
-	struct bus1_peer_info *stale_info;
-};
-
 struct bus1_peer *bus1_peer_new(void);
 struct bus1_peer *bus1_peer_free(struct bus1_peer *peer);
-void bus1_peer_cleanup(struct bus1_peer *peer,
-		       struct bus1_peer_cleanup_context *ctx,
-		       bool drop_from_tree);
 int bus1_peer_teardown(struct bus1_peer *peer, struct bus1_domain *domain);
+void bus1_peer_teardown_domain(struct bus1_peer *peer,
+			       struct bus1_domain *domain);
 struct bus1_peer *bus1_peer_acquire(struct bus1_peer *peer);
 struct bus1_peer *bus1_peer_acquire_by_id(struct bus1_domain *domain, u64 id);
 struct bus1_peer *bus1_peer_release(struct bus1_peer *peer);

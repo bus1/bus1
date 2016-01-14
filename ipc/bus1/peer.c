@@ -263,15 +263,14 @@ struct bus1_peer *bus1_peer_free(struct bus1_peer *peer)
 	return NULL;
 }
 
-/**
- * bus1_peer_cleanup() - cleanup peer
- * @peer:		peer to operate on
- * @ctx:		cleanup context from caller
- * @drop_from_tree:	whether to drop the peer from the domain map
- */
-void bus1_peer_cleanup(struct bus1_peer *peer,
-		       struct bus1_peer_cleanup_context *ctx,
-		       bool drop_from_tree)
+struct bus1_peer_cleanup_context {
+	struct bus1_domain *domain;
+	struct bus1_peer_info *stale_info;
+};
+
+static void bus1_peer_cleanup(struct bus1_peer *peer,
+			      struct bus1_peer_cleanup_context *ctx,
+			      bool drop_from_tree)
 {
 	struct bus1_domain *domain = ctx->domain;
 	struct bus1_peer_name *peer_name;
@@ -380,6 +379,70 @@ int bus1_peer_teardown(struct bus1_peer *peer, struct bus1_domain *domain)
 	bus1_peer_info_free(ctx.stale_info);
 
 	return r;
+}
+
+static void bus1_peer_cleanup_domain(struct bus1_active *active,
+				     void *userdata)
+{
+	struct bus1_peer *peer = container_of(active, struct bus1_peer,
+					      active);
+
+	bus1_peer_cleanup(peer, userdata, false);
+}
+
+/**
+ * bus1_peer_teardown_domain() - tear down peer
+ * @peer:	peer to tear down
+ * @domain:	parent domain
+ *
+ * This is similar to bus1_peer_teardown(), but is modified to be called during
+ * domain teardown. The domain is responsible to deactivate and drain a peer
+ * before calling into this. Furthermore, the domain itself must be deactivated
+ * and drained already.
+ *
+ * This function simply cleans up the peer object and releases associated
+ * resources. However, this function does *NOT* remove the peer from the
+ * peer-map. This allows the caller to safely iterate the peer map and call
+ * this helper on all peers.
+ *
+ * The caller is responsible to reset the peer-map afterwards.
+ *
+ * The caller must hold the domain lock and seqlock.
+ *
+ * This function can be called multiple times just fine. Anything but the first
+ * call will be a no-op.
+ */
+void bus1_peer_teardown_domain(struct bus1_peer *peer,
+			       struct bus1_domain *domain)
+{
+	struct bus1_peer_cleanup_context ctx = { .domain = domain, };
+
+	lockdep_assert_held(&domain->lock);
+	lockdep_assert_held(&domain->seqcount);
+
+	/*
+	 * We must not sleep on the peer->waitq, it could deadlock
+	 * since we already hold the domain-lock. However, luckily all
+	 * peer-releases are locked against the domain, so we wouldn't
+	 * gain anything by passing the waitq in.
+	 *
+	 * We use a custom cleanup-callback which does the normal peer
+	 * cleanup, but leaves the rb-tree untouched. This simplifies
+	 * our iterator, as long as we properly reset the tree
+	 * afterwards.
+	 */
+	bus1_active_cleanup(&peer->active, NULL,
+			    bus1_peer_cleanup_domain, &ctx);
+
+	/*
+	 * bus1_peer_cleanup() returns the now stale peer pointer via the
+	 * context (but only if it really released the peer, otherwise it is
+	 * NULL). It allows us to drop the locks before calling into
+	 * bus1_peer_info_free(). However, we're called from domain teardown,
+	 * so lock contention doesn't matter, so release it without dropping
+	 * any lock.
+	 */
+	bus1_peer_info_free(ctx.stale_info);
 }
 
 /**
