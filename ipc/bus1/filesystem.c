@@ -64,7 +64,7 @@ struct bus1_fs_name {
  *
  * The bus1_fs_peer object is the low-level handle for peers. It is stored in
  * each open-file of the `bus' node. As long as you hold an active reference on
- * @active, you can access @peer and it will be non-NULL. Furthermore, @peer
+ * @active, you can access @info and it will be non-NULL. Furthermore, @info
  * can be accessed via rcu, in which case it might be NULL, though.
  *
  * @rwlock is used to protect peer setup and resets. It is only used by the
@@ -80,7 +80,7 @@ struct bus1_fs_name {
  * If you also hold @rwlock, you're thusly protected against teardown and can
  * dereference @peer (but it might be NULL).
  *
- * Technically, @id belongs into @peer. However, we want it close to @rb to
+ * Technically, @id belongs into @info. However, we want it close to @rb to
  * speed up the peer lookups considerably. Otherwise, it had to be protected by
  * the peer-lock (to support RESET), which would be way too heavy.
  */
@@ -88,7 +88,7 @@ struct bus1_fs_peer {
 	struct rw_semaphore rwlock;
 	wait_queue_head_t waitq;
 	struct bus1_active active;
-	struct bus1_peer __rcu *peer;
+	struct bus1_peer_info __rcu *info;
 	struct bus1_fs_name *names;
 	struct rb_node rb;
 	struct rcu_head rcu;
@@ -235,7 +235,7 @@ static struct bus1_fs_peer *bus1_fs_peer_new(void)
 	init_rwsem(&fs_peer->rwlock);
 	init_waitqueue_head(&fs_peer->waitq);
 	bus1_active_init(&fs_peer->active);
-	rcu_assign_pointer(fs_peer->peer, NULL);
+	rcu_assign_pointer(fs_peer->info, NULL);
 	fs_peer->names = NULL;
 	RB_CLEAR_NODE(&fs_peer->rb);
 	fs_peer->id = 0;
@@ -251,7 +251,7 @@ bus1_fs_peer_free(struct bus1_fs_peer *fs_peer)
 
 	/* fs_peer->rb might be stray */
 	WARN_ON(fs_peer->names);
-	WARN_ON(rcu_access_pointer(fs_peer->peer));
+	WARN_ON(rcu_access_pointer(fs_peer->info));
 	bus1_active_destroy(&fs_peer->active);
 	kfree_rcu(fs_peer, rcu);
 
@@ -260,7 +260,7 @@ bus1_fs_peer_free(struct bus1_fs_peer *fs_peer)
 
 struct bus1_fs_peer_cleanup_context {
 	struct bus1_fs_domain *fs_domain;
-	struct bus1_peer *stale_peer;
+	struct bus1_peer_info *stale_info;
 };
 
 static void bus1_fs_peer_cleanup(struct bus1_fs_peer *fs_peer,
@@ -269,7 +269,7 @@ static void bus1_fs_peer_cleanup(struct bus1_fs_peer *fs_peer,
 {
 	struct bus1_fs_domain *fs_domain = ctx->fs_domain;
 	struct bus1_fs_name *fs_name;
-	struct bus1_peer *peer;
+	struct bus1_peer_info *peer_info;
 
 	/*
 	 * This function is called by bus1_active_cleanup(), once all active
@@ -280,21 +280,21 @@ static void bus1_fs_peer_cleanup(struct bus1_fs_peer *fs_peer,
 	 * During domain teardown, we avoid dropping peers from the tree, so we
 	 * can safely iterate the tree and reset it afterwards.
 	 *
-	 * If this released the peer, the peer-object is returned to the caller
-	 * via the passed in context. The caller must destroy it by calling
-	 * bus1_peer_free(). We skip this step here, to allow the caller to
-	 * drop locks before freeing the peer, and thus reducing lock
-	 * contention.
-	 * The caller really ought to initialize @ctx->stale_peer to NULL, so
+	 * If this released the peer, the peer information object is returned
+	 * to the caller via the passed in context. The caller must destroy it
+	 * by calling bus1_peer_info_free(). We skip this step here, to allow
+	 * the caller to drop locks before freeing the peer, and thus reducing
+	 * lock contention.
+	 * The caller really ought to initialize @ctx->stale_info to NULL, so
 	 * it can check whether this call actually released the peer or not.
 	 */
 
 	lockdep_assert_held(&fs_domain->lock);
 	lockdep_assert_held(&fs_domain->seqcount);
-	WARN_ON(ctx->stale_peer);
+	WARN_ON(ctx->stale_info);
 
-	peer = rcu_dereference_protected(fs_peer->peer, &fs_domain->lock);
-	if (peer) {
+	peer_info = rcu_dereference_protected(fs_peer->info, &fs_domain->lock);
+	if (peer_info) {
 		while ((fs_name = fs_peer->names)) {
 			fs_peer->names = fs_peer->names->next;
 			bus1_fs_name_pop(fs_domain, fs_name);
@@ -307,16 +307,17 @@ static void bus1_fs_peer_cleanup(struct bus1_fs_peer *fs_peer,
 		--fs_domain->n_peers;
 
 		/*
-		 * Reset @fs_peer->peer so any racing rcu-call will get NULL
+		 * Reset @fs_peer->info so any racing rcu-call will get NULL
 		 * before the peer is released via kfree_rcu().
 		 *
-		 * Instead of calling into bus1_peer_free(), return the stale
-		 * peer via the context to the caller. The object is fully
-		 * unlinked (except for harmless rcu queries), so the caller
-		 * can drop their locks before calling into bus1_peer_free().
+		 * Instead of calling into bus1_peer_info_free(), return the
+		 * stale peer via the context to the caller. The object is
+		 * fully unlinked (except for harmless rcu queries), so the
+		 * caller can drop their locks before calling into
+		 * bus1_peer_info_free().
 		 */
-		rcu_assign_pointer(fs_peer->peer, NULL);
-		ctx->stale_peer = peer;
+		rcu_assign_pointer(fs_peer->info, NULL);
+		ctx->stale_info = peer_info;
 	} else {
 		WARN_ON(fs_peer->names);
 	}
@@ -412,9 +413,10 @@ struct bus1_fs_peer *bus1_fs_peer_release(struct bus1_fs_peer *fs_peer)
  * @fs_peer:	handle to dereference
  *
  * Dereference a peer handle to get access to the underlying peer object. This
- * function simply returns the peer-pointer, which then can be accessed
- * directly by the caller. The caller must hold an active reference to the
- * handle, and retain it as long as the peer object is used.
+ * function simply returns the pointer to the linked peer information object,
+ * which then can be accessed directly by the caller. The caller must hold an
+ * active reference to the handle, and retain it as long as the peer object is
+ * used.
  *
  * Note: If you weren't called through this handle, but rather retrieved it via
  *       other means (eg., domain lookup), you must be aware that this handle
@@ -429,13 +431,13 @@ struct bus1_fs_peer *bus1_fs_peer_release(struct bus1_fs_peer *fs_peer)
  *       operation thus gets the impression that it succeeded (and should be
  *       tracking the peer to get notified about the reset, if interested).
  *
- * Return: Pointer to the underlying peer is returned.
+ * Return: Pointer to the underlying peer information object is returned.
  */
-struct bus1_peer *bus1_fs_peer_dereference(struct bus1_fs_peer *fs_peer)
+struct bus1_peer_info *bus1_fs_peer_dereference(struct bus1_fs_peer *fs_peer)
 {
 	lockdep_assert_held(&fs_peer->active);
 
-	return rcu_dereference_protected(fs_peer->peer, &fs_peer->active);
+	return rcu_dereference_protected(fs_peer->info, &fs_peer->active);
 }
 
 static int bus1_fs_peer_connect_new(struct bus1_fs_peer *fs_peer,
@@ -443,7 +445,7 @@ static int bus1_fs_peer_connect_new(struct bus1_fs_peer *fs_peer,
 				    struct bus1_cmd_connect *param)
 {
 	struct bus1_fs_name *fs_name, *names = NULL;
-	struct bus1_peer *peer;
+	struct bus1_peer_info *peer_info;
 	struct rb_node *last;
 	size_t n, remaining;
 	const char *name;
@@ -466,18 +468,18 @@ static int bus1_fs_peer_connect_new(struct bus1_fs_peer *fs_peer,
 	/*
 	 * The domain-reference and peer-lock guarantee that no other
 	 * connect, disconnect, or teardown can race us (they wait for us). We
-	 * also verified that the peer is NEW. Hence, fs_peer->peer must be
+	 * also verified that the peer is NEW. Hence, fs_peer->info must be
 	 * NULL. We still verify it, just to be safe.
 	 */
-	if (WARN_ON(rcu_dereference_protected(fs_peer->peer,
+	if (WARN_ON(rcu_dereference_protected(fs_peer->info,
 					      &fs_domain->active &&
 					      &fs_peer->rwlock)))
 		return -EISCONN;
 
-	/* allocate new peer object */
-	peer = bus1_peer_new(param);
-	if (IS_ERR(peer))
-		return PTR_ERR(peer);
+	/* allocate new peer_info object */
+	peer_info = bus1_peer_info_new(param);
+	if (IS_ERR(peer_info))
+		return PTR_ERR(peer_info);
 
 	/* allocate names */
 	name = param->names;
@@ -529,7 +531,7 @@ static int bus1_fs_peer_connect_new(struct bus1_fs_peer *fs_peer,
 
 	/* acquire ID and activate handle */
 	fs_peer->id = ++fs_domain->domain->peer_ids;
-	rcu_assign_pointer(fs_peer->peer, peer);
+	rcu_assign_pointer(fs_peer->info, peer_info);
 	++fs_domain->n_peers;
 	bus1_active_activate(&fs_peer->active);
 
@@ -550,7 +552,7 @@ error:
 
 	write_seqcount_end(&fs_domain->seqcount);
 	mutex_unlock(&fs_domain->lock);
-	bus1_peer_free(peer);
+	bus1_peer_info_free(peer_info);
 	return r;
 }
 
@@ -558,7 +560,7 @@ static int bus1_fs_peer_connect_reset(struct bus1_fs_peer *fs_peer,
 				      struct bus1_fs_domain *fs_domain,
 				      struct bus1_cmd_connect *param)
 {
-	struct bus1_peer *peer;
+	struct bus1_peer_info *peer_info;
 	struct rb_node *last;
 
 	/*
@@ -591,10 +593,10 @@ static int bus1_fs_peer_connect_reset(struct bus1_fs_peer *fs_peer,
 	 * pointer must be valid.
 	 * Be safe and verify it anyway.
 	 */
-	peer = rcu_dereference_protected(fs_peer->peer,
-					 &fs_domain->active &&
-					 &fs_peer->rwlock);
-	if (WARN_ON(!peer))
+	peer_info = rcu_dereference_protected(fs_peer->info,
+					      &fs_domain->active &&
+					      &fs_peer->rwlock);
+	if (WARN_ON(!peer_info))
 		return -ESHUTDOWN;
 
 	mutex_lock(&fs_domain->lock);
@@ -615,13 +617,13 @@ static int bus1_fs_peer_connect_reset(struct bus1_fs_peer *fs_peer,
 
 	/* provide information for caller */
 	param->unique_id = fs_peer->id;
-	param->pool_size = peer->pool.size;
+	param->pool_size = peer_info->pool.size;
 
 	write_seqcount_end(&fs_domain->seqcount);
 	mutex_unlock(&fs_domain->lock);
 
 	/* safe to call outside of domain-lock; we still hold the peer-lock */
-	bus1_peer_reset(peer, fs_peer->id);
+	bus1_peer_info_reset(peer_info, fs_peer->id);
 
 	return 0;
 }
@@ -630,7 +632,7 @@ static int bus1_fs_peer_connect_query(struct bus1_fs_peer *fs_peer,
 				      struct bus1_fs_domain *fs_domain,
 				      struct bus1_cmd_connect *param)
 {
-	struct bus1_peer *peer;
+	struct bus1_peer_info *peer_info;
 
 	lockdep_assert_held(&fs_domain->active);
 	lockdep_assert_held(&fs_peer->rwlock);
@@ -645,14 +647,14 @@ static int bus1_fs_peer_connect_query(struct bus1_fs_peer *fs_peer,
 	 * accessible, and both the domain teardown and peer-disconnect have to
 	 * wait for us to finish. However, to be safe, check for NULL anyway.
 	 */
-	peer = rcu_dereference_protected(fs_peer->peer,
-					 &fs_domain->active &&
-					 &fs_peer->rwlock);
-	if (WARN_ON(!peer))
+	peer_info = rcu_dereference_protected(fs_peer->info,
+					      &fs_domain->active &&
+					      &fs_peer->rwlock);
+	if (WARN_ON(!peer_info))
 		return -ESHUTDOWN;
 
 	param->unique_id = fs_peer->id;
-	param->pool_size = peer->pool.size;
+	param->pool_size = peer_info->pool.size;
 
 	return 0;
 }
@@ -765,10 +767,10 @@ static int bus1_fs_peer_disconnect(struct bus1_fs_peer *fs_peer,
 	 * bus1_fs_peer_cleanup() returns the now stale peer pointer via the
 	 * context (but only if it really released the peer, otherwise it is
 	 * NULL). It allows us to drop the locks before calling into
-	 * bus1_peer_free(). This is not strictly necessary, but reduces
+	 * bus1_peer_info_free(). This is not strictly necessary, but reduces
 	 * lock-contention on @fs_domain->lock.
 	 */
-	bus1_peer_free(ctx.stale_peer);
+	bus1_peer_info_free(ctx.stale_info);
 
 	return r;
 }
@@ -917,8 +919,10 @@ static void bus1_fs_domain_teardown(struct bus1_fs_domain *fs_domain)
 		bus1_active_drain(&fs_peer->active, &fs_peer->waitq);
 	}
 
-	/* Don't hold the write seqcount when draining the peer. It is ok not
-         * to, as the domain maps are not changed whilst draining the peers. */
+	/*
+	 * Don't hold the write seqcount when draining the peer. It is ok not
+	 * to, as the domain maps are not changed whilst draining the peers.
+	 */
 	write_seqcount_begin(&fs_domain->seqcount);
 	for (n = rb_first(&fs_domain->map_peers); n; n = rb_next(n)) {
 		fs_peer = container_of(n, struct bus1_fs_peer, rb);
@@ -934,20 +938,20 @@ static void bus1_fs_domain_teardown(struct bus1_fs_domain *fs_domain)
 		 * our iterator, as long as we properly reset the tree
 		 * afterwards.
 		 */
-		ctx.stale_peer = NULL;
+		ctx.stale_info = NULL;
 		bus1_active_cleanup(&fs_peer->active, NULL,
 				    bus1_fs_peer_cleanup_teardown, &ctx);
 
 		/*
-		 * bus1_fs_peer_cleanup() returns the now stale peer object via
+		 * bus1_fs_peer_cleanup() returns the now stale info object via
 		 * the context (but only if it really released the object, so
 		 * it might be NULL). This allows us to drop @fs_domain->lock
-		 * before calling into bus1_peer_free(). It reduces lock
+		 * before calling into bus1_peer_info_free(). It reduces lock
 		 * contention during peer disconnects. However, during domain
 		 * teardown, we couldn't care less, so we simply release it
 		 * directly.
 		 */
-		bus1_peer_free(ctx.stale_peer);
+		bus1_peer_info_free(ctx.stale_info);
 	}
 	WARN_ON(!RB_EMPTY_ROOT(&fs_domain->map_names));
 	WARN_ON(fs_domain->n_names > 0);
@@ -1115,10 +1119,11 @@ static long bus1_fs_bus_fop_ioctl(struct file *file,
 		if (!bus1_fs_peer_acquire(fs_peer)) {
 			r = -ESHUTDOWN;
 		} else {
-			r = bus1_peer_ioctl(bus1_fs_peer_dereference(fs_peer),
-					    fs_peer->id,
-					    fs_domain, fs_domain->domain,
-					    cmd, arg, is_compat);
+			r = bus1_peer_info_ioctl(
+					bus1_fs_peer_dereference(fs_peer),
+					fs_peer->id,
+					fs_domain, fs_domain->domain,
+					cmd, arg, is_compat);
 			bus1_fs_peer_release(fs_peer);
 		}
 		up_read(&fs_peer->rwlock);
@@ -1136,7 +1141,7 @@ static unsigned int bus1_fs_bus_fop_poll(struct file *file,
 					 struct poll_table_struct *wait)
 {
 	struct bus1_fs_peer *fs_peer = file->private_data;
-	struct bus1_peer *peer;
+	struct bus1_peer_info *peer_info;
 	unsigned int mask = 0;
 
 	poll_wait(file, &fs_peer->waitq, wait);
@@ -1154,12 +1159,13 @@ static unsigned int bus1_fs_bus_fop_poll(struct file *file,
 	 */
 	rcu_read_lock();
 	if (!bus1_active_is_new(&fs_peer->active)) {
-		peer = rcu_dereference(fs_peer->peer);
-		if (bus1_active_is_deactivated(&fs_peer->active) || !peer) {
+		peer_info = rcu_dereference(fs_peer->info);
+		if (bus1_active_is_deactivated(&fs_peer->active) ||
+		    !peer_info) {
 			mask = POLLERR | POLLHUP;
 		} else {
 			mask = POLLOUT | POLLWRNORM;
-			if (bus1_queue_peek_rcu(&peer->queue))
+			if (bus1_queue_peek_rcu(&peer_info->queue))
 				mask |= POLLIN | POLLRDNORM;
 		}
 	}

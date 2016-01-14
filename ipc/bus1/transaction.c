@@ -113,7 +113,7 @@ bus1_transaction_free(struct bus1_transaction *transaction)
 {
 	struct bus1_queue_entry *entry;
 	struct bus1_fs_peer *fs_peer;
-	struct bus1_peer *peer;
+	struct bus1_peer_info *peer_info;
 	size_t i;
 
 	if (!transaction)
@@ -126,12 +126,12 @@ bus1_transaction_free(struct bus1_transaction *transaction)
 		entry->transaction.fs_peer = NULL;
 		entry->transaction.next = NULL;
 
-		peer = bus1_fs_peer_dereference(fs_peer);
+		peer_info = bus1_fs_peer_dereference(fs_peer);
 
-		mutex_lock(&peer->lock);
-		entry->slice = bus1_pool_release_kernel(&peer->pool,
+		mutex_lock(&peer_info->lock);
+		entry->slice = bus1_pool_release_kernel(&peer_info->pool,
 							entry->slice);
-		mutex_unlock(&peer->lock);
+		mutex_unlock(&peer_info->lock);
 
 		bus1_fs_peer_release(fs_peer);
 		bus1_queue_entry_free(entry); /* fput()s entry->files[] */
@@ -304,7 +304,7 @@ error:
 
 static struct bus1_queue_entry *
 bus1_transaction_instantiate(struct bus1_transaction *transaction,
-			     struct bus1_peer *peer,
+			     struct bus1_peer_info *peer_info,
 			     u64 peer_id)
 {
 	struct bus1_queue_entry *entry;
@@ -321,12 +321,12 @@ bus1_transaction_instantiate(struct bus1_transaction *transaction,
 	 * message *and* the trailing FD array. Overflows are already checked
 	 * by the importer.
 	 */
-	mutex_lock(&peer->lock);
-	slice = bus1_pool_alloc(&peer->pool,
+	mutex_lock(&peer_info->lock);
+	slice = bus1_pool_alloc(&peer_info->pool,
 				transaction->length_vecs +
 				transaction->n_files * sizeof(int),
 				true);
-	mutex_unlock(&peer->lock);
+	mutex_unlock(&peer_info->lock);
 
 	if (IS_ERR(slice)) {
 		r = PTR_ERR(slice);
@@ -339,7 +339,7 @@ bus1_transaction_instantiate(struct bus1_transaction *transaction,
 	 * copied, the trailing FD array is left uninitialized. They're filled
 	 * in when the message is received.
 	 */
-	r = bus1_pool_write_iovec(&peer->pool,		/* pool to write */
+	r = bus1_pool_write_iovec(&peer_info->pool,	/* pool to write */
 				  slice,		/* slice to write to */
 				  0,			/* offset into slice */
 				  transaction->vecs,	/* vectors */
@@ -360,9 +360,9 @@ bus1_transaction_instantiate(struct bus1_transaction *transaction,
 
 error:
 	if (slice) {
-		mutex_lock(&peer->lock);
-		bus1_pool_release_kernel(&peer->pool, slice);
-		mutex_unlock(&peer->lock);
+		mutex_lock(&peer_info->lock);
+		bus1_pool_release_kernel(&peer_info->pool, slice);
+		mutex_unlock(&peer_info->lock);
 	}
 	bus1_queue_entry_free(entry); /* fput()s entry->files[] */
 	return ERR_PTR(r);
@@ -444,7 +444,7 @@ void bus1_transaction_commit(struct bus1_transaction *transaction)
 {
 	struct bus1_queue_entry *e, *second;
 	struct bus1_fs_peer *fs_peer;
-	struct bus1_peer *peer;
+	struct bus1_peer_info *peer_info;
 	bool wake;
 	u64 seq = 0;
 
@@ -477,11 +477,11 @@ void bus1_transaction_commit(struct bus1_transaction *transaction)
 	WARN_ON(!(seq & 1)); /* must be odd */
 
 	for (e = second; e; e = e->transaction.next) {
-		peer = bus1_fs_peer_dereference(e->transaction.fs_peer);
+		peer_info = bus1_fs_peer_dereference(e->transaction.fs_peer);
 
-		mutex_lock(&peer->lock);
-		wake = bus1_queue_link(&peer->queue, e, seq);
-		mutex_unlock(&peer->lock);
+		mutex_lock(&peer_info->lock);
+		wake = bus1_queue_link(&peer_info->queue, e, seq);
+		mutex_unlock(&peer_info->lock);
 
 		WARN_ON(wake); /* in-flight; cannot cause a wake-up */
 	}
@@ -496,22 +496,22 @@ void bus1_transaction_commit(struct bus1_transaction *transaction)
 	while ((e = transaction->entries)) {
 		transaction->entries = e->transaction.next;
 		fs_peer = e->transaction.fs_peer;
-		peer = bus1_fs_peer_dereference(fs_peer);
+		peer_info = bus1_fs_peer_dereference(fs_peer);
 
 		e->transaction.next = NULL;
 		e->transaction.fs_peer = NULL;
 
-		mutex_lock(&peer->lock);
+		mutex_lock(&peer_info->lock);
 		if (second == transaction->entries) { /* -> @e is first entry */
 			seq = atomic64_add_return(4,
 						&transaction->domain->seq_ids);
 			WARN_ON(seq & 1); /* must be even */
-			wake = bus1_queue_link(&peer->queue, e, seq);
+			wake = bus1_queue_link(&peer_info->queue, e, seq);
 		} else {
 			WARN_ON(seq == 0); /* must be assigned */
-			wake = bus1_queue_relink(&peer->queue, e, seq);
+			wake = bus1_queue_relink(&peer_info->queue, e, seq);
 		}
-		mutex_unlock(&peer->lock);
+		mutex_unlock(&peer_info->lock);
 
 		if (wake)
 			/* XXX: wake up peer */ ;
@@ -537,7 +537,7 @@ int bus1_transaction_commit_for_id(struct bus1_transaction *transaction,
 {
 	struct bus1_fs_peer *fs_peer;
 	struct bus1_queue_entry *e;
-	struct bus1_peer *peer;
+	struct bus1_peer_info *peer_info;
 	bool wake;
 	u64 seq;
 	int r;
@@ -547,9 +547,9 @@ int bus1_transaction_commit_for_id(struct bus1_transaction *transaction,
 	if (!fs_peer)
 		return (flags & BUS1_SEND_FLAG_IGNORE_UNKNOWN) ? 0 : -ENXIO;
 
-	peer = bus1_fs_peer_dereference(fs_peer);
+	peer_info = bus1_fs_peer_dereference(fs_peer);
 
-	e = bus1_transaction_instantiate(transaction, peer, peer_id);
+	e = bus1_transaction_instantiate(transaction, peer_info, peer_id);
 	if (IS_ERR(e)) {
 		r = PTR_ERR(e);
 		e = NULL;
@@ -560,11 +560,11 @@ int bus1_transaction_commit_for_id(struct bus1_transaction *transaction,
 	 * Unicast messages get a shared sequence number, strictly between the
 	 * previous and the next multicast message.
 	 */
-	mutex_lock(&peer->lock);
+	mutex_lock(&peer_info->lock);
 	seq = atomic64_read(&transaction->domain->seq_ids) + 2;
 	WARN_ON(seq & 1); /* must be even */
-	wake = bus1_queue_link(&peer->queue, e, seq);
-	mutex_unlock(&peer->lock);
+	wake = bus1_queue_link(&peer_info->queue, e, seq);
+	mutex_unlock(&peer_info->lock);
 
 	if (wake)
 		/* XXX: wake up peer */ ;

@@ -27,13 +27,13 @@ struct bus1_domain;
 struct bus1_fs_domain;
 
 /**
- * struct bus1_peer - peer
+ * struct bus1_peer_info - peer information
  * @lock:	data lock
  * @rcu:	rcu
  * @pool:	data pool
  * @queue:	message queue, rcu-accessible
  */
-struct bus1_peer {
+struct bus1_peer_info {
 	union {
 		struct mutex lock;
 		struct rcu_head rcu;
@@ -42,21 +42,21 @@ struct bus1_peer {
 	struct bus1_queue queue;
 };
 
-#define bus1_peer_from_pool(_pool) \
-	container_of((_pool), struct bus1_peer, pool)
-#define bus1_peer_from_queue(_queue) \
-	container_of((_queue), struct bus1_peer, queue)
+#define bus1_peer_info_from_pool(_pool) \
+	container_of((_pool), struct bus1_peer_info, pool)
+#define bus1_peer_info_from_queue(_queue) \
+	container_of((_queue), struct bus1_peer_info, queue)
 
-struct bus1_peer *bus1_peer_new(struct bus1_cmd_connect *param);
-struct bus1_peer *bus1_peer_free(struct bus1_peer *peer);
-void bus1_peer_reset(struct bus1_peer *peer, u64 id);
+struct bus1_peer_info *bus1_peer_info_new(struct bus1_cmd_connect *param);
+struct bus1_peer_info *bus1_peer_info_free(struct bus1_peer_info *peer_info);
+void bus1_peer_info_reset(struct bus1_peer_info *peer_info, u64 id);
 
-int bus1_peer_ioctl(struct bus1_peer *peer,
-		    u64 peer_id,
-		    struct bus1_fs_domain *fs_domain,
-		    struct bus1_domain *domain,
-		    unsigned int cmd,
-		    unsigned long arg,
-		    bool is_compat);
+int bus1_peer_info_ioctl(struct bus1_peer_info *peer_info,
+			 u64 peer_id,
+			 struct bus1_fs_domain *fs_domain,
+			 struct bus1_domain *domain,
+			 unsigned int cmd,
+			 unsigned long arg,
+			 bool is_compat);
 
 #endif /* __BUS1_PEER_H */

@@ -25,100 +25,103 @@
 #include "util.h"
 
 /**
- * bus1_peer_new() - create new peer
+ * bus1_peer_info_new() - create new peer information
  * @param:	parameter for peer
  *
- * Allocate a new peer object with the given parameters. The peer is not linked
- * into any domain, nor is any locking required for this call.
+ * Allocate a new peer information object with the given parameters. The object
+ * is not linked into any peer or domain, nor is any locking required for this
+ * call.
  *
- * Return: Pointer to new peer, or ERR_PTR on failure.
+ * Return: Pointer to new object, or ERR_PTR on failure.
  */
-struct bus1_peer *bus1_peer_new(struct bus1_cmd_connect *param)
+struct bus1_peer_info *bus1_peer_info_new(struct bus1_cmd_connect *param)
 {
-	struct bus1_peer *peer;
+	struct bus1_peer_info *peer_info;
 	int r;
 
 	if (unlikely(param->pool_size == 0 ||
 		     !IS_ALIGNED(param->pool_size, PAGE_SIZE)))
 		return ERR_PTR(-EINVAL);
 
-	peer = kmalloc(sizeof(*peer), GFP_KERNEL);
-	if (!peer)
+	peer_info = kmalloc(sizeof(*peer_info), GFP_KERNEL);
+	if (!peer_info)
 		return ERR_PTR(-ENOMEM);
 
-	mutex_init(&peer->lock);
-	peer->pool = BUS1_POOL_NULL;
-	bus1_queue_init_for_peer(&peer->queue, peer);
+	mutex_init(&peer_info->lock);
+	peer_info->pool = BUS1_POOL_NULL;
+	bus1_queue_init_for_peer(&peer_info->queue, peer_info);
 
-	r = bus1_pool_create_for_peer(&peer->pool, peer, param->pool_size);
+	r = bus1_pool_create_for_peer(&peer_info->pool, peer_info,
+				      param->pool_size);
 	if (r < 0)
 		goto error;
 
-	return peer;
+	return peer_info;
 
 error:
-	bus1_peer_free(peer);
+	bus1_peer_info_free(peer_info);
 	return ERR_PTR(r);
 }
 
 /**
- * bus1_peer_free() - destroy peer
- * @peer:	peer to destroy, or NULL
+ * bus1_peer_info_free() - destroy peer information object
+ * @peer_info:	object to destroy, or NULL
  *
- * This destroys and deallocates a peer object, which was previously created
- * via bus1_peer_new(). The caller must make sure no-one else is accessing the
- * peer object at the same time.
+ * This destroys and deallocates a peer inforation object, which was previously
+ * created via bus1_peer_info_new(). The caller must make sure no-one else is
+ * accessing the object, anymore.
  *
- * The peer-object is released in an rcu-delayed manner. That is, the object
+ * The object is released in an rcu-delayed manner. That is, the object
  * will stay accessible for at least one rcu grace period.
  *
  * If NULL is passed, this is a no-op.
  *
  * Return: NULL is returned.
  */
-struct bus1_peer *bus1_peer_free(struct bus1_peer *peer)
+struct bus1_peer_info *bus1_peer_info_free(struct bus1_peer_info *peer_info)
 {
-	if (!peer)
+	if (!peer_info)
 		return NULL;
 
-	mutex_lock(&peer->lock); /* lock peer to make lockdep happy */
-	bus1_queue_flush(&peer->queue, &peer->pool, 0);
-	mutex_unlock(&peer->lock);
+	mutex_lock(&peer_info->lock); /* lock peer to make lockdep happy */
+	bus1_queue_flush(&peer_info->queue, &peer_info->pool, 0);
+	mutex_unlock(&peer_info->lock);
 
-	bus1_queue_destroy(&peer->queue);
-	bus1_pool_destroy(&peer->pool);
+	bus1_queue_destroy(&peer_info->queue);
+	bus1_pool_destroy(&peer_info->pool);
 
 	/*
-	 * Make sure the peer object is freed in a delayed-manner. Some
+	 * Make sure the object is freed in a delayed-manner. Some
 	 * embedded members (like the queue) must be accessible for an entire
 	 * rcu read-side critical section.
 	 */
-	kfree_rcu(peer, rcu);
+	kfree_rcu(peer_info, rcu);
 
 	return NULL;
 }
 
 /**
- * bus1_peer_reset() - reset peer
- * @peer:	peer to reset
+ * bus1_peer_info_reset() - reset peer information object
+ * @peer_info:	peer information object to reset
  * @id:		ID of peer
  *
- * Reset a peer object. The caller must provide the new peer ID as @id. This
- * function will flush all data on the peer, which is tagged with an ID that
- * does not match the new ID @id.
+ * Reset a peer information object. The caller must provide the new peer ID as
+ * @id. This function will flush all data on the peer, which is tagged with an
+ * ID that does not match the new ID @id.
  *
  * No locking is required by the caller. However, the caller obviously must
  * make sure they own the object.
  */
-void bus1_peer_reset(struct bus1_peer *peer, u64 id)
+void bus1_peer_info_reset(struct bus1_peer_info *peer_info, u64 id)
 {
-	mutex_lock(&peer->lock);
-	bus1_queue_flush(&peer->queue, &peer->pool, id);
-	bus1_pool_flush(&peer->pool);
-	mutex_unlock(&peer->lock);
+	mutex_lock(&peer_info->lock);
+	bus1_queue_flush(&peer_info->queue, &peer_info->pool, id);
+	bus1_pool_flush(&peer_info->pool);
+	mutex_unlock(&peer_info->lock);
 }
 
-static int bus1_peer_ioctl_free(struct bus1_peer *peer, unsigned long arg)
+static int bus1_peer_info_ioctl_free(struct bus1_peer_info *peer_info,
+				     unsigned long arg)
 {
 	u64 offset;
 	int r;
@@ -126,19 +129,19 @@ static int bus1_peer_ioctl_free(struct bus1_peer *peer, unsigned long arg)
 	if (bus1_import_fixed_ioctl(&offset, arg, sizeof(offset)))
 		return -EFAULT;
 
-	mutex_lock(&peer->lock);
-	r = bus1_pool_release_user(&peer->pool, offset);
-	mutex_unlock(&peer->lock);
+	mutex_lock(&peer_info->lock);
+	r = bus1_pool_release_user(&peer_info->pool, offset);
+	mutex_unlock(&peer_info->lock);
 
 	return r;
 }
 
-static int bus1_peer_send(struct bus1_peer *peer,
-			  u64 peer_id,
-			  struct bus1_fs_domain *fs_domain,
-			  struct bus1_domain *domain,
-			  unsigned long arg,
-			  bool is_compat)
+static int bus1_peer_info_send(struct bus1_peer_info *peer_info,
+			       u64 peer_id,
+			       struct bus1_fs_domain *fs_domain,
+			       struct bus1_domain *domain,
+			       unsigned long arg,
+			       bool is_compat)
 {
 	struct bus1_transaction *transaction = NULL;
 	const u64 __user *ptr_dest;
@@ -215,9 +218,9 @@ exit:
 	return r;
 }
 
-static int bus1_peer_recv(struct bus1_peer *peer,
-			  u64 peer_id,
-			  unsigned long arg)
+static int bus1_peer_info_recv(struct bus1_peer_info *peer_info,
+			       u64 peer_id,
+			       unsigned long arg)
 {
 	struct bus1_cmd_recv __user *uparam = (void __user *)arg;
 	struct bus1_queue_entry *entry;
@@ -246,7 +249,7 @@ static int bus1_peer_recv(struct bus1_peer *peer,
 	 * us for message retrieval, so we have to check it again below.
 	 */
 	rcu_read_lock();
-	entry = bus1_queue_peek_rcu(&peer->queue);
+	entry = bus1_queue_peek_rcu(&peer_info->queue);
 	wanted_fds = entry ? entry->n_files : 0;
 	rcu_read_unlock();
 	if (!entry)
@@ -261,14 +264,14 @@ static int bus1_peer_recv(struct bus1_peer *peer,
 	 * msg_fds, anyway.
 	 */
 	if (param.flags & BUS1_RECV_FLAG_PEEK) {
-		mutex_lock(&peer->lock);
-		entry = bus1_queue_peek(&peer->queue);
+		mutex_lock(&peer_info->lock);
+		entry = bus1_queue_peek(&peer_info->queue);
 		if (entry) {
-			bus1_pool_publish(&peer->pool, entry->slice,
+			bus1_pool_publish(&peer_info->pool, entry->slice,
 					  &param.msg_offset, &param.msg_size);
 			param.msg_fds = entry->n_files;
 		}
-		mutex_unlock(&peer->lock);
+		mutex_unlock(&peer_info->lock);
 
 		if (!entry)
 			return -EAGAIN;
@@ -303,16 +306,16 @@ static int bus1_peer_recv(struct bus1_peer *peer,
 			}
 		}
 
-		mutex_lock(&peer->lock);
-		entry = bus1_queue_peek(&peer->queue);
+		mutex_lock(&peer_info->lock);
+		entry = bus1_queue_peek(&peer_info->queue);
 		if (!entry) {
 			/* nothing to do, caught below */
 		} else if (entry->n_files > n_fds) {
 			/* re-allocate FD array and retry */
 			wanted_fds = entry->n_files;
 		} else {
-			bus1_queue_unlink(&peer->queue, entry);
-			bus1_pool_publish(&peer->pool, entry->slice,
+			bus1_queue_unlink(&peer_info->queue, entry);
+			bus1_pool_publish(&peer_info->pool, entry->slice,
 					  &param.msg_offset, &param.msg_size);
 			param.msg_fds = entry->n_files;
 
@@ -322,10 +325,10 @@ static int bus1_peer_recv(struct bus1_peer *peer,
 			 *           slice.
 			 */
 			if (entry->n_files == 0)
-				bus1_pool_release_kernel(&peer->pool,
+				bus1_pool_release_kernel(&peer_info->pool,
 							 entry->slice);
 		}
-		mutex_unlock(&peer->lock);
+		mutex_unlock(&peer_info->lock);
 	} while (wanted_fds > n_fds);
 
 	if (!entry) {
@@ -354,13 +357,13 @@ static int bus1_peer_recv(struct bus1_peer *peer,
 		vec.iov_base = fds;
 		vec.iov_len = n_fds * sizeof(*fds);
 
-		r = bus1_pool_write_kvec(&peer->pool, entry->slice,
+		r = bus1_pool_write_kvec(&peer_info->pool, entry->slice,
 					 entry->slice->size - vec.iov_len,
 					 &vec, 1, vec.iov_len);
 
-		mutex_lock(&peer->lock);
-		bus1_pool_release_kernel(&peer->pool, entry->slice);
-		mutex_unlock(&peer->lock);
+		mutex_lock(&peer_info->lock);
+		bus1_pool_release_kernel(&peer_info->pool, entry->slice);
+		mutex_unlock(&peer_info->lock);
 
 		/* on success, install FDs; on error, see fput() in `exit:' */
 		if (r >= 0) {
@@ -392,8 +395,8 @@ exit:
 }
 
 /**
- * bus1_peer_ioctl() - handle peer ioctl
- * @peer:		peer to work on
+ * bus1_peer_info_ioctl() - handle peer ioctl
+ * @peer_info:		peer to work on
  * @peer_id:		current ID of this peer
  * @fs_domain:		parent domain handle
  * @domain:		parent domain
@@ -401,28 +404,28 @@ exit:
  * @arg:		ioctl argument
  * @is_compat:		compat ioctl
  *
- * This handles the given ioctl (cmd+arg) on the passed peer @peer. The caller
- * must make sure the peer is pinned, its current ID is provided as @peer_id,
- * its parent domain handle is pinned as @fs_domain, and dereferenced as
- * @domain.
+ * This handles the given ioctl (cmd+arg) on the passed peer @peer_info. The
+ * caller must make sure the peer is pinned, its current ID is provided as
+ * @peer_id, its parent domain handle is pinned as @fs_domain, and dereferenced
+ * as @domain.
  *
  * Multiple ioctls can be called in parallel just fine. No locking is needed.
  *
  * Return: 0 on success, negative error code on failure.
  */
-int bus1_peer_ioctl(struct bus1_peer *peer,
-		    u64 peer_id,
-		    struct bus1_fs_domain *fs_domain,
-		    struct bus1_domain *domain,
-		    unsigned int cmd,
-		    unsigned long arg,
-		    bool is_compat)
+int bus1_peer_info_ioctl(struct bus1_peer_info *peer_info,
+			 u64 peer_id,
+			 struct bus1_fs_domain *fs_domain,
+			 struct bus1_domain *domain,
+			 unsigned int cmd,
+			 unsigned long arg,
+			 bool is_compat)
 {
 	int r;
 
 	switch (cmd) {
 	case BUS1_CMD_FREE:
-		r = bus1_peer_ioctl_free(peer, arg);
+		r = bus1_peer_info_ioctl_free(peer_info, arg);
 		break;
 	case BUS1_CMD_TRACK:
 		r = 0; /* XXX */
@@ -431,11 +434,11 @@ int bus1_peer_ioctl(struct bus1_peer *peer,
 		r = 0; /* XXX */
 		break;
 	case BUS1_CMD_SEND:
-		r = bus1_peer_send(peer, peer_id, fs_domain, domain,
-				   arg, is_compat);
+		r = bus1_peer_info_send(peer_info, peer_id, fs_domain, domain,
+					arg, is_compat);
 		break;
 	case BUS1_CMD_RECV:
-		r = bus1_peer_recv(peer, peer_id, arg);
+		r = bus1_peer_info_recv(peer_info, peer_id, arg);
 		break;
 	default:
 		r = -ENOTTY;

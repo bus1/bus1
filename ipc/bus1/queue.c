@@ -22,7 +22,7 @@
 
 /* lockdep assertion to verify the parent peer is locked */
 #define bus1_queue_assert_held(_queue) \
-	lockdep_assert_held(&bus1_peer_from_queue(_queue)->lock)
+	lockdep_assert_held(&bus1_peer_info_from_queue(_queue)->lock)
 
 /**
  * bus1_queue_init_internal() - initialize queue
@@ -31,10 +31,10 @@
  * This initializes a new queue. The queue memory is considered uninitialized,
  * any previous content is lost unrecoverably.
  *
- * NOTE: All queues must be embedded into a parent bus1_peer object. The code
- *       works fine, if you don't, but the lockdep-annotations will fail
- *       horribly. They rely on bus1_peer_from_queue() to be valid on every
- *       queue. Use the bus1_queue_init_for_peer() macro to make sure you
+ * NOTE: All queues must be embedded into a parent bus1_peer_info object. The
+ *       code works fine, if you don't, but the lockdep-annotations will fail
+ *       horribly. They rely on bus1_peer_info_from_queue() to be valid on
+ *       every queue. Use the bus1_queue_init_for_peer() macro to make sure you
  *       never violate this rule.
  */
 void bus1_queue_init_internal(struct bus1_queue *queue)
