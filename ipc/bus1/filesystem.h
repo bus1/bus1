@@ -43,10 +43,37 @@
  */
 
 #include <linux/kernel.h>
+#include <linux/rbtree.h>
+#include <linux/rcupdate.h>
+#include <linux/wait.h>
+#include "active.h"
 
-struct bus1_domain;
 struct bus1_peer;
 struct bus1_peer_info;
+
+struct bus1_fs_name {
+	struct bus1_fs_name *next;
+	struct bus1_peer *peer;
+	struct rb_node rb;
+	struct rcu_head rcu;
+	char name[];
+};
+
+struct bus1_peer {
+	struct rw_semaphore rwlock;
+	wait_queue_head_t waitq;
+	struct bus1_active active;
+	struct bus1_peer_info __rcu *info;
+	struct bus1_fs_name *names;
+	struct rb_node rb;
+	struct rcu_head rcu;
+	u64 id;
+};
+
+struct bus1_peer_cleanup_context {
+	struct bus1_domain *domain;
+	struct bus1_peer_info *stale_info;
+};
 
 extern const struct file_operations bus1_fs_bus_fops;
 
@@ -56,5 +83,8 @@ void bus1_fs_exit(void);
 struct bus1_peer *bus1_peer_acquire_by_id(struct bus1_domain *domain, u64 id);
 struct bus1_peer *bus1_peer_release(struct bus1_peer *peer);
 struct bus1_peer_info *bus1_peer_dereference(struct bus1_peer *peer);
+void bus1_peer_cleanup(struct bus1_peer *peer,
+		       struct bus1_peer_cleanup_context *ctx,
+		       bool drop_from_tree);
 
 #endif /* __BUS1_FILESYSTEM_H */
