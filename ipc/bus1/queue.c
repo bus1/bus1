@@ -23,6 +23,8 @@
 /* lockdep assertion to verify the parent peer is locked */
 #define bus1_queue_assert_held(_queue) \
 	lockdep_assert_held(&bus1_peer_info_from_queue(_queue)->lock)
+#define bus1_queue_is_held(_queue) \
+	lockdep_is_held(&bus1_peer_info_from_queue(_queue)->lock)
 
 /**
  * bus1_queue_init_internal() - initialize queue
@@ -143,8 +145,8 @@ bool bus1_queue_unlink(struct bus1_queue *queue,
 	if (!entry || RB_EMPTY_NODE(&entry->rb))
 		return false;
 
-	bus1_queue_assert_held(queue);
-	node = rcu_dereference_protected(queue->front, queue);
+	node = rcu_dereference_protected(queue->front,
+					 bus1_queue_is_held(queue));
 	if (node == &entry->rb) {
 		node = rb_next(node);
 		if (node && bus1_queue_entry(node)->seq & 1)
@@ -265,7 +267,8 @@ struct bus1_queue_entry *bus1_queue_peek(struct bus1_queue *queue)
 {
 	bus1_queue_assert_held(queue);
 
-	return bus1_queue_entry(rcu_dereference_protected(queue->front, queue));
+	return bus1_queue_entry(rcu_dereference_protected(queue->front,
+						bus1_queue_is_held(queue)));
 }
 
 /**

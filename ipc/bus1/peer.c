@@ -264,7 +264,8 @@ static void bus1_peer_cleanup(struct bus1_peer *peer,
 	lockdep_assert_held(&domain->seqcount);
 	WARN_ON(ctx->stale_info);
 
-	peer_info = rcu_dereference_protected(peer->info, &domain->lock);
+	peer_info = rcu_dereference_protected(peer->info,
+					      lockdep_is_held(&domain->lock));
 	if (peer_info) {
 		while ((peer_name = peer->names)) {
 			peer->names = peer->names->next;
@@ -509,7 +510,8 @@ struct bus1_peer_info *bus1_peer_dereference(struct bus1_peer *peer)
 {
 	lockdep_assert_held(&peer->active);
 
-	return rcu_dereference_protected(peer->info, &peer->active);
+	return rcu_dereference_protected(peer->info,
+					 lockdep_is_held(&peer->active));
 }
 
 static int bus1_peer_connect_new(struct bus1_peer *peer,
@@ -544,8 +546,8 @@ static int bus1_peer_connect_new(struct bus1_peer *peer,
 	 * NULL. We still verify it, just to be safe.
 	 */
 	if (WARN_ON(rcu_dereference_protected(peer->info,
-					      &domain->active &&
-					      &peer->rwlock)))
+					lockdep_is_held(&domain->active) &&
+					lockdep_is_held(&peer->rwlock))))
 		return -EISCONN;
 
 	/* allocate new peer_info object */
@@ -664,8 +666,8 @@ static int bus1_peer_connect_reset(struct bus1_peer *peer,
 	 * Be safe and verify it anyway.
 	 */
 	peer_info = rcu_dereference_protected(peer->info,
-					      &domain->active &&
-					      &peer->rwlock);
+					lockdep_is_held(&domain->active) &&
+					lockdep_is_held(&peer->rwlock));
 	if (WARN_ON(!peer_info))
 		return -ESHUTDOWN;
 
@@ -718,8 +720,8 @@ static int bus1_peer_connect_query(struct bus1_peer *peer,
 	 * wait for us to finish. However, to be safe, check for NULL anyway.
 	 */
 	peer_info = rcu_dereference_protected(peer->info,
-					      &domain->active &&
-					      &peer->rwlock);
+					lockdep_is_held(&domain->active) &&
+					lockdep_is_held(&peer->rwlock));
 	if (WARN_ON(!peer_info))
 		return -ESHUTDOWN;
 
