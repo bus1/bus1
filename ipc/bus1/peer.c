@@ -138,7 +138,7 @@ static int bus1_peer_info_ioctl_free(struct bus1_peer_info *peer_info,
 
 static int bus1_peer_info_send(struct bus1_peer_info *peer_info,
 			       u64 peer_id,
-			       struct bus1_fs_domain *fs_domain,
+			       struct bus1_domain *domain,
 			       struct bus1_domain_info *domain_info,
 			       unsigned long arg,
 			       bool is_compat)
@@ -177,7 +177,7 @@ static int bus1_peer_info_send(struct bus1_peer_info *peer_info,
 	if (unlikely(param.n_destinations == 0))
 		return 0;
 
-	transaction = bus1_transaction_new_from_user(fs_domain, domain_info,
+	transaction = bus1_transaction_new_from_user(domain, domain_info,
 						     peer_id, &param,
 						     is_compat);
 	if (IS_ERR(transaction))
@@ -398,7 +398,7 @@ exit:
  * bus1_peer_info_ioctl() - handle peer ioctl
  * @peer_info:		peer to work on
  * @peer_id:		current ID of this peer
- * @fs_domain:		parent domain handle
+ * @domain:		parent domain handle
  * @domain_info:	parent domain
  * @cmd:		ioctl command
  * @arg:		ioctl argument
@@ -406,7 +406,7 @@ exit:
  *
  * This handles the given ioctl (cmd+arg) on the passed peer @peer_info. The
  * caller must make sure the peer is pinned, its current ID is provided as
- * @peer_id, its parent domain handle is pinned as @fs_domain, and dereferenced
+ * @peer_id, its parent domain handle is pinned as @domain, and dereferenced
  * as @domain_info.
  *
  * Multiple ioctls can be called in parallel just fine. No locking is needed.
@@ -415,7 +415,7 @@ exit:
  */
 int bus1_peer_info_ioctl(struct bus1_peer_info *peer_info,
 			 u64 peer_id,
-			 struct bus1_fs_domain *fs_domain,
+			 struct bus1_domain *domain,
 			 struct bus1_domain_info *domain_info,
 			 unsigned int cmd,
 			 unsigned long arg,
@@ -434,7 +434,7 @@ int bus1_peer_info_ioctl(struct bus1_peer_info *peer_info,
 		r = 0; /* XXX */
 		break;
 	case BUS1_CMD_SEND:
-		r = bus1_peer_info_send(peer_info, peer_id, fs_domain,
+		r = bus1_peer_info_send(peer_info, peer_id, domain,
 					domain_info, arg, is_compat);
 		break;
 	case BUS1_CMD_RECV:

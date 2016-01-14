@@ -98,7 +98,7 @@ struct bus1_fs_peer {
 /*
  * Domain Handles
  *
- * The bus1_fs_domain object is the low-level handle for domains. It is stored
+ * The bus1_domain object is the low-level handle for domains. It is stored
  * in the super-block of the respective mount that created the domain. As long
  * as you hold an active reference to @active, you can access @info and it
  * will be non-NULL.
@@ -116,7 +116,7 @@ struct bus1_fs_peer {
  * to the handle itself. However, for performance reasons, we avoid the
  * additional dereference and just allow fast lookups on domains.
  */
-struct bus1_fs_domain {
+struct bus1_domain {
 	struct mutex lock;
 	seqcount_t seqcount;
 	wait_queue_head_t waitq;
@@ -131,10 +131,8 @@ struct bus1_fs_domain {
 static struct file_system_type bus1_fs_type;
 static struct inode *bus1_fs_inode_get(struct super_block *sb,
 				       unsigned int ino);
-static struct bus1_fs_domain *
-bus1_fs_domain_acquire(struct bus1_fs_domain *fs_domain);
-static struct bus1_fs_domain *
-bus1_fs_domain_release(struct bus1_fs_domain *fs_domain);
+static struct bus1_domain *bus1_domain_acquire(struct bus1_domain *domain);
+static struct bus1_domain *bus1_domain_release(struct bus1_domain *domain);
 
 static struct bus1_fs_name *bus1_fs_name_new(const char *name, struct bus1_fs_peer *fs_peer)
 {
@@ -171,15 +169,15 @@ static struct bus1_fs_name *bus1_fs_name_free(struct bus1_fs_name *fs_name)
 	return NULL;
 }
 
-static int bus1_fs_name_push(struct bus1_fs_domain *fs_domain,
+static int bus1_fs_name_push(struct bus1_domain *domain,
 			     struct bus1_fs_name *fs_name)
 {
 	struct rb_node *prev, **slot;
 	struct bus1_fs_name *iter;
 	int v;
 
-	lockdep_assert_held(&fs_domain->lock);
-	lockdep_assert_held(&fs_domain->seqcount);
+	lockdep_assert_held(&domain->lock);
+	lockdep_assert_held(&domain->seqcount);
 
 	if (WARN_ON(!fs_name->fs_peer))
 		return -EINVAL;
@@ -188,7 +186,7 @@ static int bus1_fs_name_push(struct bus1_fs_domain *fs_domain,
 		return -EINVAL;
 
 	/* find rb-tree entry and check for possible duplicates first */
-	slot = &fs_domain->map_names.rb_node;
+	slot = &domain->map_names.rb_node;
 	prev = NULL;
 	while (*slot) {
 		prev = *slot;
@@ -204,22 +202,22 @@ static int bus1_fs_name_push(struct bus1_fs_domain *fs_domain,
 
 	/* insert into tree */
 	rb_link_node_rcu(&fs_name->rb, prev, slot);
-	rb_insert_color(&fs_name->rb, &fs_domain->map_names);
+	rb_insert_color(&fs_name->rb, &domain->map_names);
 
-	++fs_domain->n_names;
+	++domain->n_names;
 	return 0;
 }
 
-static void bus1_fs_name_pop(struct bus1_fs_domain *fs_domain,
+static void bus1_fs_name_pop(struct bus1_domain *domain,
 			    struct bus1_fs_name *fs_name)
 {
-	lockdep_assert_held(&fs_domain->lock);
-	lockdep_assert_held(&fs_domain->seqcount);
+	lockdep_assert_held(&domain->lock);
+	lockdep_assert_held(&domain->seqcount);
 
-	rb_erase(&fs_name->rb, &fs_domain->map_names);
+	rb_erase(&fs_name->rb, &domain->map_names);
 	RB_CLEAR_NODE(&fs_name->rb);
 
-	--fs_domain->n_names;
+	--domain->n_names;
 
 	return;
 }
@@ -259,7 +257,7 @@ bus1_fs_peer_free(struct bus1_fs_peer *fs_peer)
 }
 
 struct bus1_fs_peer_cleanup_context {
-	struct bus1_fs_domain *fs_domain;
+	struct bus1_domain *domain;
 	struct bus1_peer_info *stale_info;
 };
 
@@ -267,7 +265,7 @@ static void bus1_fs_peer_cleanup(struct bus1_fs_peer *fs_peer,
 				 struct bus1_fs_peer_cleanup_context *ctx,
 				 bool drop_from_tree)
 {
-	struct bus1_fs_domain *fs_domain = ctx->fs_domain;
+	struct bus1_domain *domain = ctx->domain;
 	struct bus1_fs_name *fs_name;
 	struct bus1_peer_info *peer_info;
 
@@ -289,22 +287,22 @@ static void bus1_fs_peer_cleanup(struct bus1_fs_peer *fs_peer,
 	 * it can check whether this call actually released the peer or not.
 	 */
 
-	lockdep_assert_held(&fs_domain->lock);
-	lockdep_assert_held(&fs_domain->seqcount);
+	lockdep_assert_held(&domain->lock);
+	lockdep_assert_held(&domain->seqcount);
 	WARN_ON(ctx->stale_info);
 
-	peer_info = rcu_dereference_protected(fs_peer->info, &fs_domain->lock);
+	peer_info = rcu_dereference_protected(fs_peer->info, &domain->lock);
 	if (peer_info) {
 		while ((fs_name = fs_peer->names)) {
 			fs_peer->names = fs_peer->names->next;
-			bus1_fs_name_pop(fs_domain, fs_name);
+			bus1_fs_name_pop(domain, fs_name);
 			bus1_fs_name_free(fs_name);
 		}
 
 		if (drop_from_tree)
-			rb_erase(&fs_peer->rb, &fs_domain->map_peers);
+			rb_erase(&fs_peer->rb, &domain->map_peers);
 
-		--fs_domain->n_peers;
+		--domain->n_peers;
 
 		/*
 		 * Reset @fs_peer->info so any racing rcu-call will get NULL
@@ -353,7 +351,7 @@ bus1_fs_peer_acquire(struct bus1_fs_peer *fs_peer)
 
 /**
  * bus1_fs_peer_acquire_by_id() - acquire peer by id
- * @fs_domain:		domain to search
+ * @domain:		domain to search
  * @id:			id to look for
  *
  * Find a peer handle that is registered under the given id and domain. If
@@ -363,16 +361,16 @@ bus1_fs_peer_acquire(struct bus1_fs_peer *fs_peer)
  * Return: Active reference to matching handle, or NULL.
  */
 struct bus1_fs_peer *
-bus1_fs_peer_acquire_by_id(struct bus1_fs_domain *fs_domain, u64 id)
+bus1_fs_peer_acquire_by_id(struct bus1_domain *domain, u64 id)
 {
 	struct bus1_fs_peer *fs_peer, *res = NULL;
 	struct rb_node *n;
 	unsigned seq;
 
 	do {
-		seq = read_seqcount_begin(&fs_domain->seqcount);
+		seq = read_seqcount_begin(&domain->seqcount);
 		rcu_read_lock();
-		n = rcu_dereference(fs_domain->map_peers.rb_node);
+		n = rcu_dereference(domain->map_peers.rb_node);
 		while (n) {
 			fs_peer = container_of(n, struct bus1_fs_peer, rb);
 			if (id == fs_peer->id) {
@@ -385,7 +383,7 @@ bus1_fs_peer_acquire_by_id(struct bus1_fs_domain *fs_domain, u64 id)
 			}
 		}
 		rcu_read_unlock();
-	} while (!res && read_seqcount_retry(&fs_domain->seqcount, seq));
+	} while (!res && read_seqcount_retry(&domain->seqcount, seq));
 
 	return res;
 }
@@ -441,7 +439,7 @@ struct bus1_peer_info *bus1_fs_peer_dereference(struct bus1_fs_peer *fs_peer)
 }
 
 static int bus1_fs_peer_connect_new(struct bus1_fs_peer *fs_peer,
-				    struct bus1_fs_domain *fs_domain,
+				    struct bus1_domain *domain,
 				    struct bus1_cmd_connect *param)
 {
 	struct bus1_fs_name *fs_name, *names = NULL;
@@ -458,7 +456,7 @@ static int bus1_fs_peer_connect_new(struct bus1_fs_peer *fs_peer,
 	 * bail out.
 	 */
 
-	lockdep_assert_held(&fs_domain->active);
+	lockdep_assert_held(&domain->active);
 	lockdep_assert_held(&fs_peer->rwlock);
 
 	/* cannot connect a peer that is already connected */
@@ -472,7 +470,7 @@ static int bus1_fs_peer_connect_new(struct bus1_fs_peer *fs_peer,
 	 * NULL. We still verify it, just to be safe.
 	 */
 	if (WARN_ON(rcu_dereference_protected(fs_peer->info,
-					      &fs_domain->active &&
+					      &domain->active &&
 					      &fs_peer->rwlock)))
 		return -EISCONN;
 
@@ -505,12 +503,12 @@ static int bus1_fs_peer_connect_new(struct bus1_fs_peer *fs_peer,
 		remaining -= n + 1;
 	}
 
-	mutex_lock(&fs_domain->lock);
-	write_seqcount_begin(&fs_domain->seqcount);
+	mutex_lock(&domain->lock);
+	write_seqcount_begin(&domain->seqcount);
 
 	/* link into names rbtree */
 	for (fs_name = names; fs_name; fs_name = fs_name->next) {
-		r = bus1_fs_name_push(fs_domain, fs_name);
+		r = bus1_fs_name_push(domain, fs_name);
 		if (r < 0) {
 			bus1_fs_name_free(fs_name);
 			goto error;
@@ -521,43 +519,43 @@ static int bus1_fs_peer_connect_new(struct bus1_fs_peer *fs_peer,
 	fs_peer->names = names;
 
 	/* link into rbtree, we know it must be at the tail */
-	last = rb_last(&fs_domain->map_peers);
+	last = rb_last(&domain->map_peers);
 	if (last)
 		rb_link_node_rcu(&fs_peer->rb, last, &last->rb_right);
 	else
 		rb_link_node_rcu(&fs_peer->rb, NULL,
-				 &fs_domain->map_peers.rb_node);
-	rb_insert_color(&fs_peer->rb, &fs_domain->map_peers);
+				 &domain->map_peers.rb_node);
+	rb_insert_color(&fs_peer->rb, &domain->map_peers);
 
 	/* acquire ID and activate handle */
-	fs_peer->id = ++fs_domain->info->peer_ids;
+	fs_peer->id = ++domain->info->peer_ids;
 	rcu_assign_pointer(fs_peer->info, peer_info);
-	++fs_domain->n_peers;
+	++domain->n_peers;
 	bus1_active_activate(&fs_peer->active);
 
 	/* provide ID for caller, pool-size is already set */
 	param->unique_id = fs_peer->id;
 
-	write_seqcount_end(&fs_domain->seqcount);
-	mutex_unlock(&fs_domain->lock);
+	write_seqcount_end(&domain->seqcount);
+	mutex_unlock(&domain->lock);
 	return 0;
 
 error:
 	while ((fs_name = names)) {
 		names = names->next;
-		bus1_fs_name_pop(fs_domain, fs_name);
+		bus1_fs_name_pop(domain, fs_name);
 		bus1_fs_name_free(fs_name);
 	}
 	fs_peer->names = NULL;
 
-	write_seqcount_end(&fs_domain->seqcount);
-	mutex_unlock(&fs_domain->lock);
+	write_seqcount_end(&domain->seqcount);
+	mutex_unlock(&domain->lock);
 	bus1_peer_info_free(peer_info);
 	return r;
 }
 
 static int bus1_fs_peer_connect_reset(struct bus1_fs_peer *fs_peer,
-				      struct bus1_fs_domain *fs_domain,
+				      struct bus1_domain *domain,
 				      struct bus1_cmd_connect *param)
 {
 	struct bus1_peer_info *peer_info;
@@ -575,7 +573,7 @@ static int bus1_fs_peer_connect_reset(struct bus1_fs_peer *fs_peer,
 	 * on if their tag is outdated.
 	 */
 
-	lockdep_assert_held(&fs_domain->active);
+	lockdep_assert_held(&domain->active);
 	lockdep_assert_held(&fs_peer->rwlock);
 
 	/* cannot reset a peer that was never connected */
@@ -594,33 +592,33 @@ static int bus1_fs_peer_connect_reset(struct bus1_fs_peer *fs_peer,
 	 * Be safe and verify it anyway.
 	 */
 	peer_info = rcu_dereference_protected(fs_peer->info,
-					      &fs_domain->active &&
+					      &domain->active &&
 					      &fs_peer->rwlock);
 	if (WARN_ON(!peer_info))
 		return -ESHUTDOWN;
 
-	mutex_lock(&fs_domain->lock);
-	write_seqcount_begin(&fs_domain->seqcount);
+	mutex_lock(&domain->lock);
+	write_seqcount_begin(&domain->seqcount);
 
 	/* remove from rb-tree, and change the ID */
-	rb_erase(&fs_peer->rb, &fs_domain->map_peers);
-	fs_peer->id = ++fs_domain->info->peer_ids;
+	rb_erase(&fs_peer->rb, &domain->map_peers);
+	fs_peer->id = ++domain->info->peer_ids;
 
 	/* insert at the tail again */
-	last = rb_last(&fs_domain->map_peers);
+	last = rb_last(&domain->map_peers);
 	if (last)
 		rb_link_node_rcu(&fs_peer->rb, last, &last->rb_right);
 	else
 		rb_link_node_rcu(&fs_peer->rb, NULL,
-				 &fs_domain->map_peers.rb_node);
-	rb_insert_color(&fs_peer->rb, &fs_domain->map_peers);
+				 &domain->map_peers.rb_node);
+	rb_insert_color(&fs_peer->rb, &domain->map_peers);
 
 	/* provide information for caller */
 	param->unique_id = fs_peer->id;
 	param->pool_size = peer_info->pool.size;
 
-	write_seqcount_end(&fs_domain->seqcount);
-	mutex_unlock(&fs_domain->lock);
+	write_seqcount_end(&domain->seqcount);
+	mutex_unlock(&domain->lock);
 
 	/* safe to call outside of domain-lock; we still hold the peer-lock */
 	bus1_peer_info_reset(peer_info, fs_peer->id);
@@ -629,12 +627,12 @@ static int bus1_fs_peer_connect_reset(struct bus1_fs_peer *fs_peer,
 }
 
 static int bus1_fs_peer_connect_query(struct bus1_fs_peer *fs_peer,
-				      struct bus1_fs_domain *fs_domain,
+				      struct bus1_domain *domain,
 				      struct bus1_cmd_connect *param)
 {
 	struct bus1_peer_info *peer_info;
 
-	lockdep_assert_held(&fs_domain->active);
+	lockdep_assert_held(&domain->active);
 	lockdep_assert_held(&fs_peer->rwlock);
 
 	/* cannot query a peer that was never connected */
@@ -648,7 +646,7 @@ static int bus1_fs_peer_connect_query(struct bus1_fs_peer *fs_peer,
 	 * wait for us to finish. However, to be safe, check for NULL anyway.
 	 */
 	peer_info = rcu_dereference_protected(fs_peer->info,
-					      &fs_domain->active &&
+					      &domain->active &&
 					      &fs_peer->rwlock);
 	if (WARN_ON(!peer_info))
 		return -ESHUTDOWN;
@@ -660,7 +658,7 @@ static int bus1_fs_peer_connect_query(struct bus1_fs_peer *fs_peer,
 }
 
 static int bus1_fs_peer_connect(struct bus1_fs_peer *fs_peer,
-				struct bus1_fs_domain *fs_domain,
+				struct bus1_domain *domain,
 				unsigned long arg)
 {
 	struct bus1_cmd_connect __user *uparam = (void __user *)arg;
@@ -671,7 +669,7 @@ static int bus1_fs_peer_connect(struct bus1_fs_peer *fs_peer,
 	 * The domain-active-reference guarantees that a domain teardown waits
 	 * for us, before it starts the force-disconnect on all clients.
 	 */
-	lockdep_assert_held(&fs_domain->active);
+	lockdep_assert_held(&domain->active);
 
 	param = bus1_import_dynamic_ioctl(arg, sizeof(*param));
 	if (IS_ERR(param))
@@ -701,13 +699,13 @@ static int bus1_fs_peer_connect(struct bus1_fs_peer *fs_peer,
 	} else if (param->flags & (BUS1_CONNECT_FLAG_PEER |
 				   BUS1_CONNECT_FLAG_MONITOR)) {
 		/* fresh connect of a new peer */
-		r = bus1_fs_peer_connect_new(fs_peer, fs_domain, param);
+		r = bus1_fs_peer_connect_new(fs_peer, domain, param);
 	} else if (param->flags & BUS1_CONNECT_FLAG_RESET) {
 		/* reset of the peer requested */
-		r = bus1_fs_peer_connect_reset(fs_peer, fs_domain, param);
+		r = bus1_fs_peer_connect_reset(fs_peer, domain, param);
 	} else if (param->flags & BUS1_CONNECT_FLAG_QUERY) {
 		/* fallback: no special operation specified, just query */
-		r = bus1_fs_peer_connect_query(fs_peer, fs_domain, param);
+		r = bus1_fs_peer_connect_query(fs_peer, domain, param);
 	} else {
 		r = -EINVAL; /* no mode specified */
 	}
@@ -731,9 +729,9 @@ static int bus1_fs_peer_connect(struct bus1_fs_peer *fs_peer,
 }
 
 static int bus1_fs_peer_disconnect(struct bus1_fs_peer *fs_peer,
-				   struct bus1_fs_domain *fs_domain)
+				   struct bus1_domain *domain)
 {
-	struct bus1_fs_peer_cleanup_context ctx = { .fs_domain = fs_domain, };
+	struct bus1_fs_peer_cleanup_context ctx = { .domain = domain, };
 	int r;
 
 	/* lock against parallel CONNECT/DISCONNECT */
@@ -744,8 +742,8 @@ static int bus1_fs_peer_disconnect(struct bus1_fs_peer *fs_peer,
 	bus1_active_drain(&fs_peer->active, &fs_peer->waitq);
 
 	/* lock domain and then release the peer */
-	mutex_lock(&fs_domain->lock);
-	write_seqcount_begin(&fs_domain->seqcount);
+	mutex_lock(&domain->lock);
+	write_seqcount_begin(&domain->seqcount);
 
 	/*
 	 * We must not sleep on the fs_peer->waitq, it could deadlock
@@ -759,8 +757,8 @@ static int bus1_fs_peer_disconnect(struct bus1_fs_peer *fs_peer,
 	else
 		r = -ESHUTDOWN;
 
-	write_seqcount_end(&fs_domain->seqcount);
-	mutex_unlock(&fs_domain->lock);
+	write_seqcount_end(&domain->seqcount);
+	mutex_unlock(&domain->lock);
 	up_write(&fs_peer->rwlock);
 
 	/*
@@ -768,94 +766,92 @@ static int bus1_fs_peer_disconnect(struct bus1_fs_peer *fs_peer,
 	 * context (but only if it really released the peer, otherwise it is
 	 * NULL). It allows us to drop the locks before calling into
 	 * bus1_peer_info_free(). This is not strictly necessary, but reduces
-	 * lock-contention on @fs_domain->lock.
+	 * lock-contention on @domain->lock.
 	 */
 	bus1_peer_info_free(ctx.stale_info);
 
 	return r;
 }
 
-static struct bus1_fs_domain *
-bus1_fs_domain_free(struct bus1_fs_domain *fs_domain)
+static struct bus1_domain *
+bus1_domain_free(struct bus1_domain *domain)
 {
-	if (!fs_domain)
+	if (!domain)
 		return NULL;
 
-	WARN_ON(!RB_EMPTY_ROOT(&fs_domain->map_names));
-	WARN_ON(!RB_EMPTY_ROOT(&fs_domain->map_peers));
-	WARN_ON(fs_domain->n_names > 0);
-	WARN_ON(fs_domain->n_peers > 0);
-	WARN_ON(fs_domain->info);
-	bus1_active_destroy(&fs_domain->active);
-	kfree(fs_domain);
+	WARN_ON(!RB_EMPTY_ROOT(&domain->map_names));
+	WARN_ON(!RB_EMPTY_ROOT(&domain->map_peers));
+	WARN_ON(domain->n_names > 0);
+	WARN_ON(domain->n_peers > 0);
+	WARN_ON(domain->info);
+	bus1_active_destroy(&domain->active);
+	kfree(domain);
 
 	return NULL;
 }
 
-static struct bus1_fs_domain *bus1_fs_domain_new(void)
+static struct bus1_domain *bus1_domain_new(void)
 {
-	struct bus1_fs_domain *fs_domain;
+	struct bus1_domain *domain;
 	int r;
 
-	fs_domain = kmalloc(sizeof(*fs_domain), GFP_KERNEL);
-	if (!fs_domain)
+	domain = kmalloc(sizeof(*domain), GFP_KERNEL);
+	if (!domain)
 		return ERR_PTR(-ENOMEM);
 
-	init_waitqueue_head(&fs_domain->waitq);
-	bus1_active_init(&fs_domain->active);
-	fs_domain->info = NULL;
-	mutex_init(&fs_domain->lock);
-	seqcount_init(&fs_domain->seqcount);
-	fs_domain->n_peers = 0;
-	fs_domain->n_names = 0;
-	fs_domain->map_peers = RB_ROOT;
-	fs_domain->map_names = RB_ROOT;
+	init_waitqueue_head(&domain->waitq);
+	bus1_active_init(&domain->active);
+	domain->info = NULL;
+	mutex_init(&domain->lock);
+	seqcount_init(&domain->seqcount);
+	domain->n_peers = 0;
+	domain->n_names = 0;
+	domain->map_peers = RB_ROOT;
+	domain->map_names = RB_ROOT;
 
 	/* domains are implicitly activated during allocation */
-	fs_domain->info = bus1_domain_info_new();
-	if (IS_ERR(fs_domain->info)) {
-		r = PTR_ERR(fs_domain->info);
-		fs_domain->info = NULL;
+	domain->info = bus1_domain_info_new();
+	if (IS_ERR(domain->info)) {
+		r = PTR_ERR(domain->info);
+		domain->info = NULL;
 		goto error;
 	}
 
-	bus1_active_activate(&fs_domain->active);
+	bus1_active_activate(&domain->active);
 
-	return fs_domain;
+	return domain;
 
 error:
-	bus1_fs_domain_free(fs_domain);
+	bus1_domain_free(domain);
 	return ERR_PTR(r);
 }
 
-static struct bus1_fs_domain *
-bus1_fs_domain_acquire(struct bus1_fs_domain *fs_domain)
+static struct bus1_domain *bus1_domain_acquire(struct bus1_domain *domain)
 {
-	if (fs_domain && bus1_active_acquire(&fs_domain->active))
-		return fs_domain;
+	if (domain && bus1_active_acquire(&domain->active))
+		return domain;
 	return NULL;
 }
 
-static struct bus1_fs_domain *
-bus1_fs_domain_release(struct bus1_fs_domain *fs_domain)
+static struct bus1_domain *bus1_domain_release(struct bus1_domain *domain)
 {
-	if (fs_domain)
-		bus1_active_release(&fs_domain->active, &fs_domain->waitq);
+	if (domain)
+		bus1_active_release(&domain->active, &domain->waitq);
 	return NULL;
 }
 
-static void bus1_fs_domain_cleanup(struct bus1_active *active, void *userdata)
+static void bus1_domain_cleanup(struct bus1_active *active, void *userdata)
 {
-	struct bus1_fs_domain *fs_domain = container_of(active,
-							struct bus1_fs_domain,
-							active);
+	struct bus1_domain *domain = container_of(active,
+						  struct bus1_domain,
+						  active);
 
-	fs_domain->info = bus1_domain_info_free(fs_domain->info);
+	domain->info = bus1_domain_info_free(domain->info);
 }
 
-static void bus1_fs_domain_teardown(struct bus1_fs_domain *fs_domain)
+static void bus1_domain_teardown(struct bus1_domain *domain)
 {
-	struct bus1_fs_peer_cleanup_context ctx = { .fs_domain = fs_domain, };
+	struct bus1_fs_peer_cleanup_context ctx = { .domain = domain, };
 	struct bus1_fs_peer *fs_peer;
 	struct rb_node *n;
 
@@ -876,31 +872,31 @@ static void bus1_fs_domain_teardown(struct bus1_fs_domain *fs_domain)
 	 * Possible locking scenarios:
 	 *
 	 *   Peer connect:
-	 *     fs_domain.active.try-read
-	 *       fs_peer.rwlock.write
-	 *         fs_domain.lock
-	 *           fs_domain.seqcount.write
+	 *     domain.active.try-read
+	 *       peer.rwlock.write
+	 *         domain.lock
+	 *           domain.seqcount.write
 	 *
 	 *   Peer disconnect:
-	 *     fs_peer.rwlock.write
-	 *       fs_peer.active.write
-	 *       fs_domain.lock
-	 *         fs_domain.seqcount.write
-	 *           fs_peer.active.try-write
+	 *     peer.rwlock.write
+	 *       peer.active.write
+	 *       domain.lock
+	 *         domain.seqcount.write
+	 *           peer.active.try-write
 	 *
 	 *   Peer send:
-	 *     fs_peer.rwlock.read
-	 *       fs_peer.active.try-read
-	 *         fs_domain.seqcount.read        # lock inversion
-	 *           fs_peer.active.try-read
+	 *     peer.rwlock.read
+	 *       peer.active.try-read
+	 *         domain.seqcount.read        # lock inversion
+	 *           peer.active.try-read
 	 *
 	 *   Domain teardown:
-	 *     fs_domain.active.write
-	 *     fs_domain.lock
-	 *       fs_peer.active.write
-	 *       fs_domain.seqcount.write
-	 *         fs_peer.active.try-write
-	 *     fs_domain.active.write
+	 *     domain.active.write
+	 *     domain.lock
+	 *       peer.active.write
+	 *       domain.seqcount.write
+	 *         peer.active.try-write
+	 *     domain.active.write
 	 *
 	 *   There is exactly one lock inversion, which is the peer lookup
 	 *   during send that takes a read seqcount on the domain to look up
@@ -909,11 +905,11 @@ static void bus1_fs_domain_teardown(struct bus1_fs_domain *fs_domain)
 	 *   hold a write seqcount on the domain, but a lock is fine.
 	 */
 
-	bus1_active_deactivate(&fs_domain->active);
-	bus1_active_drain(&fs_domain->active, &fs_domain->waitq);
+	bus1_active_deactivate(&domain->active);
+	bus1_active_drain(&domain->active, &domain->waitq);
 
-	mutex_lock(&fs_domain->lock);
-	for (n = rb_first(&fs_domain->map_peers); n; n = rb_next(n)) {
+	mutex_lock(&domain->lock);
+	for (n = rb_first(&domain->map_peers); n; n = rb_next(n)) {
 		fs_peer = container_of(n, struct bus1_fs_peer, rb);
 		bus1_active_deactivate(&fs_peer->active);
 		bus1_active_drain(&fs_peer->active, &fs_peer->waitq);
@@ -923,8 +919,8 @@ static void bus1_fs_domain_teardown(struct bus1_fs_domain *fs_domain)
 	 * Don't hold the write seqcount when draining the peer. It is ok not
 	 * to, as the domain maps are not changed whilst draining the peers.
 	 */
-	write_seqcount_begin(&fs_domain->seqcount);
-	for (n = rb_first(&fs_domain->map_peers); n; n = rb_next(n)) {
+	write_seqcount_begin(&domain->seqcount);
+	for (n = rb_first(&domain->map_peers); n; n = rb_next(n)) {
 		fs_peer = container_of(n, struct bus1_fs_peer, rb);
 
 		/*
@@ -945,7 +941,7 @@ static void bus1_fs_domain_teardown(struct bus1_fs_domain *fs_domain)
 		/*
 		 * bus1_fs_peer_cleanup() returns the now stale info object via
 		 * the context (but only if it really released the object, so
-		 * it might be NULL). This allows us to drop @fs_domain->lock
+		 * it might be NULL). This allows us to drop @domain->lock
 		 * before calling into bus1_peer_info_free(). It reduces lock
 		 * contention during peer disconnects. However, during domain
 		 * teardown, we couldn't care less, so we simply release it
@@ -953,19 +949,18 @@ static void bus1_fs_domain_teardown(struct bus1_fs_domain *fs_domain)
 		 */
 		bus1_peer_info_free(ctx.stale_info);
 	}
-	WARN_ON(!RB_EMPTY_ROOT(&fs_domain->map_names));
-	WARN_ON(fs_domain->n_names > 0);
-	WARN_ON(fs_domain->n_peers > 0);
-	fs_domain->map_peers = RB_ROOT;
-	write_seqcount_end(&fs_domain->seqcount);
-	mutex_unlock(&fs_domain->lock);
+	WARN_ON(!RB_EMPTY_ROOT(&domain->map_names));
+	WARN_ON(domain->n_names > 0);
+	WARN_ON(domain->n_peers > 0);
+	domain->map_peers = RB_ROOT;
+	write_seqcount_end(&domain->seqcount);
+	mutex_unlock(&domain->lock);
 
-	bus1_active_cleanup(&fs_domain->active, &fs_domain->waitq,
-			    bus1_fs_domain_cleanup, NULL);
+	bus1_active_cleanup(&domain->active, &domain->waitq,
+			    bus1_domain_cleanup, NULL);
 }
 
-static int bus1_fs_domain_resolve(struct bus1_fs_domain *fs_domain,
-				  unsigned long arg)
+static int bus1_domain_resolve(struct bus1_domain *domain, unsigned long arg)
 {
 	struct bus1_cmd_resolve __user *uparam = (void __user *)arg;
 	struct bus1_cmd_resolve *param;
@@ -975,7 +970,7 @@ static int bus1_fs_domain_resolve(struct bus1_fs_domain *fs_domain,
 	unsigned seq;
 	int r, v;
 
-	lockdep_assert_held(&fs_domain->active);
+	lockdep_assert_held(&domain->active);
 
 	param = bus1_import_dynamic_ioctl(arg, sizeof(*param));
 	if (IS_ERR(param))
@@ -1008,9 +1003,9 @@ static int bus1_fs_domain_resolve(struct bus1_fs_domain *fs_domain,
 
 	/* find unique-id of named peer */
 	do {
-		seq = read_seqcount_begin(&fs_domain->seqcount);
+		seq = read_seqcount_begin(&domain->seqcount);
 		rcu_read_lock();
-		n = rcu_dereference(fs_domain->map_names.rb_node);
+		n = rcu_dereference(domain->map_names.rb_node);
 		while (n) {
 			fs_name = container_of(n, struct bus1_fs_name, rb);
 			v = strcmp(param->name, fs_name->name);
@@ -1025,7 +1020,7 @@ static int bus1_fs_domain_resolve(struct bus1_fs_domain *fs_domain,
 			}
 		}
 		rcu_read_unlock();
-	} while (!n && read_seqcount_retry(&fs_domain->seqcount, seq));
+	} while (!n && read_seqcount_retry(&domain->seqcount, seq));
 
 	if (!n)
 		r = -ENXIO; /* not found, or deactivated */
@@ -1045,11 +1040,11 @@ exit:
 
 static int bus1_fs_bus_fop_open(struct inode *inode, struct file *file)
 {
-	struct bus1_fs_domain *fs_domain = inode->i_sb->s_fs_info;
+	struct bus1_domain *domain = inode->i_sb->s_fs_info;
 	struct bus1_fs_peer *fs_peer;
 	int r;
 
-	if (!bus1_fs_domain_acquire(fs_domain))
+	if (!bus1_domain_acquire(domain))
 		return -ESHUTDOWN;
 
 	fs_peer = bus1_fs_peer_new();
@@ -1062,16 +1057,16 @@ static int bus1_fs_bus_fop_open(struct inode *inode, struct file *file)
 	r = 0;
 
 exit:
-	bus1_fs_domain_release(fs_domain);
+	bus1_domain_release(domain);
 	return r;
 }
 
 static int bus1_fs_bus_fop_release(struct inode *inode, struct file *file)
 {
-	struct bus1_fs_domain *fs_domain = inode->i_sb->s_fs_info;
+	struct bus1_domain *domain = inode->i_sb->s_fs_info;
 	struct bus1_fs_peer *fs_peer = file->private_data;
 
-	bus1_fs_peer_disconnect(fs_peer, fs_domain);
+	bus1_fs_peer_disconnect(fs_peer, domain);
 	bus1_fs_peer_free(fs_peer);
 
 	return 0;
@@ -1082,7 +1077,7 @@ static long bus1_fs_bus_fop_ioctl(struct file *file,
 				  unsigned long arg,
 				  bool is_compat)
 {
-	struct bus1_fs_domain *fs_domain = file_inode(file)->i_sb->s_fs_info;
+	struct bus1_domain *domain = file_inode(file)->i_sb->s_fs_info;
 	struct bus1_fs_peer *fs_peer = file->private_data;
 	long r;
 
@@ -1090,17 +1085,17 @@ static long bus1_fs_bus_fop_ioctl(struct file *file,
 	case BUS1_CMD_CONNECT:
 	case BUS1_CMD_RESOLVE:
 		/* lock against domain shutdown */
-		if (!bus1_fs_domain_acquire(fs_domain))
+		if (!bus1_domain_acquire(domain))
 			return -ESHUTDOWN;
 
 		if (cmd == BUS1_CMD_CONNECT)
-			r = bus1_fs_peer_connect(fs_peer, fs_domain, arg);
+			r = bus1_fs_peer_connect(fs_peer, domain, arg);
 		else if (cmd == BUS1_CMD_RESOLVE)
-			r = bus1_fs_domain_resolve(fs_domain, arg);
+			r = bus1_domain_resolve(domain, arg);
 		else
 			r = -ENOTTY;
 
-		bus1_fs_domain_release(fs_domain);
+		bus1_domain_release(domain);
 		break;
 
 	case BUS1_CMD_DISCONNECT:
@@ -1108,7 +1103,7 @@ static long bus1_fs_bus_fop_ioctl(struct file *file,
 		if (arg != 0)
 			return -EINVAL;
 
-		return bus1_fs_peer_disconnect(fs_peer, fs_domain);
+		return bus1_fs_peer_disconnect(fs_peer, domain);
 
 	case BUS1_CMD_FREE:
 	case BUS1_CMD_TRACK:
@@ -1122,7 +1117,7 @@ static long bus1_fs_bus_fop_ioctl(struct file *file,
 			r = bus1_peer_info_ioctl(
 					bus1_fs_peer_dereference(fs_peer),
 					fs_peer->id,
-					fs_domain, fs_domain->info,
+					domain, domain->info,
 					cmd, arg, is_compat);
 			bus1_fs_peer_release(fs_peer);
 		}
@@ -1251,9 +1246,9 @@ static const struct inode_operations bus1_fs_bus_iops = {
 
 static int bus1_fs_dir_fop_iterate(struct file *file, struct dir_context *ctx)
 {
-	struct bus1_fs_domain *fs_domain = file_inode(file)->i_sb->s_fs_info;
+	struct bus1_domain *domain = file_inode(file)->i_sb->s_fs_info;
 
-	if (!bus1_fs_domain_acquire(fs_domain))
+	if (!bus1_domain_acquire(domain))
 		return -ESHUTDOWN;
 
 	/*
@@ -1275,7 +1270,7 @@ static int bus1_fs_dir_fop_iterate(struct file *file, struct dir_context *ctx)
 	ctx->pos = INT_MAX;
 
 exit:
-	bus1_fs_domain_release(fs_domain);
+	bus1_domain_release(domain);
 	return 0;
 }
 
@@ -1304,11 +1299,11 @@ static struct dentry *bus1_fs_dir_iop_lookup(struct inode *dir,
 					     struct dentry *dentry,
 					     unsigned int flags)
 {
-	struct bus1_fs_domain *fs_domain = dir->i_sb->s_fs_info;
+	struct bus1_domain *domain = dir->i_sb->s_fs_info;
 	struct dentry *old = NULL;
 	struct inode *inode;
 
-	if (!bus1_fs_domain_acquire(fs_domain))
+	if (!bus1_domain_acquire(domain))
 		return ERR_PTR(-ESHUTDOWN);
 
 	if (!strcmp(dentry->d_name.name, "bus")) {
@@ -1319,13 +1314,13 @@ static struct dentry *bus1_fs_dir_iop_lookup(struct inode *dir,
 			old = d_splice_alias(inode, dentry);
 	}
 
-	bus1_fs_domain_release(fs_domain);
+	bus1_domain_release(domain);
 	return old;
 }
 
 static int bus1_fs_dir_iop_unlink(struct inode *dir, struct dentry *dentry)
 {
-	struct bus1_fs_domain *fs_domain = dir->i_sb->s_fs_info;
+	struct bus1_domain *domain = dir->i_sb->s_fs_info;
 
 	/*
 	 * An unlink() on the `bus' file causes a full, synchronous teardown of
@@ -1341,7 +1336,7 @@ static int bus1_fs_dir_iop_unlink(struct inode *dir, struct dentry *dentry)
 	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
 
-	bus1_fs_domain_teardown(fs_domain);
+	bus1_domain_teardown(domain);
 	clear_nlink(d_inode(dentry));
 
 	return 0;
@@ -1401,7 +1396,7 @@ static struct inode *bus1_fs_inode_get(struct super_block *sb,
 static int bus1_fs_super_dop_revalidate(struct dentry *dentry,
 					unsigned int flags)
 {
-	struct bus1_fs_domain *fs_domain = dentry->d_sb->s_fs_info;
+	struct bus1_domain *domain = dentry->d_sb->s_fs_info;
 
 	/*
 	 * Revalidation of cached entries is simple. Since all mounts are
@@ -1410,7 +1405,7 @@ static int bus1_fs_super_dop_revalidate(struct dentry *dentry,
 	 * become valid again.
 	 */
 
-	return bus1_active_is_active(&fs_domain->active);
+	return bus1_active_is_active(&domain->active);
 }
 
 static const struct dentry_operations bus1_fs_super_dops = {
@@ -1450,12 +1445,12 @@ static int bus1_fs_super_fill(struct super_block *sb)
 
 static void bus1_fs_super_kill(struct super_block *sb)
 {
-	struct bus1_fs_domain *fs_domain = sb->s_fs_info;
+	struct bus1_domain *domain = sb->s_fs_info;
 
-	if (fs_domain)
-		bus1_fs_domain_teardown(fs_domain);
+	if (domain)
+		bus1_domain_teardown(domain);
 	kill_anon_super(sb);
-	bus1_fs_domain_free(fs_domain);
+	bus1_domain_free(domain);
 }
 
 static int bus1_fs_super_set(struct super_block *sb, void *data)
@@ -1474,22 +1469,22 @@ static struct dentry *bus1_fs_super_mount(struct file_system_type *fs_type,
 					  const char *dev_name,
 					  void *data)
 {
-	struct bus1_fs_domain *fs_domain;
+	struct bus1_domain *domain;
 	struct super_block *sb;
 	int ret;
 
-	fs_domain = bus1_fs_domain_new();
-	if (IS_ERR(fs_domain))
-		return ERR_CAST(fs_domain);
+	domain = bus1_domain_new();
+	if (IS_ERR(domain))
+		return ERR_CAST(domain);
 
-	sb = sget(&bus1_fs_type, NULL, bus1_fs_super_set, flags, fs_domain);
+	sb = sget(&bus1_fs_type, NULL, bus1_fs_super_set, flags, domain);
 	if (IS_ERR(sb)) {
-		bus1_fs_domain_teardown(fs_domain);
-		bus1_fs_domain_free(fs_domain);
+		bus1_domain_teardown(domain);
+		bus1_domain_free(domain);
 		return ERR_CAST(sb);
 	}
 
-	WARN_ON(sb->s_fs_info != fs_domain);
+	WARN_ON(sb->s_fs_info != domain);
 	WARN_ON(sb->s_root);
 
 	ret = bus1_fs_super_fill(sb);

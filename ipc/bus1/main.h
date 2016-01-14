@@ -24,18 +24,18 @@
  * orthogonal hierarchies), but this list tries to give a rough overview:
  *
  * (A) API handle locking:
- *  +--+ bus1_fs_domain.active.write            # domain teardown
+ *  +--+ bus1_domain.active.write               # domain teardown
  *  |                                           #
- *  +--+ bus1_fs_domain.active.read             # mount entry
- *     +--+ bus1_fs_peer.rwlock.read_write      # ioctl entry
- *        +--+ bus1_fs_peer.active.read         #
+ *  +--+ bus1_domain.active.read                # mount entry
+ *     +--+ bus1_peer.rwlock.read_write         # ioctl entry
+ *        +--+ bus1_peer.active.read            #
  *        |  +--+ ... (B) ...                   # peer ioctls
- *        |     +--+ bus1_fs_domain.rwlock.read # peer lookup; inverse (i1)
+ *        |     +--+ bus1_domain.rwlock.read    # peer lookup; inverse (i1)
  *        |                                     #
- *        +--+ bus1_fs_domain.rwlock.write      # peer connect/disconnect
+ *        +--+ bus1_domain.rwlock.write         # peer connect/disconnect
  *        |                                     #
- *        +--+ bus1_fs_domain.rwlock.read       # peer resolve
- *           +--+ bus1_fs_peer.active.write     # peer teardown; inverse (i1)
+ *        +--+ bus1_domain.rwlock.read          # peer resolve
+ *           +--+ bus1_peer.active.write        # peer teardown; inverse (i1)
  *
  * (B) Implementation locking
  *  +--+ (XXX)

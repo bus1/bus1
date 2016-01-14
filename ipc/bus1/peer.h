@@ -23,8 +23,8 @@
 #include "pool.h"
 #include "queue.h"
 
+struct bus1_domain;
 struct bus1_domain_info;
-struct bus1_fs_domain;
 
 /**
  * struct bus1_peer_info - peer information
@@ -53,7 +53,7 @@ void bus1_peer_info_reset(struct bus1_peer_info *peer_info, u64 id);
 
 int bus1_peer_info_ioctl(struct bus1_peer_info *peer_info,
 			 u64 peer_id,
-			 struct bus1_fs_domain *fs_domain,
+			 struct bus1_domain *domain,
 			 struct bus1_domain_info *domain_info,
 			 unsigned int cmd,
 			 unsigned long arg,

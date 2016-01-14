@@ -41,7 +41,7 @@ struct bus1_transaction_header {
 
 struct bus1_transaction {
 	/* sender context */
-	struct bus1_fs_domain *fs_domain;
+	struct bus1_domain *domain;
 	struct bus1_domain_info *domain_info;
 
 	/* transaction state */
@@ -260,7 +260,7 @@ bus1_transaction_import_message(struct bus1_transaction *transaction,
  * bus1_transaction_new_from_user() - XXX
  */
 struct bus1_transaction *
-bus1_transaction_new_from_user(struct bus1_fs_domain *fs_domain,
+bus1_transaction_new_from_user(struct bus1_domain *domain,
 			       struct bus1_domain_info *domain_info,
 			       u64 sender_id,
 			       struct bus1_cmd_send *param,
@@ -273,7 +273,7 @@ bus1_transaction_new_from_user(struct bus1_fs_domain *fs_domain,
 	if (IS_ERR(transaction))
 		return ERR_CAST(transaction);
 
-	transaction->fs_domain = fs_domain;
+	transaction->domain = domain;
 	transaction->domain_info = domain_info;
 
 	r = bus1_transaction_import_vecs(transaction, param, is_compat);
@@ -391,7 +391,7 @@ int bus1_transaction_instantiate_for_id(struct bus1_transaction *transaction,
 	int r;
 
 	/* unknown peers are only ignored, if explicitly told so */
-	fs_peer = bus1_fs_peer_acquire_by_id(transaction->fs_domain, peer_id);
+	fs_peer = bus1_fs_peer_acquire_by_id(transaction->domain, peer_id);
 	if (!fs_peer)
 		return (flags & BUS1_SEND_FLAG_IGNORE_UNKNOWN) ? 0 : -ENXIO;
 
@@ -543,7 +543,7 @@ int bus1_transaction_commit_for_id(struct bus1_transaction *transaction,
 	int r;
 
 	/* unknown peers are only ignored, if explicitly told so */
-	fs_peer = bus1_fs_peer_acquire_by_id(transaction->fs_domain, peer_id);
+	fs_peer = bus1_fs_peer_acquire_by_id(transaction->domain, peer_id);
 	if (!fs_peer)
 		return (flags & BUS1_SEND_FLAG_IGNORE_UNKNOWN) ? 0 : -ENXIO;
 
