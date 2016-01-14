@@ -27,8 +27,10 @@
 #include "util.h"
 
 struct bus1_peer_name {
-	struct rcu_head rcu;
-	struct bus1_peer_name *next;
+	union {
+		struct rcu_head rcu;
+		struct bus1_peer_name *next;
+	};
 	struct bus1_peer *peer;
 	struct rb_node rb;
 	char name[];
