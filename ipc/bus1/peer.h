@@ -53,22 +53,24 @@ struct bus1_peer_info {
 /**
  * struct bus1_peer - peer handle
  * @rwlock:		runtime lock
+ * @rcu:		rcu
  * @waitq:		peer wide wait queue
  * @active:		active references
  * @info:		underlying peer information
  * @names:		owned names
  * @rb:			link into domain
- * @rcu:		rcu
  * @id:			peer ID
  */
 struct bus1_peer {
-	struct rw_semaphore rwlock;
+	union {
+		struct rw_semaphore rwlock;
+		struct rcu_head rcu;
+	};
 	wait_queue_head_t waitq;
 	struct bus1_active active;
 	struct bus1_peer_info __rcu *info;
 	struct bus1_peer_name *names;
 	struct rb_node rb;
-	struct rcu_head rcu;
 	u64 id;
 };
 
