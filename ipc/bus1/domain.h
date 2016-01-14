@@ -24,20 +24,48 @@
 #include <linux/wait.h>
 #include "active.h"
 
+/**
+ * struct bus1_domain_info - domain specific runtime information
+ * @peer_ids:		counter for peer ID allocations
+ * @seq_ids:		counter for transaction ID allocations
+ *
+ * This object contains all runtime data of a domain, which is not required in
+ * the handle object. That is, any data stored in this object will be
+ * deallocated as soon as a domain is torn down (even though there might still
+ * be handles around).
+ */
 struct bus1_domain_info {
 	u64 peer_ids;
 	atomic64_t seq_ids;
 };
 
-struct bus1_domain_info *bus1_domain_info_new(void);
-struct bus1_domain_info *
-bus1_domain_info_free(struct bus1_domain_info *domain_info);
-
+/**
+ * struct bus1_domain - domain handles
+ * @lock:		data lock
+ * @active:		active references
+ * @seqcount:		lookup sequence counter
+ * @waitq:		domain-wide wait queue
+ * @info:		underlying domain information
+ * @n_peers:		number of linked peers
+ * @n_names:		number of linked names
+ * @map_peers:		linked peers
+ * @map_names:		linked names
+ *
+ * This object represents a handle to a domain. The handle always outlives the
+ * underlying domain and is used to gate access to the domain. The handle
+ * provides an active-reference counter to guard access to @info (which
+ * contains the actual domain).
+ *
+ * The lookup maps (@map_peers and @map_names) actually belong into
+ * bus1_domain_info, but for performance reasons they're kept in the handle.
+ * Their write side is protected by @lock, the read side is protected by
+ * @seqcount and RCU.
+ */
 struct bus1_domain {
 	struct mutex lock;
+	struct bus1_active active;
 	seqcount_t seqcount;
 	wait_queue_head_t waitq;
-	struct bus1_active active;
 	struct bus1_domain_info *info;
 	size_t n_peers;
 	size_t n_names;
@@ -50,6 +78,5 @@ struct bus1_domain *bus1_domain_free(struct bus1_domain *domain);
 void bus1_domain_teardown(struct bus1_domain *domain);
 struct bus1_domain *bus1_domain_acquire(struct bus1_domain *domain);
 struct bus1_domain *bus1_domain_release(struct bus1_domain *domain);
-int bus1_domain_resolve(struct bus1_domain *domain, unsigned long arg);
 
 #endif /* __BUS1_DOMAIN_H */

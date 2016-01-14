@@ -22,17 +22,15 @@
 #include <linux/rbtree.h>
 #include <linux/rwsem.h>
 #include <linux/wait.h>
-#include <uapi/linux/bus1.h>
 #include "active.h"
 #include "pool.h"
 #include "queue.h"
 
 struct bus1_domain;
-struct bus1_domain_info;
 struct bus1_peer_name;
 
 /**
- * struct bus1_peer_info - peer information
+ * struct bus1_peer_info - peer specific runtime information
  * @lock:	data lock
  * @rcu:	rcu
  * @pool:	data pool
@@ -56,6 +54,17 @@ struct bus1_peer_info *bus1_peer_info_new(struct bus1_cmd_connect *param);
 struct bus1_peer_info *bus1_peer_info_free(struct bus1_peer_info *peer_info);
 void bus1_peer_info_reset(struct bus1_peer_info *peer_info, u64 id);
 
+/**
+ * struct bus1_peer - peer handle
+ * @rwlock:		runtime lock
+ * @waitq:		peer wide wait queue
+ * @active:		active references
+ * @info:		underlying peer information
+ * @names:		owned names
+ * @rb:			link into domain
+ * @rcu:		rcu
+ * @id:			peer ID
+ */
 struct bus1_peer {
 	struct rw_semaphore rwlock;
 	wait_queue_head_t waitq;

@@ -20,20 +20,14 @@
 #include <linux/namei.h>
 #include <linux/pagemap.h>
 #include <linux/poll.h>
-#include <linux/rbtree.h>
 #include <linux/rcupdate.h>
-#include <linux/rwsem.h>
 #include <linux/sched.h>
-#include <linux/seqlock.h>
 #include <linux/slab.h>
-#include <linux/wait.h>
-#include <uapi/linux/bus1.h>
 #include "active.h"
 #include "domain.h"
 #include "filesystem.h"
 #include "peer.h"
 #include "queue.h"
-#include "util.h"
 
 enum { /* static inode numbers */
 	BUS1_FS_INO_INVALID,
@@ -151,6 +145,7 @@ static int bus1_fs_bus_fop_mmap(struct file *file, struct vm_area_struct *vma)
 		vma->vm_file = get_file(pool->f);
 		vma->vm_flags &= ~VM_MAYWRITE;
 
+		/* calls into shmem_mmap(), which simply sets vm_ops */
 		r = pool->f->f_op->mmap(pool->f, vma);
 	}
 

@@ -16,14 +16,12 @@
 #include <linux/rcupdate.h>
 #include <linux/seqlock.h>
 #include <linux/slab.h>
-#include <linux/uaccess.h>
 #include <linux/wait.h>
 #include "active.h"
 #include "domain.h"
 #include "peer.h"
-#include "util.h"
 
-struct bus1_domain_info *bus1_domain_info_new(void)
+static struct bus1_domain_info *bus1_domain_info_new(void)
 {
 	struct bus1_domain_info *domain_info;
 
@@ -37,7 +35,7 @@ struct bus1_domain_info *bus1_domain_info_new(void)
 	return domain_info;
 }
 
-struct bus1_domain_info *
+static struct bus1_domain_info *
 bus1_domain_info_free(struct bus1_domain_info *domain_info)
 {
 	if (!domain_info)
@@ -68,11 +66,11 @@ struct bus1_domain *bus1_domain_new(void)
 	if (!domain)
 		return ERR_PTR(-ENOMEM);
 
-	init_waitqueue_head(&domain->waitq);
-	bus1_active_init(&domain->active);
-	domain->info = NULL;
 	mutex_init(&domain->lock);
+	bus1_active_init(&domain->active);
 	seqcount_init(&domain->seqcount);
+	init_waitqueue_head(&domain->waitq);
+	domain->info = NULL;
 	domain->n_peers = 0;
 	domain->n_names = 0;
 	domain->map_peers = RB_ROOT;
@@ -177,16 +175,13 @@ void bus1_domain_teardown(struct bus1_domain *domain)
 	bus1_active_drain(&domain->active, &domain->waitq);
 
 	mutex_lock(&domain->lock);
+
 	for (n = rb_first(&domain->map_peers); n; n = rb_next(n)) {
 		peer = container_of(n, struct bus1_peer, rb);
 		bus1_active_deactivate(&peer->active);
 		bus1_active_drain(&peer->active, &peer->waitq);
 	}
 
-	/*
-	 * Don't hold the write seqcount when draining the peer. It is ok not
-	 * to, as the domain maps are not changed whilst draining the peers.
-	 */
 	write_seqcount_begin(&domain->seqcount);
 	for (n = rb_first(&domain->map_peers); n; n = rb_next(n)) {
 		peer = container_of(n, struct bus1_peer, rb);
@@ -222,6 +217,7 @@ void bus1_domain_teardown(struct bus1_domain *domain)
 	WARN_ON(domain->n_peers > 0);
 	domain->map_peers = RB_ROOT;
 	write_seqcount_end(&domain->seqcount);
+
 	mutex_unlock(&domain->lock);
 
 	bus1_active_cleanup(&domain->active, &domain->waitq,

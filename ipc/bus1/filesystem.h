@@ -19,34 +19,19 @@
  * to the domain/peer/etc. objects, the filesystem layer just provides the
  * user-visiable layers and validates the input.
  *
- * Domains and peers are dynamic objects, which form a hierarchy and have
- * several interactions between each other. Any part of the hierarchy may be
- * torn down at runtime, hence, we must always pin any object we're interacting
- * with. Therefore, the filesystem layer implements filesystem handles, which
- * wrap the actual underlying objects. Those handles have lifetimes that are
- * controlled by user-space, as such, they might outlive the object they link
- * to. The filesystem layer hides those handles from the rest of the bus
- * implementation and makes sure whenever user-space enters an operation, the
- * requested handles are pinned and cannot vanish until they finished the
- * operation.
+ * Each time the filesystem is mounted, a new superblock is created and a fresh
+ * bus1-domain is associated with it. Each domain is independent of the others,
+ * and has no effect on anything but its own peers. Bind-mounts allow mirroring
+ * an existing mount at another filesystem location.
  *
- * Each bus1_fs_* handle manages exactly one bus1_* object equivalent. However,
- * the handle can be deactivated at any time, and then drained (waiting for all
- * pending operations to finish). Once drained, the managed bus1_* object is
- * destroyed and any further request on the handle will fail.
- * This logic simplifies the implementation of all bus1_* objects
- * significantly. They can always rely on their context to own/pin the given
- * object, and must not take care of any references themselves. Additionally,
- * even if user-space refused to close their file-descriptors, we're still able
- * to tear down their objects, *and* free the actual object memory. Only the
- * handles themselves (which are pretty small) will stay around.
+ * A mounted filesystem exposes a directory with a single entry, a file called
+ * `bus'. This file represents the bus of this domain. For each open file
+ * description on this entry, a bus1 peer is created. It can be controlled via
+ * ioctls on the file descriptor.
  */
 
+#include <linux/fs.h>
 #include <linux/kernel.h>
-#include <linux/rbtree.h>
-#include <linux/rcupdate.h>
-#include <linux/wait.h>
-#include "active.h"
 
 extern const struct file_operations bus1_fs_bus_fops;
 
