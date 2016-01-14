@@ -19,12 +19,13 @@
 #include <linux/atomic.h>
 #include <linux/kernel.h>
 
-struct bus1_domain {
+struct bus1_domain_info {
 	u64 peer_ids;
 	atomic64_t seq_ids;
 };
 
-struct bus1_domain *bus1_domain_new(void);
-struct bus1_domain *bus1_domain_free(struct bus1_domain *domain);
+struct bus1_domain_info *bus1_domain_info_new(void);
+struct bus1_domain_info *
+bus1_domain_info_free(struct bus1_domain_info *domain_info);
 
 #endif /* __BUS1_DOMAIN_H */

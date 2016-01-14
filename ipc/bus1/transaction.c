@@ -42,7 +42,7 @@ struct bus1_transaction_header {
 struct bus1_transaction {
 	/* sender context */
 	struct bus1_fs_domain *fs_domain;
-	struct bus1_domain *domain;
+	struct bus1_domain_info *domain_info;
 
 	/* transaction state */
 	size_t length_vecs;
@@ -261,7 +261,7 @@ bus1_transaction_import_message(struct bus1_transaction *transaction,
  */
 struct bus1_transaction *
 bus1_transaction_new_from_user(struct bus1_fs_domain *fs_domain,
-			       struct bus1_domain *domain,
+			       struct bus1_domain_info *domain_info,
 			       u64 sender_id,
 			       struct bus1_cmd_send *param,
 			       bool is_compat)
@@ -274,7 +274,7 @@ bus1_transaction_new_from_user(struct bus1_fs_domain *fs_domain,
 		return ERR_CAST(transaction);
 
 	transaction->fs_domain = fs_domain;
-	transaction->domain = domain;
+	transaction->domain_info = domain_info;
 
 	r = bus1_transaction_import_vecs(transaction, param, is_compat);
 	if (r < 0)
@@ -473,7 +473,7 @@ void bus1_transaction_commit(struct bus1_transaction *transaction)
 	 * (including unicast ones) delivered before the next
 	 * multicast message and smaller than the next multicast
 	 * message */
-	seq = atomic64_read(&transaction->domain->seq_ids) + 3;
+	seq = atomic64_read(&transaction->domain_info->seq_ids) + 3;
 	WARN_ON(!(seq & 1)); /* must be odd */
 
 	for (e = second; e; e = e->transaction.next) {
@@ -504,7 +504,7 @@ void bus1_transaction_commit(struct bus1_transaction *transaction)
 		mutex_lock(&peer_info->lock);
 		if (second == transaction->entries) { /* -> @e is first entry */
 			seq = atomic64_add_return(4,
-						&transaction->domain->seq_ids);
+					&transaction->domain_info->seq_ids);
 			WARN_ON(seq & 1); /* must be even */
 			wake = bus1_queue_link(&peer_info->queue, e, seq);
 		} else {
@@ -561,7 +561,7 @@ int bus1_transaction_commit_for_id(struct bus1_transaction *transaction,
 	 * previous and the next multicast message.
 	 */
 	mutex_lock(&peer_info->lock);
-	seq = atomic64_read(&transaction->domain->seq_ids) + 2;
+	seq = atomic64_read(&transaction->domain_info->seq_ids) + 2;
 	WARN_ON(seq & 1); /* must be even */
 	wake = bus1_queue_link(&peer_info->queue, e, seq);
 	mutex_unlock(&peer_info->lock);

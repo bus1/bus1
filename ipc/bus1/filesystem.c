@@ -100,7 +100,7 @@ struct bus1_fs_peer {
  *
  * The bus1_fs_domain object is the low-level handle for domains. It is stored
  * in the super-block of the respective mount that created the domain. As long
- * as you hold an active reference to @active, you can access @domain and it
+ * as you hold an active reference to @active, you can access @info and it
  * will be non-NULL.
  *
  * @lock is used to protect the lookup-trees @map_peers and @map_names. This
@@ -112,7 +112,7 @@ struct bus1_fs_peer {
  * must be taken when @lock is taken for writing, and a retry loop must be
  * used for reading.
  *
- * Technically, the rb-trees could be moved into @domain, as they don't belong
+ * Technically, the rb-trees could be moved into @info, as they don't belong
  * to the handle itself. However, for performance reasons, we avoid the
  * additional dereference and just allow fast lookups on domains.
  */
@@ -121,7 +121,7 @@ struct bus1_fs_domain {
 	seqcount_t seqcount;
 	wait_queue_head_t waitq;
 	struct bus1_active active;
-	struct bus1_domain *domain;
+	struct bus1_domain_info *info;
 	size_t n_peers;
 	size_t n_names;
 	struct rb_root map_peers;
@@ -530,7 +530,7 @@ static int bus1_fs_peer_connect_new(struct bus1_fs_peer *fs_peer,
 	rb_insert_color(&fs_peer->rb, &fs_domain->map_peers);
 
 	/* acquire ID and activate handle */
-	fs_peer->id = ++fs_domain->domain->peer_ids;
+	fs_peer->id = ++fs_domain->info->peer_ids;
 	rcu_assign_pointer(fs_peer->info, peer_info);
 	++fs_domain->n_peers;
 	bus1_active_activate(&fs_peer->active);
@@ -604,7 +604,7 @@ static int bus1_fs_peer_connect_reset(struct bus1_fs_peer *fs_peer,
 
 	/* remove from rb-tree, and change the ID */
 	rb_erase(&fs_peer->rb, &fs_domain->map_peers);
-	fs_peer->id = ++fs_domain->domain->peer_ids;
+	fs_peer->id = ++fs_domain->info->peer_ids;
 
 	/* insert at the tail again */
 	last = rb_last(&fs_domain->map_peers);
@@ -785,7 +785,7 @@ bus1_fs_domain_free(struct bus1_fs_domain *fs_domain)
 	WARN_ON(!RB_EMPTY_ROOT(&fs_domain->map_peers));
 	WARN_ON(fs_domain->n_names > 0);
 	WARN_ON(fs_domain->n_peers > 0);
-	WARN_ON(fs_domain->domain);
+	WARN_ON(fs_domain->info);
 	bus1_active_destroy(&fs_domain->active);
 	kfree(fs_domain);
 
@@ -803,7 +803,7 @@ static struct bus1_fs_domain *bus1_fs_domain_new(void)
 
 	init_waitqueue_head(&fs_domain->waitq);
 	bus1_active_init(&fs_domain->active);
-	fs_domain->domain = NULL;
+	fs_domain->info = NULL;
 	mutex_init(&fs_domain->lock);
 	seqcount_init(&fs_domain->seqcount);
 	fs_domain->n_peers = 0;
@@ -812,10 +812,10 @@ static struct bus1_fs_domain *bus1_fs_domain_new(void)
 	fs_domain->map_names = RB_ROOT;
 
 	/* domains are implicitly activated during allocation */
-	fs_domain->domain = bus1_domain_new();
-	if (IS_ERR(fs_domain->domain)) {
-		r = PTR_ERR(fs_domain->domain);
-		fs_domain->domain = NULL;
+	fs_domain->info = bus1_domain_info_new();
+	if (IS_ERR(fs_domain->info)) {
+		r = PTR_ERR(fs_domain->info);
+		fs_domain->info = NULL;
 		goto error;
 	}
 
@@ -850,7 +850,7 @@ static void bus1_fs_domain_cleanup(struct bus1_active *active, void *userdata)
 							struct bus1_fs_domain,
 							active);
 
-	fs_domain->domain = bus1_domain_free(fs_domain->domain);
+	fs_domain->info = bus1_domain_info_free(fs_domain->info);
 }
 
 static void bus1_fs_domain_teardown(struct bus1_fs_domain *fs_domain)
@@ -1122,7 +1122,7 @@ static long bus1_fs_bus_fop_ioctl(struct file *file,
 			r = bus1_peer_info_ioctl(
 					bus1_fs_peer_dereference(fs_peer),
 					fs_peer->id,
-					fs_domain, fs_domain->domain,
+					fs_domain, fs_domain->info,
 					cmd, arg, is_compat);
 			bus1_fs_peer_release(fs_peer);
 		}

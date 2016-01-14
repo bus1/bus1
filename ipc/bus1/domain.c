@@ -14,26 +14,27 @@
 #include <linux/slab.h>
 #include "domain.h"
 
-struct bus1_domain *bus1_domain_new(void)
+struct bus1_domain_info *bus1_domain_info_new(void)
 {
-	struct bus1_domain *domain;
+	struct bus1_domain_info *domain_info;
 
-	domain = kmalloc(sizeof(*domain), GFP_KERNEL);
-	if (!domain)
+	domain_info = kmalloc(sizeof(*domain_info), GFP_KERNEL);
+	if (!domain_info)
 		return ERR_PTR(-ENOMEM);
 
-	domain->peer_ids = 0;
-	atomic64_set(&domain->seq_ids, 0);
+	domain_info->peer_ids = 0;
+	atomic64_set(&domain_info->seq_ids, 0);
 
-	return domain;
+	return domain_info;
 }
 
-struct bus1_domain *bus1_domain_free(struct bus1_domain *domain)
+struct bus1_domain_info *
+bus1_domain_info_free(struct bus1_domain_info *domain_info)
 {
-	if (!domain)
+	if (!domain_info)
 		return NULL;
 
-	kfree(domain);
+	kfree(domain_info);
 
 	return NULL;
 }
