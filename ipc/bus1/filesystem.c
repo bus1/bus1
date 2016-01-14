@@ -84,17 +84,6 @@ static int bus1_fs_bus_fop_release(struct inode *inode, struct file *file)
 	return 0;
 }
 
-static long bus1_fs_bus_fop_ioctl(struct file *file,
-				  unsigned int cmd,
-				  unsigned long arg,
-				  bool is_compat)
-{
-	struct bus1_domain *domain = file_inode(file)->i_sb->s_fs_info;
-	struct bus1_peer *peer = file->private_data;
-
-	return bus1_peer_ioctl(peer, domain, cmd, arg, is_compat);
-}
-
 static unsigned int bus1_fs_bus_fop_poll(struct file *file,
 					 struct poll_table_struct *wait)
 {
@@ -173,7 +162,9 @@ static long bus1_fs_bus_fop_ioctl_native(struct file *file,
 					 unsigned int cmd,
 					 unsigned long arg)
 {
-	return bus1_fs_bus_fop_ioctl(file, cmd, arg, false);
+	struct bus1_domain *domain = file_inode(file)->i_sb->s_fs_info;
+
+	return bus1_peer_ioctl(file->private_data, domain, cmd, arg, false);
 }
 
 #ifdef CONFIG_COMPAT
@@ -181,7 +172,9 @@ static long bus1_fs_bus_fop_ioctl_compat(struct file *file,
 					 unsigned int cmd,
 					 unsigned long arg)
 {
-	return bus1_fs_bus_fop_ioctl(file, cmd, arg, true);
+	struct bus1_domain *domain = file_inode(file)->i_sb->s_fs_info;
+
+	return bus1_peer_ioctl(file->private_data, domain, cmd, arg, true);
 }
 #endif
 
