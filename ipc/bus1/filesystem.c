@@ -95,7 +95,7 @@ static unsigned int bus1_fs_bus_fop_poll(struct file *file,
 	 * (either via DISCONNECT or domain teardown). Lastly, we dereference
 	 * the peer object (which is rcu-protected). It might be NULL during a
 	 * racing DISCONNECT (_very_ unlikely, but lets be safe). If it is not
-	 * NULL, the peer is life and active, so it is at least writable. Check
+	 * NULL, the peer is live and active, so it is at least writable. Check
 	 * if the queue is non-empty, and then also mark it as readable.
 	 */
 	rcu_read_lock();
@@ -459,7 +459,7 @@ static struct file_system_type bus1_fs_type = {
  * bus1_fs_init() - register filesystem
  *
  * This registers a filesystem with the VFS layer. The filesystem is called
- * `KBUILD_MODNAME "fs"', which usually resolves to `bus1fs'. The nameing
+ * `KBUILD_MODNAME "fs"', which usually resolves to `bus1fs'. The naming
  * scheme allows to set KBUILD_MODNAME to `bus2' and you will get an
  * independent filesystem for developers, named `bus2fs'.
  *
