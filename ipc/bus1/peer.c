@@ -894,8 +894,9 @@ static int bus1_peer_ioctl_free(struct bus1_peer *peer, unsigned long arg)
 	u64 offset;
 	int r;
 
-	if (bus1_import_fixed_ioctl(&offset, arg, sizeof(offset)))
-		return -EFAULT;
+	r = bus1_import_fixed_ioctl(&offset, arg, sizeof(offset));
+	if (r < 0)
+		return r;
 
 	mutex_lock(&peer_info->lock);
 	r = bus1_pool_release_user(&peer_info->pool, offset);
