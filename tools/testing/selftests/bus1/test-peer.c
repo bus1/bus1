@@ -17,6 +17,9 @@
 #define b1_usec_from_sec(_sec) b1_usec_from_msec((_sec) * UINT64_C(1000))
 #define b1_usec_from_timespec(_ts) (b1_usec_from_sec((_ts)->tv_sec) + b1_usec_from_nsec((_ts)->tv_nsec))
 
+#define N_DESTS (512)
+#define N_ITERATIONS (100000)
+
 static inline uint64_t usec_from_clock(clockid_t clock) {
         struct timespec ts;
         int r;
@@ -29,28 +32,44 @@ static inline uint64_t usec_from_clock(clockid_t clock) {
 /* test the degenerate un-contended case, this is only interesting in as far as
  * it gives us a baseline of how fast things can be in the best case */
 static int test_peer_sequential(const char *mount_path, size_t n_dests,
-				unsigned iterations, bool payload, bool reply)
+				bool payload, bool reply)
 {
 	uint8_t data[1024] = {};
 	struct b1_client *client = NULL;
-	uint64_t dests[n_dests], id;
+	struct b1_client *clients[n_dests];
+	uint64_t dests[n_dests];
 	uint64_t time_start, time_end;
 	void *ptr_payload = NULL;
 	size_t len_payload = 0;
-	unsigned i;
+	unsigned i, iterations = N_ITERATIONS;
 	int r;
 
+	assert(mount_path);
 	assert(!reply || n_dests == 1);
+	assert(n_dests < N_ITERATIONS);
 
 	r = b1_client_new_from_mount(&client, mount_path);
 	assert(r >= 0);
-	assert(client);
 
-	id = b1_client_connect(client, NULL, 0);
-	assert(id > 0);
+	r = b1_client_connect(client, NULL, 0);
+	assert(r >= 0);
 
-	for (i = 0; i < n_dests; i ++)
-		dests[i] = id;
+	for (i = 0; i < n_dests; i++) {
+		clients[i] = NULL;
+		r = b1_client_new_from_mount(&clients[i], mount_path);
+		assert(r >= 0);
+		assert(clients[i]);
+
+		r = b1_client_connect(clients[i], NULL, 0);
+		assert(r >= 0);
+
+		dests[i] = r;
+	}
+
+	if (n_dests == 0)
+		iterations *= 10;
+	else
+		iterations /= n_dests;
 
 	if (payload) {
 		ptr_payload = data;
@@ -68,16 +87,24 @@ static int test_peer_sequential(const char *mount_path, size_t n_dests,
 	}
 	time_end = usec_from_clock(CLOCK_THREAD_CPUTIME_ID);
 
+	for (i = 0; i < n_dests; i++) {
+		r = b1_client_disconnect(clients[i]);
+		assert(r >= 0);
+
+		clients[i] = b1_client_free(clients[i]);
+		assert(!clients[i]);
+	}
+
 	r = b1_client_disconnect(client);
 	assert(r >= 0);
 
 	client = b1_client_free(client);
 	assert(!client);
 
-	return time_end - time_start;
+	return ((time_end - time_start) * 1000) / iterations;
 }
 
-static int test_peer_api(const char *mount_path)
+static void test_peer_api(const char *mount_path)
 {
 	struct b1_client *client = NULL;
 	const char *name1 = "foo", *name2 = "bar";
@@ -129,19 +156,15 @@ static int test_peer_api(const char *mount_path)
 	r = b1_client_recv(client);
 	assert(r == -EAGAIN);
 
-	dests[1] = id1;
-	dests[2] = id1;
 	r = b1_client_send(client, dests, 1, NULL, 0);
 	assert(r >= 0);
 
-	r = b1_client_send(client, dests, 3, NULL, 0);
+	r = b1_client_send(client, dests, 1, NULL, 0);
 	assert(r >= 0);
 
-	r = b1_client_recv(client);
-	assert(r == 24);
-
-	r = b1_client_recv(client);
-	assert(r == 24);
+	dests[1] = id1;
+	r = b1_client_send(client, dests, 2, NULL, 0);
+	assert(r == -EINVAL);
 
 	r = b1_client_recv(client);
 	assert(r == 24);
@@ -157,8 +180,6 @@ static int test_peer_api(const char *mount_path)
 
 	client = b1_client_free(client);
 	assert(!client);
-
-	return B1_TEST_OK;
 }
 
 int test_peer(const char *mount_path)
@@ -166,44 +187,40 @@ int test_peer(const char *mount_path)
 	unsigned i;
 	int r;
 
-	r = test_peer_api(mount_path);
-	if (r < 0)
-		return r;
+	test_peer_api(mount_path);
 
-	r = test_peer_sequential(mount_path, 0, 10000000, false, false);
-	fprintf(stderr, "noop send takes %zu ns\n", r / 10000);
+	r = test_peer_sequential(mount_path, 0, false, false);
+	fprintf(stderr, "noop send takes %zu ns\n", r);
 
-	r = test_peer_sequential(mount_path, 1, 10000, false, false);
-	fprintf(stderr, "unicast send without payload takes %zu ns\n",
-		r / 10);
+	r = test_peer_sequential(mount_path, 1, false, false);
+	fprintf(stderr, "unicast send without payload takes %zu ns\n", r);
 
-	r = test_peer_sequential(mount_path, 1, 10000, false, true);
-	fprintf(stderr, "unicast send/recv without payload takes %zu ns\n",
-		r / 10);
+	r = test_peer_sequential(mount_path, 1, false, true);
+	fprintf(stderr, "unicast send/recv without payload takes %zu ns\n", r);
 
-	for (i = 2; i <= 128; i *= 4) {
-		r = test_peer_sequential(mount_path, i, 1000, false, false);
+	for (i = 2; i <= N_DESTS; i *= 2) {
+		r = test_peer_sequential(mount_path, i, false, false);
 		assert(r >= 0);
 
 		fprintf(stderr, "multicast %zu messages without payload in "
                         "%zu ns per destination\n", i, r / i);
 	}
 
-	r = test_peer_sequential(mount_path, 1, 10000, true, false);
-	fprintf(stderr, "unicast send with payload takes %zu ns\n",
-		r / 10);
+	r = test_peer_sequential(mount_path, 1, true, false);
+	fprintf(stderr, "unicast send with payload takes %zu ns\n", r);
 
-	r = test_peer_sequential(mount_path, 1, 10000, true, true);
-	fprintf(stderr, "unicast send/recv with payload takes %zu ns\n",
-		r / 10);
+	r = test_peer_sequential(mount_path, 1, true, true);
+	fprintf(stderr, "unicast send/recv with payload takes %zu ns\n", r);
 
-	for (i = 2; i <= 128; i *= 4) {
-		r = test_peer_sequential(mount_path, i, 1000, true, false);
+	for (i = 2; i <= N_DESTS; i *= 2) {
+		r = test_peer_sequential(mount_path, i, true, false);
 		assert(r >= 0);
 
-		fprintf(stderr, "multicast %zu messages with payload in %zu ns "
-			"per destination\n", i, r / i);
+		fprintf(stderr, "multicast %zu messages with payload in %zu "
+			"ns per destination\n", i, r / i);
 	}
+
+	fprintf(stderr, "\n\n");
 
 	return B1_TEST_OK;
 }
