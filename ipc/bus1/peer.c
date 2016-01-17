@@ -926,8 +926,7 @@ static int bus1_peer_ioctl_send(struct bus1_peer *peer,
 		return -EINVAL;
 
 	/* check basic limits; avoids integer-overflows later on */
-	if (unlikely(param.n_destinations > BUS1_DESTINATION_MAX) ||
-	    unlikely(param.n_vecs > BUS1_VEC_MAX) ||
+	if (unlikely(param.n_vecs > BUS1_VEC_MAX) ||
 	    unlikely(param.n_fds > BUS1_FD_MAX))
 		return -EMSGSIZE;
 
