@@ -454,8 +454,9 @@ struct bus1_peer *bus1_peer_acquire_by_id(struct bus1_domain *domain, u64 id)
 	struct rb_node *n;
 	unsigned seq;
 
+	/* first try without waiting for any writers */
+	seq = raw_seqcount_begin(&domain->seqcount);
 	do {
-		seq = read_seqcount_begin(&domain->seqcount);
 		rcu_read_lock();
 		n = rcu_dereference(domain->map_peers.rb_node);
 		while (n) {
@@ -470,7 +471,9 @@ struct bus1_peer *bus1_peer_acquire_by_id(struct bus1_domain *domain, u64 id)
 			}
 		}
 		rcu_read_unlock();
-	} while (!res && read_seqcount_retry(&domain->seqcount, seq));
+	} while (!res &&
+		 read_seqcount_retry(&domain->seqcount, seq) &&
+		 ((seq = read_seqcount_begin(&domain->seqcount)), true));
 
 	return res;
 }
@@ -856,8 +859,8 @@ static int bus1_peer_ioctl_resolve(struct bus1_peer *peer,
 	}
 
 	/* find unique-id of named peer */
+	seq = raw_seqcount_begin(&domain->seqcount);
 	do {
-		seq = read_seqcount_begin(&domain->seqcount);
 		rcu_read_lock();
 		n = rcu_dereference(domain->map_names.rb_node);
 		while (n) {
@@ -874,7 +877,9 @@ static int bus1_peer_ioctl_resolve(struct bus1_peer *peer,
 			}
 		}
 		rcu_read_unlock();
-	} while (!n && read_seqcount_retry(&domain->seqcount, seq));
+	} while (!n &&
+		 read_seqcount_retry(&domain->seqcount, seq) &&
+		 ((seq = read_seqcount_begin(&domain->seqcount)), true));
 
 	if (!n)
 		r = -ENXIO; /* not found, or deactivated */
