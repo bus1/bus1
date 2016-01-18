@@ -128,7 +128,7 @@ struct bus1_queue_entry {
 	u64 seq;
 	u64 destination_id;
 	struct {
-		struct bus1_queue_entry *next;
+		struct rb_node rb;
 		struct bus1_peer *peer;
 	} transaction;
 	union {

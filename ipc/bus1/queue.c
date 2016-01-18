@@ -292,6 +292,7 @@ struct bus1_queue_entry *bus1_queue_entry_new(size_t n_files)
 	if (!entry)
 		return ERR_PTR(-ENOMEM);
 
+	RB_CLEAR_NODE(&entry->transaction.rb);
 	RB_CLEAR_NODE(&entry->rb);
 	entry->n_files = n_files;
 
@@ -326,7 +327,7 @@ bus1_queue_entry_free(struct bus1_queue_entry *entry)
 
 	WARN_ON(entry->slice);
 	WARN_ON(entry->transaction.peer);
-	WARN_ON(entry->transaction.next);
+	WARN_ON(!RB_EMPTY_NODE(&entry->transaction.rb));
 
 	/*
 	 * Entry must be unlinked by the caller. The rb-storage is re-used by

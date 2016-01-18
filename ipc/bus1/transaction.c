@@ -54,7 +54,7 @@ struct bus1_transaction {
 	struct file **files;
 
 	/* destinations */
-	struct bus1_queue_entry *entries;
+	struct rb_root entries;
 };
 
 static struct bus1_transaction *
@@ -91,6 +91,8 @@ bus1_transaction_new(size_t n_vecs, size_t n_files)
 	/* skip extra-vecs initially, just guarantee they're there */
 	transaction->vecs += BUS1_TRANSACTION_EXTRA_VECS;
 
+	transaction->entries = RB_ROOT;
+
 	return transaction;
 }
 
@@ -113,17 +115,20 @@ bus1_transaction_free(struct bus1_transaction *transaction)
 	struct bus1_queue_entry *entry;
 	struct bus1_peer *peer;
 	struct bus1_peer_info *peer_info;
+	struct rb_node *node, *t;
 	size_t i;
 
 	if (!transaction)
 		return NULL;
 
 	/* release all in-flight queue entries and their pinned peers */
-	while ((entry = transaction->entries)) {
-		transaction->entries = entry->transaction.next;
+	for (node = rb_first_postorder(&transaction->entries);
+	     node && ((t = rb_next_postorder(node)), true);
+	     node = t) {
+		entry = container_of(node, struct bus1_queue_entry, transaction.rb);
 		peer = entry->transaction.peer;
 		entry->transaction.peer = NULL;
-		entry->transaction.next = NULL;
+	        RB_CLEAR_NODE(&entry->transaction.rb);
 
 		peer_info = bus1_peer_dereference(peer);
 
@@ -135,6 +140,8 @@ bus1_transaction_free(struct bus1_transaction *transaction)
 		bus1_peer_release(peer);
 		bus1_queue_entry_free(entry); /* fput()s entry->files[] */
 	}
+
+	transaction->entries = RB_ROOT;
 
 	/* release message payload */
 	for (i = 0; i < transaction->n_files; ++i)
@@ -367,6 +374,34 @@ error:
 	return ERR_PTR(r);
 }
 
+static int bus1_transaction_link(struct bus1_transaction *transaction,
+				  struct bus1_queue_entry *entry)
+{
+	struct bus1_queue_entry *iter;
+	struct rb_node *prev, **slot;
+
+	WARN_ON(!RB_EMPTY_NODE(&entry->transaction.rb));
+
+	slot = &transaction->entries.rb_node;
+	prev = NULL;
+	while (*slot) {
+		prev = *slot;
+		iter = container_of(prev, struct bus1_queue_entry, transaction.rb);
+		if (entry->destination_id < iter->destination_id) {
+			slot = &prev->rb_left;
+		} else if (entry->destination_id > iter->destination_id) {
+			slot = &prev->rb_right;
+		} else /* if (entry->destination_id == iter->destination_id) */ {
+			return -ENOTUNIQ;
+		}
+	}
+
+	rb_link_node(&entry->transaction.rb, prev, slot);
+	rb_insert_color(&entry->transaction.rb, &transaction->entries);
+
+	return 0;
+}
+
 /**
  * bus1_transaction_instantiate_for_id() - instantiate a message
  * @transaction:	transaction to work with
@@ -404,9 +439,10 @@ int bus1_transaction_instantiate_for_id(struct bus1_transaction *transaction,
 	}
 
 	/* link message into transaction */
-	entry->transaction.next = transaction->entries;
 	entry->transaction.peer = peer;
-	transaction->entries = entry;
+	r = bus1_transaction_link(transaction, entry);
+	if (r < 0)
+		goto error;
 
 	return 0;
 
@@ -441,19 +477,21 @@ error:
  */
 void bus1_transaction_commit(struct bus1_transaction *transaction)
 {
-	struct bus1_queue_entry *e, *second;
+	struct rb_node *node, *first, *second, *t;
+	struct bus1_queue_entry *e;
 	struct bus1_peer *peer;
 	struct bus1_peer_info *peer_info;
 	bool wake;
 	u64 seq = 0;
 
 	/* nothing to do for empty destination sets */
-	if (!transaction->entries)
+	if (RB_EMPTY_ROOT(&transaction->entries))
 		return;
 
 	/* second destination; in the unicast case, we should be using
 	 * bus1_transaction_commit_for_id() instead */
-	second = transaction->entries->transaction.next;
+	first = rb_first_postorder(&transaction->entries);
+	second = rb_next_postorder(first);
 	WARN_ON(!second);
 
 	/*
@@ -475,7 +513,8 @@ void bus1_transaction_commit(struct bus1_transaction *transaction)
 	seq = atomic64_read(&transaction->domain_info->seq_ids) + 3;
 	WARN_ON(!(seq & 1)); /* must be odd */
 
-	for (e = second; e; e = e->transaction.next) {
+	for (node = second; node; node = rb_next_postorder(node)) {
+		e = container_of(node, struct bus1_queue_entry, transaction.rb);
 		peer_info = bus1_peer_dereference(e->transaction.peer);
 
 		mutex_lock(&peer_info->lock);
@@ -492,16 +531,18 @@ void bus1_transaction_commit(struct bus1_transaction *transaction)
 	 * Once we drop the peer-lock, each entry is owned by the peer and we
 	 * must not dereference it, anymore. It might get dequeued at any time.
 	 */
-	while ((e = transaction->entries)) {
-		transaction->entries = e->transaction.next;
+	for (node = first;
+	     node && ((t = rb_next_postorder(node)), true);
+	     node = t) {
+		e = container_of(node, struct bus1_queue_entry, transaction.rb);
 		peer = e->transaction.peer;
 		peer_info = bus1_peer_dereference(peer);
 
-		e->transaction.next = NULL;
+		RB_CLEAR_NODE(&e->transaction.rb);
 		e->transaction.peer = NULL;
 
 		mutex_lock(&peer_info->lock);
-		if (second == transaction->entries) { /* -> @e is first entry */
+		if (node == first) {
 			seq = atomic64_add_return(4,
 					&transaction->domain_info->seq_ids);
 			WARN_ON(seq & 1); /* must be even */
@@ -517,6 +558,8 @@ void bus1_transaction_commit(struct bus1_transaction *transaction)
 
 		bus1_peer_release(peer);
 	}
+
+	transaction->entries = RB_ROOT;
 }
 
 /**
