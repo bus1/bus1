@@ -103,6 +103,8 @@ int b1_client_connect(struct b1_client *client, const char **names, size_t n_nam
 	unsigned i;
 	int r;
 
+	assert(client);
+
 	for (i = 0, nameslen = 0; i < n_names; i ++)
 		nameslen += strlen(names[i]) + 1;
 
@@ -125,6 +127,8 @@ int b1_client_connect(struct b1_client *client, const char **names, size_t n_nam
 int b1_client_disconnect(struct b1_client *client)
 {
 	int r;
+
+	assert(client);
 
 	r = ioctl(client->fd, BUS1_CMD_DISCONNECT, NULL);
 	if (r < 0)
@@ -174,6 +178,8 @@ int b1_client_send(struct b1_client *client, uint64_t *dests, size_t n_dests, vo
 	};
 	int r;
 
+	assert(client);
+
 	if (payload) {
 		cmd.ptr_vecs = (unsigned long)&vec;
 		cmd.n_vecs = 1;
@@ -190,6 +196,8 @@ int b1_client_recv(struct b1_client *client)
 {
 	struct bus1_cmd_recv cmd = {};
 	int r;
+
+	assert(client);
 
 	r = ioctl(client->fd, BUS1_CMD_RECV, &cmd);
 	if (r < 0)
