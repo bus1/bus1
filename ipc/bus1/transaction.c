@@ -451,6 +451,22 @@ error:
 		/* XXX: convey error to @peer */
 		r = 0;
 	}
+
+	if (entry && entry->slice) {
+		struct bus1_peer_info *peer_info;
+
+		peer_info = bus1_peer_dereference(peer);
+
+		mutex_lock(&peer_info->lock);
+		bus1_pool_release_kernel(&peer_info->pool, entry->slice);
+		mutex_unlock(&peer_info->lock);
+
+		entry->slice = NULL;
+		entry->transaction.peer = NULL;
+
+		bus1_queue_entry_free(entry);
+	}
+
 	bus1_peer_release(peer);
 	return r;
 }
