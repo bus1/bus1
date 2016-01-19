@@ -13,6 +13,7 @@
 #include <linux/file.h>
 #include <linux/fs.h>
 #include <linux/kernel.h>
+#include <linux/lockdep.h>
 #include <linux/slab.h>
 #include <linux/uaccess.h>
 #include <linux/uio.h>
@@ -55,6 +56,10 @@ struct bus1_transaction {
 
 	/* destinations */
 	struct rb_root entries;
+
+#ifdef CONFIG_DEBUG_LOCK_ALLOC
+	struct lockdep_map nest_map;
+#endif
 };
 
 static struct bus1_transaction *
@@ -83,6 +88,44 @@ bus1_transaction_new(size_t n_vecs, size_t n_files)
 	transaction = kzalloc(size, GFP_TEMPORARY);
 	if (!transaction)
 		return ERR_PTR(-ENOMEM);
+
+#ifdef CONFIG_DEBUG_LOCK_ALLOC
+	{
+		/*
+		 * So this is a bit nasty: The bus1_active implementation can
+		 * be seen as a rw-lock, hence, we added lockdep annotations to
+		 * debug it. However, it also is kind of a reference-counter,
+		 * so its use might become more heavy than a normal lock. In
+		 * most code-paths we don't care, but transactions are special.
+		 * Transactions might have to pin a huge amount of destinations
+		 * for multicasts. This might require holding active-references
+		 * to them for the whole time of the syscall, and thus might
+		 * kick lockdep over the edge. To avoid making lockdep track
+		 * each lock individually, we must tell lockdep that locking
+		 * order for read-locks on active-references do not matter. To
+		 * achieve this, we use the "nest-lock" functionality. It
+		 * basically tells lockdep, that if we always lock the
+		 * nest-lock when locking multiple of the other locks, then the
+		 * order of the other locks does not matter, as long as the
+		 * nest-lock is the outer most lock.
+		 *
+		 * Well, we don't have a nest-lock, but we can fake one. For
+		 * each transaction we fake a nest_map and implicitly order all
+		 * active-references underneath it. This should be enough to
+		 * make lockdep collapse all active-references on the same
+		 * level and we're good to go.
+		 */
+		static struct lock_class_key bus1_transaction_nest_key;
+
+		lockdep_init_map(&transaction->nest_map, "bus1.nest",
+				 &bus1_transaction_nest_key, 0);
+		lock_acquire_exclusive(&transaction->nest_map,	/* lock */
+				       0,			/* subclass */
+				       0,			/* try-lock */
+				       NULL,			/* nest */
+				       _RET_IP_);		/* IP */
+	}
+#endif
 
 	/* only reserve space, don't claim it */
 	transaction->vecs = (void *)(transaction + 1);
@@ -147,6 +190,14 @@ bus1_transaction_free(struct bus1_transaction *transaction)
 	for (i = 0; i < transaction->n_files; ++i)
 		if (transaction->files[i])
 			fput(transaction->files[i]);
+
+#ifdef CONFIG_DEBUG_LOCK_ALLOC
+	{
+		lock_release(&transaction->nest_map,	/* lock */
+			     1,				/* nested (no-op) */
+			     _RET_IP_);			/* IP */
+	}
+#endif
 
 	kfree(transaction);
 
@@ -425,7 +476,13 @@ int bus1_transaction_instantiate_for_id(struct bus1_transaction *transaction,
 	int r;
 
 	/* unknown peers are only ignored, if explicitly told so */
-	peer = bus1_peer_acquire_by_id(transaction->domain, peer_id);
+	peer = bus1_peer_acquire_by_id(transaction->domain, peer_id
+#ifdef CONFIG_DEBUG_LOCK_ALLOC
+				       , &transaction->nest_map
+#else
+				       , NULL
+#endif
+				       );
 	if (!peer)
 		return (flags & BUS1_SEND_FLAG_IGNORE_UNKNOWN) ? 0 : -ENXIO;
 
@@ -601,7 +658,7 @@ int bus1_transaction_commit_for_id(struct bus1_transaction *transaction,
 	int r;
 
 	/* unknown peers are only ignored, if explicitly told so */
-	peer = bus1_peer_acquire_by_id(transaction->domain, peer_id);
+	peer = bus1_peer_acquire_by_id(transaction->domain, peer_id, NULL);
 	if (!peer)
 		return (flags & BUS1_SEND_FLAG_IGNORE_UNKNOWN) ? 0 : -ENXIO;
 

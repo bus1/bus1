@@ -378,6 +378,30 @@ bool bus1_active_cleanup(struct bus1_active *active,
  */
 struct bus1_active *bus1_active_acquire(struct bus1_active *active)
 {
+	return bus1_active_acquire_nest_lock(active, NULL);
+}
+
+/**
+ * bus1_active_acquire_nest_lock() - acquire active reference
+ * @active:	object to acquire active reference to, or NULL
+ * @nest:	lock to nest under, or NULL
+ *
+ * See bus1_active_acquire() for documentation.
+ *
+ * This function extends bus1_active_acquire() with a nest-lock annotation for
+ * lockdep. Given that this function is a try-lock operation, its ordering is
+ * irrelevant. However, lockdep cannot know this, and usually doesn't have to
+ * know this, as long as we only acquire a fixed set of references at the same
+ * time. Some code-paths require huge sets of those references, though. Those
+ * paths can use this function in combination with a nest-lock to explicitly
+ * tell lockdep to ignore acquisition order for this set of locks (we kind of
+ * misuse the nest-lock feature, but it should be fine).
+ *
+ * Return: @active if reference was acquired, NULL if not.
+ */
+struct bus1_active *bus1_active_acquire_nest_lock(struct bus1_active *active,
+						  struct lockdep_map *nest)
+{
 	bool res;
 
 	res = active && atomic_inc_unless_negative(&active->count);
@@ -386,7 +410,7 @@ struct bus1_active *bus1_active_acquire(struct bus1_active *active)
 		lock_acquire_shared(&active->dep_map,	/* lock */
 				    0,			/* subclass */
 				    1,			/* try-lock */
-				    NULL,		/* nest underneath */
+				    nest,		/* nest underneath */
 				    _RET_IP_);		/* IP */
 #endif
 
