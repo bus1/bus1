@@ -294,8 +294,6 @@ struct bus1_queue_entry *bus1_queue_entry_new(size_t n_files)
 
 	RB_CLEAR_NODE(&entry->rb);
 	entry->n_files = n_files;
-	if (n_files > 0)
-		memset(entry->files, 0, sizeof(*entry->files) * n_files);
 
 	return entry;
 }
