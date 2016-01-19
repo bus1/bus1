@@ -162,7 +162,7 @@ static void test_peer_api(const char *mount_path)
 
 	dests[1] = id1;
 	r = b1_client_send(client, dests, 2, NULL, 0);
-	assert(r == -EINVAL);
+	assert(r == -ENOTUNIQ);
 
 	r = b1_client_recv(client);
 	assert(r == 24);

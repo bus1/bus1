@@ -918,7 +918,7 @@ static int bus1_peer_ioctl_send(struct bus1_peer *peer,
 	struct bus1_transaction *transaction = NULL;
 	const u64 __user *ptr_dest;
 	struct bus1_cmd_send param;
-	u64 destination, prev = (u64) -1;
+	u64 destination;
 	size_t i;
 	int r;
 
@@ -972,13 +972,6 @@ static int bus1_peer_ioctl_send(struct bus1_peer *peer,
 				r = -EFAULT; /* faults are always fatal */
 				goto exit;
 			}
-
-			if (unlikely(prev != (u64) -1 && destination <= prev)) {
-				/* require destinations to be sorted and unique */
-				r = -EINVAL;
-				goto exit;
-			} else
-				prev = destination;
 
 			r = bus1_transaction_instantiate_for_id(transaction,
 								destination,
