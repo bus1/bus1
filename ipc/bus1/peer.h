@@ -17,6 +17,7 @@
  */
 
 #include <linux/kernel.h>
+#include <linux/list.h>
 #include <linux/mutex.h>
 #include <linux/rcupdate.h>
 #include <linux/rbtree.h>
@@ -31,10 +32,12 @@ struct bus1_peer_name;
 
 /**
  * struct bus1_peer_info - peer specific runtime information
- * @lock:	data lock
- * @rcu:	rcu
- * @pool:	data pool
- * @queue:	message queue, rcu-accessible
+ * @lock:		data lock
+ * @rcu:		rcu
+ * @pool:		data pool
+ * @queue:		message queue, rcu-accessible
+ * @map_trackees:	map of all peers we track
+ * @list_trackers:	list of all peers tracking us
  */
 struct bus1_peer_info {
 	union {
@@ -43,6 +46,8 @@ struct bus1_peer_info {
 	};
 	struct bus1_pool pool;
 	struct bus1_queue queue;
+	struct rb_root map_trackees;
+	struct list_head list_trackers;
 };
 
 #define bus1_peer_info_from_pool(_pool) \

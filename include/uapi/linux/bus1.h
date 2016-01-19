@@ -36,6 +36,9 @@
  *   EXFULL:            target memory pool is full
  *   ENOTCONN:          handle is not connected, yet
  *   EISCONN:           handle is already connected
+ *   ENOTUNIQ:          argument is not unique
+ *   ELOOP:             argument points back to itself
+ *   EALREADY:          operation already in progress
  */
 
 #include <linux/ioctl.h>
