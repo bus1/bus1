@@ -104,80 +104,123 @@ static int test_peer_sequential(const char *mount_path, size_t n_dests,
 
 static void test_peer_api(const char *mount_path)
 {
-	struct b1_client *client = NULL;
+	struct b1_client *client1 = NULL, *client2 = NULL;
 	const char *name1 = "foo", *name2 = "bar";
 	const char *names[] = { name1, name2 };
-	uint64_t dests[3] = { };
+	uint64_t dests[2] = { };
 	uint64_t id1, id2;
 	unsigned i;
 	int r;
 
-	r = b1_client_new_from_mount(&client, mount_path);
+	/* connection */
+	r = b1_client_new_from_mount(&client1, mount_path);
 	assert(r >= 0);
-	assert(client);
+	assert(client1);
 
-	id1 = b1_client_connect(client, NULL, 0);
+	id1 = b1_client_connect(client1, NULL, 0);
 	assert(id1 > 0);
 
-	r = b1_client_disconnect(client);
+	r = b1_client_disconnect(client1);
 	assert(r >= 0);
 
-	client = b1_client_free(client);
-	assert(!client);
+	client1 = b1_client_free(client1);
+	assert(!client1);
 
-	r = b1_client_new_from_mount(&client, mount_path);
+	r = b1_client_new_from_mount(&client1, mount_path);
 	assert(r >= 0);
-	assert(client);
+	assert(client1);
 
-	id2 = b1_client_connect(client, names, 2);
+	id2 = b1_client_connect(client1, names, 2);
 	assert(id2 > 0);
 	assert(id1 != id2);
 
-	r = b1_client_resolve(client, &id1, name1);
+	r = b1_client_new_from_mount(&client2, mount_path);
+	assert(r >= 0);
+	assert(client2);
+
+	r = b1_client_connect(client2, NULL, 0);
+	assert(r > 0);
+
+	/* resolution */
+	r = b1_client_resolve(client1, &id1, name1);
 	assert(r >= 0);
 	assert(id1 == id2);
 
-	r = b1_client_resolve(client, &id1, name2);
+	r = b1_client_resolve(client1, &id1, name2);
 	assert(r >= 0);
 	assert(id1 == id2);
 
-	r = b1_client_recv(client);
+	r = b1_client_resolve(client1, &id1, "unknown name");
+	assert(r == -ENXIO);
+	assert(id1 == id2);
+
+	/* tracking */
+	r = b1_client_track(client1, id1);
+	assert(r == -ELOOP);
+
+	r = b1_client_track(client1, -1);
+	assert(r == -ENXIO);
+
+	r = b1_client_track(client2, id1);
+	assert(r >= 0);
+
+	r = b1_client_track(client2, id1);
+	assert(r == -EALREADY);
+
+	r = b1_client_untrack(client2, id1);
+	assert(r >= 0);
+
+	r = b1_client_untrack(client2, id1);
+	assert(r == -ENXIO);
+
+	r = b1_client_track(client2, id1);
+	assert(r >= 0);
+
+	/* send and receive */
+	r = b1_client_recv(client1);
 	assert(r == -EAGAIN);
 
 	dests[0] = id1;
-	r = b1_client_send(client, dests, 1, NULL, 0);
+	r = b1_client_send(client1, dests, 1, NULL, 0);
 	assert(r >= 0);
 
-	r = b1_client_recv(client);
+	r = b1_client_recv(client1);
 	assert(r == 24);
 
-	r = b1_client_recv(client);
+	r = b1_client_recv(client1);
 	assert(r == -EAGAIN);
 
-	r = b1_client_send(client, dests, 1, NULL, 0);
+	r = b1_client_send(client1, dests, 1, NULL, 0);
 	assert(r >= 0);
 
-	r = b1_client_send(client, dests, 1, NULL, 0);
+	r = b1_client_send(client1, dests, 1, NULL, 0);
 	assert(r >= 0);
 
 	dests[1] = id1;
-	r = b1_client_send(client, dests, 2, NULL, 0);
+	r = b1_client_send(client1, dests, 2, NULL, 0);
 	assert(r == -ENOTUNIQ);
 
-	r = b1_client_recv(client);
+	r = b1_client_recv(client1);
 	assert(r == 24);
 
-	r = b1_client_recv(client);
+	r = b1_client_recv(client1);
 	assert(r == 24);
 
-	r = b1_client_recv(client);
+	r = b1_client_recv(client1);
 	assert(r == -EAGAIN);
 
-	r = b1_client_disconnect(client);
+	/* cleanup */
+	r = b1_client_disconnect(client1);
 	assert(r >= 0);
 
-	client = b1_client_free(client);
-	assert(!client);
+	client1 = b1_client_free(client1);
+	assert(!client1);
+
+	r = b1_client_disconnect(client2);
+	assert(r >= 0);
+
+	client2 = b1_client_free(client2);
+	assert(!client2);
 }
 
 int test_peer(const char *mount_path)

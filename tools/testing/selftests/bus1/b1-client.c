@@ -166,6 +166,32 @@ int b1_client_resolve(struct b1_client *client, uint64_t *out_id, const char *na
 	return 0;
 }
 
+int b1_client_track(struct b1_client *client, uint64_t id)
+{
+	int r;
+
+	assert(client);
+
+	r = ioctl(client->fd, BUS1_CMD_TRACK, &id);
+	if (r < 0)
+		return -errno;
+
+	return 0;
+}
+
+int b1_client_untrack(struct b1_client *client, uint64_t id)
+{
+	int r;
+
+	assert(client);
+
+	r = ioctl(client->fd, BUS1_CMD_UNTRACK, &id);
+	if (r < 0)
+		return -errno;
+
+	return 0;
+}
+
 int b1_client_send(struct b1_client *client, uint64_t *dests, size_t n_dests, void *payload, size_t len)
 {
 	struct iovec vec = {
