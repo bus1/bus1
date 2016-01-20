@@ -137,7 +137,7 @@ bus1_transaction_free(struct bus1_transaction *transaction)
 							entry->slice);
 		mutex_unlock(&peer_info->lock);
 
-		bus1_peer_release(peer);
+		bus1_peer_release_raw(peer);
 		bus1_queue_entry_free(entry); /* fput()s entry->files[] */
 	}
 
@@ -425,7 +425,7 @@ int bus1_transaction_instantiate_for_id(struct bus1_transaction *transaction,
 	int r;
 
 	/* unknown peers are only ignored, if explicitly told so */
-	peer = bus1_peer_acquire_by_id(transaction->domain, peer_id);
+	peer = bus1_peer_acquire_raw_by_id(transaction->domain, peer_id);
 	if (!peer)
 		return (flags & BUS1_SEND_FLAG_IGNORE_UNKNOWN) ? 0 : -ENXIO;
 
@@ -467,7 +467,7 @@ error:
 		bus1_queue_entry_free(entry);
 	}
 
-	bus1_peer_release(peer);
+	bus1_peer_release_raw(peer);
 	return r;
 }
 
@@ -572,7 +572,7 @@ void bus1_transaction_commit(struct bus1_transaction *transaction)
 		if (wake)
 			/* XXX: wake up peer */ ;
 
-		bus1_peer_release(peer);
+		bus1_peer_release_raw(peer);
 	}
 
 	transaction->entries = RB_ROOT;
@@ -601,7 +601,7 @@ int bus1_transaction_commit_for_id(struct bus1_transaction *transaction,
 	int r;
 
 	/* unknown peers are only ignored, if explicitly told so */
-	peer = bus1_peer_acquire_by_id(transaction->domain, peer_id);
+	peer = bus1_peer_acquire_raw_by_id(transaction->domain, peer_id);
 	if (!peer)
 		return (flags & BUS1_SEND_FLAG_IGNORE_UNKNOWN) ? 0 : -ENXIO;
 
@@ -634,6 +634,6 @@ exit:
 		/* XXX: convey error to @peer */
 		r = 0;
 	}
-	bus1_peer_release(peer);
+	bus1_peer_release_raw(peer);
 	return r;
 }

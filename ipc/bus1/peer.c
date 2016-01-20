@@ -632,7 +632,7 @@ struct bus1_peer *bus1_peer_acquire(struct bus1_peer *peer)
 }
 
 /**
- * bus1_peer_acquire_by_id() - acquire peer by id
+ * bus1_peer_acquire_raw_by_id() - acquire peer by id
  * @domain:		domain to search
  * @id:			id to look for
  *
@@ -640,9 +640,13 @@ struct bus1_peer *bus1_peer_acquire(struct bus1_peer *peer)
  * found, acquire an active reference and return the handle. If not found, NULL
  * is returned.
  *
+ * This always acquires a raw active reference. That is, you must release it
+ * via bus1_peer_release_raw()! As such, no lockdep annotations are provided.
+ *
  * Return: Active reference to matching handle, or NULL.
  */
-struct bus1_peer *bus1_peer_acquire_by_id(struct bus1_domain *domain, u64 id)
+struct bus1_peer *bus1_peer_acquire_raw_by_id(struct bus1_domain *domain,
+					      u64 id)
 {
 	struct bus1_peer *peer, *res = NULL;
 	struct rb_node *n;
@@ -687,6 +691,22 @@ struct bus1_peer *bus1_peer_release(struct bus1_peer *peer)
 {
 	if (peer)
 		bus1_active_release(&peer->active, &peer->waitq);
+	return NULL;
+}
+
+/**
+ * bus1_peer_release_raw() - release an active reference
+ * @peer:	handle to release, or NULL
+ *
+ * See bus1_peer_release() for details. This releases a raw reference, rather
+ * than a normal reference (skips lockdep annotations).
+ *
+ * Return: NULL is returned.
+ */
+struct bus1_peer *bus1_peer_release_raw(struct bus1_peer *peer)
+{
+	if (peer)
+		bus1_active_release_raw(&peer->active, &peer->waitq);
 	return NULL;
 }
 
@@ -1122,7 +1142,7 @@ static int bus1_peer_ioctl_track(struct bus1_peer *tracker,
 		return r;
 
 	/* pin remote */
-	trackee = bus1_peer_acquire_by_id(domain, id);
+	trackee = bus1_peer_acquire_raw_by_id(domain, id);
 	if (!trackee)
 		return -ENXIO;
 
@@ -1184,7 +1204,7 @@ exit_unlock:
 	mutex_unlock(&trackee_info->lock);
 	mutex_unlock(&tracker_info->lock);
 exit:
-	bus1_peer_release(trackee);
+	bus1_peer_release_raw(trackee);
 	kfree(track);
 	return r;
 }
@@ -1212,7 +1232,7 @@ static int bus1_peer_ioctl_untrack(struct bus1_peer *tracker,
 	 * entry for @id. However, this tree is *not* indexed by the peer id,
 	 * hence, we have to do the double lookup here.
 	 */
-	trackee = bus1_peer_acquire_by_id(domain, id);
+	trackee = bus1_peer_acquire_raw_by_id(domain, id);
 	if (!trackee)
 		return -ENXIO;
 
@@ -1255,7 +1275,7 @@ static int bus1_peer_ioctl_untrack(struct bus1_peer *tracker,
 	r = 0;
 
 exit:
-	bus1_peer_release(trackee);
+	bus1_peer_release_raw(trackee);
 	return r;
 }
 
