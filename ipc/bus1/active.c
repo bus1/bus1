@@ -378,19 +378,33 @@ bool bus1_active_cleanup(struct bus1_active *active,
  */
 struct bus1_active *bus1_active_acquire(struct bus1_active *active)
 {
-	bool res;
-
-	res = active && atomic_inc_unless_negative(&active->count);
+	active = bus1_active_acquire_raw(active);
 #ifdef CONFIG_DEBUG_LOCK_ALLOC
-	if (res)
+	if (active)
 		lock_acquire_shared(&active->dep_map,	/* lock */
 				    0,			/* subclass */
 				    1,			/* try-lock */
 				    NULL,		/* nest underneath */
 				    _RET_IP_);		/* IP */
 #endif
+	return active;
+}
 
-	return res ? active : NULL;
+/**
+ * bus1_active_acquire_raw() - acquire active reference
+ * @active:	object to acquire active reference to, or NULL
+ *
+ * See bus1_active_acquire() for details. This function has the exact same
+ * semantics, but has no lockdep annotations.
+ *
+ * Any raw acquisition must be matched with a raw release, obviously.
+ *
+ * Return: @active if reference was acquired, NULL if not.
+ */
+struct bus1_active *bus1_active_acquire_raw(struct bus1_active *active)
+{
+	return (active && atomic_inc_unless_negative(&active->count))
+	       ? active : NULL;
 }
 
 /**
@@ -410,12 +424,32 @@ struct bus1_active *bus1_active_acquire(struct bus1_active *active)
 struct bus1_active *bus1_active_release(struct bus1_active *active,
 					wait_queue_head_t *waitq)
 {
-	if (active) {
 #ifdef CONFIG_DEBUG_LOCK_ALLOC
+	if (active)
 		lock_release(&active->dep_map,	/* lock */
 			     1,			/* nested (no-op) */
 			     _RET_IP_);		/* instruction pointer */
 #endif
+
+	return bus1_active_release_raw(active, waitq);
+}
+
+/**
+ * bus1_active_release_raw() - release active reference
+ * @active:	object to release active reference of, or NULL
+ * @waitq:	wait-queue linked to @active, or NULL
+ *
+ * See bus1_active_release() for details. This function has the exact same
+ * semantics, but has no lockdep annotations.
+ *
+ * Any raw acquisition must be matched with a raw release, obviously.
+ *
+ * Return: NULL is returned.
+ */
+struct bus1_active *bus1_active_release_raw(struct bus1_active *active,
+					    wait_queue_head_t *waitq)
+{
+	if (active) {
 		if (atomic_dec_return(&active->count) == BUS1_ACTIVE_BIAS)
 			if (waitq)
 				wake_up(waitq);
