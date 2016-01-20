@@ -18,7 +18,6 @@
 
 #include <linux/kernel.h>
 #include <linux/list.h>
-#include <linux/lockdep.h>
 #include <linux/mutex.h>
 #include <linux/rcupdate.h>
 #include <linux/rbtree.h>
@@ -86,9 +85,7 @@ int bus1_peer_teardown(struct bus1_peer *peer, struct bus1_domain *domain);
 void bus1_peer_teardown_domain(struct bus1_peer *peer,
 			       struct bus1_domain *domain);
 struct bus1_peer *bus1_peer_acquire(struct bus1_peer *peer);
-struct bus1_peer *bus1_peer_acquire_by_id(struct bus1_domain *domain,
-					  u64 id,
-					  struct lockdep_map *nest);
+struct bus1_peer *bus1_peer_acquire_by_id(struct bus1_domain *domain, u64 id);
 struct bus1_peer *bus1_peer_release(struct bus1_peer *peer);
 struct bus1_peer_info *bus1_peer_dereference(struct bus1_peer *peer);
 int bus1_peer_ioctl(struct bus1_peer *peer,

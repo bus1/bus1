@@ -14,7 +14,6 @@
 #include <linux/kernel.h>
 #include <linux/kref.h>
 #include <linux/list.h>
-#include <linux/lockdep.h>
 #include <linux/mutex.h>
 #include <linux/rbtree.h>
 #include <linux/rcupdate.h>
@@ -636,7 +635,6 @@ struct bus1_peer *bus1_peer_acquire(struct bus1_peer *peer)
  * bus1_peer_acquire_by_id() - acquire peer by id
  * @domain:		domain to search
  * @id:			id to look for
- * @nest:		lock to nest under, or NULL
  *
  * Find a peer handle that is registered under the given id and domain. If
  * found, acquire an active reference and return the handle. If not found, NULL
@@ -644,9 +642,7 @@ struct bus1_peer *bus1_peer_acquire(struct bus1_peer *peer)
  *
  * Return: Active reference to matching handle, or NULL.
  */
-struct bus1_peer *bus1_peer_acquire_by_id(struct bus1_domain *domain,
-					  u64 id,
-					  struct lockdep_map *nest)
+struct bus1_peer *bus1_peer_acquire_by_id(struct bus1_domain *domain, u64 id)
 {
 	struct bus1_peer *peer, *res = NULL;
 	struct rb_node *n;
@@ -660,9 +656,7 @@ struct bus1_peer *bus1_peer_acquire_by_id(struct bus1_domain *domain,
 		while (n) {
 			peer = container_of(n, struct bus1_peer, rb);
 			if (id == peer->id) {
-				if (bus1_active_acquire_nest_lock(&peer->active,
-								  nest))
-					res = peer;
+				res = bus1_peer_acquire(peer);
 				break;
 			} else if (id < peer->id) {
 				n = rcu_dereference(n->rb_left);
@@ -1128,7 +1122,7 @@ static int bus1_peer_ioctl_track(struct bus1_peer *tracker,
 		return r;
 
 	/* pin remote */
-	trackee = bus1_peer_acquire_by_id(domain, id, NULL);
+	trackee = bus1_peer_acquire_by_id(domain, id);
 	if (!trackee)
 		return -ENXIO;
 
@@ -1218,7 +1212,7 @@ static int bus1_peer_ioctl_untrack(struct bus1_peer *tracker,
 	 * entry for @id. However, this tree is *not* indexed by the peer id,
 	 * hence, we have to do the double lookup here.
 	 */
-	trackee = bus1_peer_acquire_by_id(domain, id, NULL);
+	trackee = bus1_peer_acquire_by_id(domain, id);
 	if (!trackee)
 		return -ENXIO;
 
