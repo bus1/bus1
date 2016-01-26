@@ -106,7 +106,7 @@ static void test_peer_api(const char *mount_path)
 {
 	struct b1_client *client1 = NULL, *client2 = NULL;
 	const char *name1 = "foo", *name2 = "bar";
-	const char *names[] = { name1, name2 };
+	const char *names[] = { name1, name2, name2, name1};
 	uint64_t dests[2] = { };
 	uint64_t id1, id2;
 	unsigned i;
@@ -133,6 +133,27 @@ static void test_peer_api(const char *mount_path)
 	id2 = b1_client_connect(client1, names, 2);
 	assert(id2 > 0);
 	assert(id1 != id2);
+
+	r = b1_client_connect(client1, names, 2);
+	assert(r == -EISCONN);
+
+	r = b1_client_connect(client1, names, 1);
+	assert(r == -EREMCHG);
+
+	r = b1_client_connect(client1, names, 3);
+	assert(r == -EREMCHG);
+
+	r = b1_client_connect(client1, &names[1], 2);
+	assert(r == -EREMCHG);
+
+	r = b1_client_connect(client1, &names[1], 1);
+	assert(r == -EREMCHG);
+
+	r = b1_client_connect(client1, NULL, 0);
+	assert(r == -EREMCHG);
+
+	r = b1_client_connect(client1, &names[2], 2);
+	assert(r == -EISCONN);
 
 	r = b1_client_new_from_mount(&client2, mount_path);
 	assert(r >= 0);

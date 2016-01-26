@@ -743,6 +743,72 @@ struct bus1_peer_info *bus1_peer_dereference(struct bus1_peer *peer)
 					 lockdep_is_held(&peer->active));
 }
 
+/*
+ * Check if the string is a name of the peer.
+ *
+ * Return: -EREMCHG if it is not, 0 if it is but is not the last name, and the
+ * number of names the peer has otherwise.
+ */
+static ssize_t bus1_peer_name_check(struct bus1_peer *peer, const char *name)
+{
+	struct bus1_peer_name *peer_name;
+	size_t n_names = 0;
+
+	lockdep_assert_held(&peer->rwlock);
+
+	for (peer_name = peer->names; peer_name; peer_name = peer_name->next) {
+		++n_names;
+
+		if (strcmp(name, peer_name->name) == 0) {
+			if (peer_name->next)
+				return 0;
+			else
+				return n_names;
+		}
+	}
+
+	return -EREMCHG;
+}
+
+/*
+ * Check if a nulstr contains exactly the names of the peer.
+ *
+ * Return: 0 if it does, -EREMCHG if it does not or -EMSGSIZE if it is
+ * malformed.
+ */
+static int bus1_peer_names_check(struct bus1_peer *peer, const char *names,
+				 size_t names_len)
+{
+	size_t n, n_names = 0, n_names_old = 0;
+	ssize_t r;
+
+	lockdep_assert_held(&peer->rwlock);
+
+	if (names_len == 0 && peer->names)
+		return -EREMCHG;
+
+	while (names_len > 0) {
+		n = strnlen(names, names_len);
+		if (n == 0 || n == names_len)
+			return -EMSGSIZE;
+
+		r = bus1_peer_name_check(peer, names);
+		if (r < 0)
+			return r;
+		if (r > 0)
+			n_names_old = r;
+
+		names += n + 1;
+		names_len -= n + 1;
+		++n_names;
+	}
+
+	if (n_names != n_names_old)
+		return -EREMCHG;
+
+	return 0;
+}
+
 static int bus1_peer_connect_new(struct bus1_peer *peer,
 				 struct bus1_domain *domain,
 				 struct bus1_cmd_connect *param)
@@ -765,8 +831,37 @@ static int bus1_peer_connect_new(struct bus1_peer *peer,
 	lockdep_assert_held(&peer->rwlock);
 
 	/* cannot connect a peer that is already connected */
-	if (!bus1_active_is_new(&peer->active))
+	if (!bus1_active_is_new(&peer->active)) {
+		struct bus1_peer_info *peer_info;
+
+		/*
+		 * If the peer is already connected, we return -EISCONN if the
+		 * passed in parameters match, or -EREMCHG if they do not (but
+		 * are otherwise valid).
+		 */
+
+		/*
+		 * We hold a domain-reference and peer-lock, the caller already
+		 * verified we're not disconnected. Barriers guarantee that the
+		 * peer is accessible, and both the domain teardown and
+		 * peer-disconnect have to wait for us to finish. However, to
+		 * be safe, check for NULL anyway.
+		 */
+		peer_info = rcu_dereference_protected(peer->info,
+					lockdep_is_held(&domain->active) &&
+					lockdep_is_held(&peer->rwlock));
+		if (WARN_ON(!peer_info))
+			return -ESHUTDOWN;
+
+		if (param->pool_size != peer_info->pool.size)
+			return -EREMCHG;
+
+		r = bus1_peer_names_check(peer, param->names, param->size - sizeof(*param));
+		if (r < 0)
+			return r;
+
 		return -EISCONN;
+	}
 
 	/*
 	 * The domain-reference and peer-lock guarantee that no other
