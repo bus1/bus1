@@ -738,10 +738,13 @@ struct bus1_peer *bus1_peer_release_raw(struct bus1_peer *peer)
  */
 struct bus1_peer_info *bus1_peer_dereference(struct bus1_peer *peer)
 {
-	lockdep_assert_held(&peer->active);
-
+	/*
+	 * Preferably, we'd use lockdep_is_held(&peer->active), but this will
+	 * fail if the caller uses raw active references. Hence, lets just make
+	 * sure there is at least a single reference there.
+	 */
 	return rcu_dereference_protected(peer->info,
-					 lockdep_is_held(&peer->active));
+				!bus1_active_is_drained(&peer->active));
 }
 
 /*
