@@ -660,7 +660,8 @@ struct bus1_peer *bus1_peer_acquire_raw_by_id(struct bus1_domain *domain,
 		while (n) {
 			peer = container_of(n, struct bus1_peer, rb);
 			if (id == peer->id) {
-				res = bus1_peer_acquire(peer);
+				if (bus1_active_acquire_raw(&peer->active))
+					res = peer;
 				break;
 			} else if (id < peer->id) {
 				n = rcu_dereference(n->rb_left);
