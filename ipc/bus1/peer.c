@@ -1413,10 +1413,6 @@ static int bus1_peer_ioctl_send(struct bus1_peer *peer,
 		     (u64)(unsigned long)param.ptr_fds))
 		return -EFAULT;
 
-	/* if there are no destinations there is nothing to do */
-	if (unlikely(param.n_destinations == 0))
-		return 0;
-
 	/* peer is pinned, hence domain_info and ID can be accessed freely */
 	transaction = bus1_transaction_new_from_user(domain, domain->info,
 						     peer->id, &param,
