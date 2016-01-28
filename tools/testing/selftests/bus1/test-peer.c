@@ -12,40 +12,34 @@
 #include <time.h>
 #include "b1-test.h"
 
-#define b1_usec_from_nsec(_nsec) ((_nsec) / UINT64_C(1000))
-#define b1_usec_from_msec(_msec) ((_msec) * UINT64_C(1000))
-#define b1_usec_from_sec(_sec) b1_usec_from_msec((_sec) * UINT64_C(1000))
-#define b1_usec_from_timespec(_ts) (b1_usec_from_sec((_ts)->tv_sec) + b1_usec_from_nsec((_ts)->tv_nsec))
-
 #define N_DESTS (512)
-#define N_ITERATIONS (100000)
+#define N_ITERATIONS (100000ULL)
 #define PAYLOAD_SIZE (1024)
 
-static inline uint64_t usec_from_clock(clockid_t clock) {
-        struct timespec ts;
-        int r;
+static inline uint64_t nsec_from_clock(clockid_t clock)
+{
+	struct timespec ts;
+	int r;
 
-        r = clock_gettime(clock, &ts);
-        assert(r >= 0);
-        return b1_usec_from_timespec(&ts);
+	r = clock_gettime(clock, &ts);
+	assert(r >= 0);
+	return ts.tv_sec * UINT64_C(1000000000) + ts.tv_nsec;
 }
 
 /* test the degenerate un-contended case, this is only interesting in as far as
  * it gives us a baseline of how fast things can be in the best case */
 static int test_peer_sequential(const char *mount_path, size_t n_dests,
-				size_t len_payload, bool reply)
+				size_t len_payload, bool do_recv)
 {
 	uint8_t data[len_payload];
 	struct b1_client *client = NULL;
 	struct b1_client *clients[n_dests];
 	uint64_t dests[n_dests];
-	uint64_t time_start, time_end;
-	void *ptr_payload = NULL;
-	unsigned i, iterations = N_ITERATIONS;
+	uint64_t time_start, time_end, i, iterations = N_ITERATIONS;
+	void *ptr_payload = data;
 	int r;
 
 	assert(mount_path);
-	assert(!reply || n_dests == 1);
 	assert(n_dests < N_ITERATIONS);
 
 	r = b1_client_new_from_mount(&client, mount_path);
@@ -66,28 +60,29 @@ static int test_peer_sequential(const char *mount_path, size_t n_dests,
 		dests[i] = r;
 	}
 
-	if (n_dests == 0)
-		iterations *= 10;
-	else
+	/* make sure test-runs take a reasonable amount of time */
+	if (n_dests > 0)
 		iterations /= n_dests;
-
-	if (len_payload > 0)
-		ptr_payload = data;
 
 	r = b1_client_send(client, dests, n_dests, ptr_payload, len_payload);
 	assert(r >= 0);
 
-	time_start = usec_from_clock(CLOCK_THREAD_CPUTIME_ID);
+	time_start = nsec_from_clock(CLOCK_THREAD_CPUTIME_ID);
 	for (i = 0; i < iterations; i++) {
-		b1_client_send(client, dests, n_dests, ptr_payload, len_payload);
-		if (reply) {
-			size_t offset;
+		r = b1_client_send(client, dests, n_dests, ptr_payload,
+				   len_payload);
+		assert(r >= 0);
 
-			b1_client_recv(client, &offset);
-			b1_client_slice_release(client, offset);
+		if (do_recv) {
+			size_t offset, j;
+
+			for (j = 0; j < n_dests; ++j) {
+				r = b1_client_recv(clients[j], NULL);
+				assert(r >= 0);
+			}
 		}
 	}
-	time_end = usec_from_clock(CLOCK_THREAD_CPUTIME_ID);
+	time_end = nsec_from_clock(CLOCK_THREAD_CPUTIME_ID);
 
 	for (i = 0; i < n_dests; i++) {
 		r = b1_client_disconnect(clients[i]);
@@ -103,7 +98,7 @@ static int test_peer_sequential(const char *mount_path, size_t n_dests,
 	client = b1_client_free(client);
 	assert(!client);
 
-	return ((time_end - time_start) * 1000) / iterations;
+	return (time_end - time_start) / iterations;
 }
 
 static void test_peer_api(const char *mount_path)
@@ -277,23 +272,19 @@ int test_peer(const char *mount_path)
 	fprintf(stderr, "unicast send/recv without payload takes %zu ns\n", r);
 
 	for (i = 2; i <= N_DESTS; i *= 2) {
-		r = test_peer_sequential(mount_path, i, 0, false);
+		r = test_peer_sequential(mount_path, i, 0, true);
 		assert(r >= 0);
 
 		fprintf(stderr, "multicast %zu messages without payload in "
-                        "%zu ns per destination\n", i, r / i);
+			"%zu ns per destination\n", i, r / i);
 	}
-
-	r = test_peer_sequential(mount_path, 1, PAYLOAD_SIZE, false);
-	fprintf(stderr, "unicast send with %d byte payload takes %zu ns\n",
-		PAYLOAD_SIZE, r);
 
 	r = test_peer_sequential(mount_path, 1, PAYLOAD_SIZE, true);
 	fprintf(stderr, "unicast send/recv with %d byte payload takes %zu "
 		"ns\n", PAYLOAD_SIZE, r);
 
 	for (i = 2; i <= N_DESTS; i *= 2) {
-		r = test_peer_sequential(mount_path, i, PAYLOAD_SIZE, false);
+		r = test_peer_sequential(mount_path, i, PAYLOAD_SIZE, true);
 		assert(r >= 0);
 
 		fprintf(stderr, "multicast %zu messages with %d byte payload "
