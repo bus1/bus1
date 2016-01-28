@@ -166,6 +166,7 @@ bus1_pool_slice_find_by_offset(struct bus1_pool *pool, size_t offset)
 int bus1_pool_create_internal(struct bus1_pool *pool, size_t size)
 {
 	struct bus1_pool_slice *slice;
+	struct page *p;
 	struct file *f;
 	int r;
 
@@ -207,6 +208,16 @@ int bus1_pool_create_internal(struct bus1_pool *pool, size_t size)
 
 	list_add(&slice->entry, &pool->slices);
 	bus1_pool_slice_link_free(slice, pool);
+
+	/*
+	 * Touch first page of client pool so the initial allocation overhead
+	 * is done during peer setup rather than a message transaction. This is
+	 * really just an optimization to avoid some random peaks in common
+	 * paths. It is not meant as ultimate protection.
+	 */
+	p = shmem_read_mapping_page(file_inode(f)->i_mapping, 0);
+	if (!IS_ERR(p))
+		page_cache_release(p);
 
 	return 0;
 
