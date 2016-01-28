@@ -23,7 +23,7 @@
 
 struct b1_client {
 	int fd;
-	void *pool;
+	const void *pool_map;
 	size_t pool_size;
 };
 
@@ -39,7 +39,8 @@ int b1_client_new_from_fd(struct b1_client **out, int fd)
 		return -ENOMEM;
 
 	client->fd = fd;
-	client->pool = MAP_FAILED;
+	client->pool_map = NULL;
+	client->pool_size = 0;
 
 	*out = client;
 	return 0;
@@ -86,8 +87,8 @@ struct b1_client *b1_client_free(struct b1_client *client)
 	if (!client)
 		return client;
 
-	if (client->pool != MAP_FAILED)
-		munmap(client->pool, client->pool_size);
+	if (client->pool_map)
+		munmap((void *)client->pool_map, client->pool_size);
 	if (client->fd >= 0)
 		close(client->fd);
 	free(client);
@@ -109,29 +110,50 @@ static int b1_client_ioctl(struct b1_client *client, unsigned int cmd,
 	return r;
 }
 
-int b1_client_connect(struct b1_client *client, const char **names, size_t n_names)
+int b1_client_connect(struct b1_client *client,
+		      uint64_t flags,
+		      size_t pool_size,
+		      const char **names,
+		      size_t n_names)
 {
 	struct bus1_cmd_connect *cmd;
-	char *name;
-	size_t nameslen;
-	unsigned i;
+	const void *map;
+	char *pname;
+	size_t i, size = sizeof(*cmd);
 	int r;
 
-	for (i = 0, nameslen = 0; i < n_names; i ++)
-		nameslen += strlen(names[i]) + 1;
+	assert(pool_size > 0);
+	assert(pool_size < (uint64_t)-1);
+	assert(n_names == 0 || names);
 
-	cmd = alloca(sizeof(*cmd) + nameslen);
-	cmd->size = sizeof(*cmd) + nameslen;
-	cmd->flags = BUS1_CONNECT_FLAG_PEER | BUS1_CONNECT_FLAG_QUERY;
-	cmd->pool_size = 1024 * 1024 * 32;
+	for (i = 0; i < n_names; i ++)
+		size += strlen(names[i]) + 1;
+
+	cmd = alloca(size);
+	cmd->size = size;
+	cmd->flags = flags,
+	cmd->pool_size = pool_size,
 	cmd->unique_id = 0;
 
-	for (i = 0, name = cmd->names; i < n_names; name += strlen(names[i]) + 1, i ++)
-		memcpy(name, names[i], strlen(names[i]) + 1);
+	pname = cmd->names;
+	for (i = 0; i < n_names; ++i)
+		pname = stpcpy(pname, names[i]) + 1;
 
 	r = b1_client_ioctl(client, BUS1_CMD_CONNECT, cmd);
 	if (r < 0)
 		return r;
+
+	map = mmap(NULL, pool_size, PROT_READ, MAP_SHARED, client->fd, 0);
+	if (map == MAP_FAILED) {
+		r = -errno;
+		b1_client_disconnect(client);
+		return r;
+	}
+
+	assert(map != NULL);
+
+	client->pool_map = map;
+	client->pool_size = pool_size;
 
 	return cmd->unique_id;
 }
@@ -141,7 +163,9 @@ int b1_client_disconnect(struct b1_client *client)
 	return b1_client_ioctl(client, BUS1_CMD_DISCONNECT, NULL);
 }
 
-int b1_client_resolve(struct b1_client *client, uint64_t *out_id, const char *name)
+int b1_client_resolve(struct b1_client *client,
+		      uint64_t *out_id,
+		      const char *name)
 {
 	struct bus1_cmd_resolve *cmd;
 	size_t namelen;
@@ -179,48 +203,99 @@ int b1_client_untrack(struct b1_client *client, uint64_t id)
 	return b1_client_ioctl(client, BUS1_CMD_UNTRACK, &id);
 }
 
-int b1_client_send(struct b1_client *client, uint64_t *dests, size_t n_dests, void *payload, size_t len)
+int b1_client_send(struct b1_client *client,
+		   uint64_t flags,
+		   const uint64_t *dests,
+		   size_t n_dests,
+		   const struct iovec *vecs,
+		   size_t n_vecs)
 {
-	struct iovec vec = {
-		.iov_base = payload,
-		.iov_len = len,
-	};
 	struct bus1_cmd_send cmd = {
+		.flags = flags,
 		.ptr_destinations = (unsigned long)dests,
 		.n_destinations = n_dests,
+		.ptr_vecs = (unsigned long)vecs,
+		.n_vecs = n_vecs,
 	};
-
-	if (payload) {
-		cmd.ptr_vecs = (unsigned long)&vec;
-		cmd.n_vecs = 1;
-	}
 
 	return b1_client_ioctl(client, BUS1_CMD_SEND, &cmd);
 }
 
-int b1_client_recv(struct b1_client *client, uint64_t *offset)
+static const void *b1_client_slice_from_offset(struct b1_client *client,
+					       uint64_t offset)
 {
-	struct bus1_cmd_recv cmd = {};
-	int r;
+	assert(client);
+
+	if (!client->pool_map || offset == BUS1_OFFSET_INVALID ||
+	    offset >= client->pool_size)
+		return NULL;
+
+	return client->pool_map + offset;
+}
+
+static uint64_t b1_client_slice_to_offset(struct b1_client *client,
+					  const void *slice)
+{
+	const uint8_t *pool8, *slice8 = slice;
 
 	assert(client);
+
+	pool8 = client->pool_map;
+
+	if (!pool8 || slice8 < pool8 || slice8 >= pool8 + client->pool_size)
+		return (uint64_t) -1;
+
+	return slice8 - pool8;
+}
+
+int b1_client_recv(struct b1_client *client,
+		   uint64_t flags,
+		   const void **slicep,
+		   size_t *sizep)
+{
+	struct bus1_cmd_recv cmd = {
+		.flags = flags,
+		.msg_offset = BUS1_OFFSET_INVALID,
+	};
+	const uint8_t *slice;
+	int r;
 
 	r = b1_client_ioctl(client, BUS1_CMD_RECV, &cmd);
 	if (r < 0)
 		return r;
 
-	if (offset) {
-		*offset = cmd.msg_offset;
+	/* Sending and receiving fds are currently unsupported by these
+         * helpers */
+	assert(!cmd.msg_fds);
+
+	slice = b1_client_slice_from_offset(client, cmd.msg_offset);
+	assert(slice || !cmd.msg_size);
+
+	if (slicep) {
+		*slicep = slice;
 	} else {
-		r = b1_client_slice_release(client, cmd.msg_offset);
+		r = b1_client_slice_release(client, slice);
 		if (r < 0)
 			return r;
 	}
 
-	return cmd.msg_size;
+	if (slicep)
+		*slicep = (const void *)slice;
+
+	if (sizep)
+		*sizep = cmd.msg_size;
+
+	return 0;
 }
 
-int b1_client_slice_release(struct b1_client *client, uint64_t offset)
+int b1_client_slice_release(struct b1_client *client, const void *slice)
 {
+	uint64_t offset;
+
+	if (!slice)
+		return 0;
+
+	offset = b1_client_slice_to_offset(client, slice);
+
 	return b1_client_ioctl(client, BUS1_CMD_SLICE_RELEASE, &offset);
 }

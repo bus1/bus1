@@ -15,6 +15,8 @@
 #define N_DESTS (512)
 #define N_ITERATIONS (100000ULL)
 #define PAYLOAD_SIZE (1024)
+#define CONNECT_FLAGS (BUS1_CONNECT_FLAG_PEER | BUS1_CONNECT_FLAG_QUERY)
+#define POOL_SIZE (1024 * 1024 * 32)
 
 static inline uint64_t nsec_from_clock(clockid_t clock)
 {
@@ -31,21 +33,25 @@ static inline uint64_t nsec_from_clock(clockid_t clock)
 static int test_peer_sequential(const char *mount_path, size_t n_dests,
 				size_t len_payload, bool do_recv)
 {
-	uint8_t data[len_payload];
 	struct b1_client *client = NULL;
 	struct b1_client *clients[n_dests];
 	uint64_t dests[n_dests];
 	uint64_t time_start, time_end, i, iterations = N_ITERATIONS;
-	void *ptr_payload = data;
+	uint8_t payload[PAYLOAD_SIZE] = {};
+	struct iovec vec = {
+		.iov_base = payload,
+		.iov_len = len_payload
+	};
 	int r;
 
 	assert(mount_path);
 	assert(n_dests < N_ITERATIONS);
+	assert(len_payload <= PAYLOAD_SIZE);
 
 	r = b1_client_new_from_mount(&client, mount_path);
 	assert(r >= 0);
 
-	r = b1_client_connect(client, NULL, 0);
+	r = b1_client_connect(client, CONNECT_FLAGS, POOL_SIZE, NULL, 0);
 	assert(r >= 0);
 
 	for (i = 0; i < n_dests; i++) {
@@ -54,7 +60,8 @@ static int test_peer_sequential(const char *mount_path, size_t n_dests,
 		assert(r >= 0);
 		assert(clients[i]);
 
-		r = b1_client_connect(clients[i], NULL, 0);
+		r = b1_client_connect(clients[i], CONNECT_FLAGS, POOL_SIZE,
+				      NULL, 0);
 		assert(r >= 0);
 
 		dests[i] = r;
@@ -64,20 +71,19 @@ static int test_peer_sequential(const char *mount_path, size_t n_dests,
 	if (n_dests > 0)
 		iterations /= n_dests;
 
-	r = b1_client_send(client, dests, n_dests, ptr_payload, len_payload);
+	r = b1_client_send(client, 0, dests, n_dests, &vec, 1);
 	assert(r >= 0);
 
 	time_start = nsec_from_clock(CLOCK_THREAD_CPUTIME_ID);
 	for (i = 0; i < iterations; i++) {
-		r = b1_client_send(client, dests, n_dests, ptr_payload,
-				   len_payload);
+		r = b1_client_send(client, 0, dests, n_dests, &vec, 1);
 		assert(r >= 0);
 
 		if (do_recv) {
-			size_t offset, j;
+			size_t j;
 
 			for (j = 0; j < n_dests; ++j) {
-				r = b1_client_recv(clients[j], NULL);
+				r = b1_client_recv(clients[j], 0, NULL, NULL);
 				assert(r >= 0);
 			}
 		}
@@ -107,7 +113,9 @@ static void test_peer_api(const char *mount_path)
 	const char *name1 = "foo", *name2 = "bar";
 	const char *names[] = { name1, name2, name2, name1};
 	uint64_t dests[2] = { };
-	uint64_t id1, id2, offset;
+	uint64_t id1, id2;
+	const void *slice;
+	size_t size;
 	unsigned i;
 	int r;
 
@@ -116,7 +124,7 @@ static void test_peer_api(const char *mount_path)
 	assert(r >= 0);
 	assert(client1);
 
-	id1 = b1_client_connect(client1, NULL, 0);
+	id1 = b1_client_connect(client1, CONNECT_FLAGS, POOL_SIZE, NULL, 0);
 	assert(id1 > 0);
 
 	r = b1_client_disconnect(client1);
@@ -129,36 +137,36 @@ static void test_peer_api(const char *mount_path)
 	assert(r >= 0);
 	assert(client1);
 
-	id2 = b1_client_connect(client1, names, 2);
+	id2 = b1_client_connect(client1, CONNECT_FLAGS, POOL_SIZE, names, 2);
 	assert(id2 > 0);
 	assert(id1 != id2);
 
-	r = b1_client_connect(client1, names, 2);
+	r = b1_client_connect(client1, CONNECT_FLAGS, POOL_SIZE, names, 2);
 	assert(r == -EISCONN);
 
-	r = b1_client_connect(client1, names, 1);
+	r = b1_client_connect(client1, CONNECT_FLAGS, POOL_SIZE, names, 1);
 	assert(r == -EREMCHG);
 
-	r = b1_client_connect(client1, names, 3);
+	r = b1_client_connect(client1, CONNECT_FLAGS, POOL_SIZE, names, 3);
 	assert(r == -EREMCHG);
 
-	r = b1_client_connect(client1, &names[1], 2);
+	r = b1_client_connect(client1, CONNECT_FLAGS, POOL_SIZE, &names[1], 2);
 	assert(r == -EREMCHG);
 
-	r = b1_client_connect(client1, &names[1], 1);
+	r = b1_client_connect(client1, CONNECT_FLAGS, POOL_SIZE, &names[1], 1);
 	assert(r == -EREMCHG);
 
-	r = b1_client_connect(client1, NULL, 0);
+	r = b1_client_connect(client1, CONNECT_FLAGS, POOL_SIZE, NULL, 0);
 	assert(r == -EREMCHG);
 
-	r = b1_client_connect(client1, &names[2], 2);
+	r = b1_client_connect(client1, CONNECT_FLAGS, POOL_SIZE, &names[2], 2);
 	assert(r == -EISCONN);
 
 	r = b1_client_new_from_mount(&client2, mount_path);
 	assert(r >= 0);
 	assert(client2);
 
-	r = b1_client_connect(client2, NULL, 0);
+	r = b1_client_connect(client2, CONNECT_FLAGS, POOL_SIZE, NULL, 0);
 	assert(r > 0);
 
 	/* resolution */
@@ -197,49 +205,58 @@ static void test_peer_api(const char *mount_path)
 	assert(r >= 0);
 
 	/* send, receive and free */
-	r = b1_client_recv(client1, NULL);
+	r = b1_client_recv(client1, 0, NULL, NULL);
 	assert(r == -EAGAIN);
 
 	dests[0] = id1;
-	r = b1_client_send(client1, dests, 1, NULL, 0);
+	r = b1_client_send(client1, 0, dests, 1, NULL, 0);
 	assert(r >= 0);
 
-	r = b1_client_recv(client1, &offset);
-	assert(r == 24);
+	slice = NULL;
+	size = 0;
+	r = b1_client_recv(client1, 0, &slice, &size);
+	assert(r >= 0);
+	assert(size == 24);
 
-	r = b1_client_slice_release(client1, offset - 1);
+	r = b1_client_slice_release(client1, slice - 1);
 	assert(r == -ENXIO);
 
-	r = b1_client_slice_release(client1, offset + 1);
+	r = b1_client_slice_release(client1, slice + 1);
 	assert(r == -ENXIO);
 
-	r = b1_client_slice_release(client1, offset);
+	r = b1_client_slice_release(client1, slice);
 	assert(r >= 0);
 
-	r = b1_client_slice_release(client1, offset);
+	r = b1_client_slice_release(client1, slice);
 	assert(r == -ENXIO);
 
-	r = b1_client_recv(client1, NULL);
+	r = b1_client_recv(client1, 0, NULL, NULL);
 	assert(r == -EAGAIN);
 
-	r = b1_client_send(client1, dests, 1, NULL, 0);
+	r = b1_client_send(client1, 0, dests, 1, NULL, 0);
 	assert(r >= 0);
 
-	r = b1_client_send(client1, dests, 1, NULL, 0);
+	r = b1_client_send(client1, 0, dests, 1, NULL, 0);
 	assert(r >= 0);
 
 	dests[1] = id1;
-	r = b1_client_send(client1, dests, 2, NULL, 0);
+	r = b1_client_send(client1, 0, dests, 2, NULL, 0);
 	assert(r == -ENOTUNIQ);
 
-	r = b1_client_recv(client1, NULL);
-	assert(r == 24);
+	size = 0;
+	r = b1_client_recv(client1, 0, NULL, &size);
+	assert(r >= 0);
+	assert(size == 24);
 
-	r = b1_client_recv(client1, NULL);
-	assert(r == 24);
+	size = 0;
+	r = b1_client_recv(client1, 0, NULL, &size);
+	assert(r >= 0);
+	assert(size == 24);
 
-	r = b1_client_recv(client1, NULL);
+	size = 0;
+	r = b1_client_recv(client1, 0, NULL, &size);
 	assert(r == -EAGAIN);
+	assert(size == 0);
 
 	/* cleanup */
 	r = b1_client_disconnect(client1);

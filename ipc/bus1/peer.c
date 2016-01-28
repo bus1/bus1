@@ -1472,7 +1472,7 @@ static int bus1_peer_ioctl_recv(struct bus1_peer *peer, unsigned long arg)
 	if (unlikely(param.flags & ~(BUS1_RECV_FLAG_PEEK)))
 		return -EINVAL;
 
-	if (unlikely(param.msg_offset != 0) ||
+	if (unlikely(param.msg_offset != BUS1_OFFSET_INVALID) ||
 	    unlikely(param.msg_size != 0) ||
 	    unlikely(param.msg_fds != 0))
 		return -EINVAL;
