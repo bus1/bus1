@@ -209,8 +209,13 @@ int b1_client_recv(struct b1_client *client, uint64_t *offset)
 	if (r < 0)
 		return r;
 
-	if (offset)
+	if (offset) {
 		*offset = cmd.msg_offset;
+	} else {
+		r = b1_client_slice_release(client, cmd.msg_offset);
+		if (r < 0)
+			return r;
+	}
 
 	return cmd.msg_size;
 }
