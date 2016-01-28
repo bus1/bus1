@@ -104,7 +104,7 @@ enum {
 						struct bus1_cmd_connect),
 	BUS1_CMD_DISCONNECT		= _IOWR(BUS1_IOCTL_MAGIC, 0x01,
 						__u64),
-	BUS1_CMD_FREE			= _IOWR(BUS1_IOCTL_MAGIC, 0x02,
+	BUS1_CMD_SLICE_RELEASE		= _IOWR(BUS1_IOCTL_MAGIC, 0x02,
 						__u64),
 	BUS1_CMD_RESOLVE		= _IOWR(BUS1_IOCTL_MAGIC, 0x03,
 						struct bus1_cmd_resolve),

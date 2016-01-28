@@ -1679,7 +1679,7 @@ int bus1_peer_ioctl(struct bus1_peer *peer,
 
 		return bus1_peer_teardown(peer, domain);
 
-	case BUS1_CMD_FREE:
+	case BUS1_CMD_SLICE_RELEASE:
 	case BUS1_CMD_TRACK:
 	case BUS1_CMD_UNTRACK:
 	case BUS1_CMD_SEND:
@@ -1688,7 +1688,7 @@ int bus1_peer_ioctl(struct bus1_peer *peer,
 		if (!bus1_peer_acquire(peer)) {
 			r = -ESHUTDOWN;
 		} else {
-			if (cmd == BUS1_CMD_FREE)
+			if (cmd == BUS1_CMD_SLICE_RELEASE)
 				r = bus1_peer_ioctl_free(peer, arg);
 			else if (cmd == BUS1_CMD_TRACK)
 				r = bus1_peer_ioctl_track(peer, domain, arg);
