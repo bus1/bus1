@@ -218,7 +218,7 @@ int b1_client_send(struct b1_client *client, uint64_t *dests, size_t n_dests, vo
 	return 0;
 }
 
-int b1_client_recv(struct b1_client *client)
+int b1_client_recv(struct b1_client *client, uint64_t *offset)
 {
 	struct bus1_cmd_recv cmd = {};
 	int r;
@@ -229,5 +229,21 @@ int b1_client_recv(struct b1_client *client)
 	if (r < 0)
 		return -errno;
 
+	if (offset)
+		*offset = cmd.msg_offset;
+
 	return cmd.msg_size;
+}
+
+int b1_client_slice_release(struct b1_client *client, uint64_t offset)
+{
+	int r;
+
+	assert(client);
+
+	r = ioctl(client->fd, BUS1_CMD_SLICE_RELEASE, &offset);
+	if (r < 0)
+		return -errno;
+
+	return 0;
 }

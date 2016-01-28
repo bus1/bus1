@@ -80,8 +80,12 @@ static int test_peer_sequential(const char *mount_path, size_t n_dests,
 	time_start = usec_from_clock(CLOCK_THREAD_CPUTIME_ID);
 	for (i = 0; i < iterations; i++) {
 		b1_client_send(client, dests, n_dests, ptr_payload, len_payload);
-		if (reply)
-			b1_client_recv(client);
+		if (reply) {
+			size_t offset;
+
+			b1_client_recv(client, &offset);
+			b1_client_slice_release(client, offset);
+		}
 	}
 	time_end = usec_from_clock(CLOCK_THREAD_CPUTIME_ID);
 
@@ -108,7 +112,7 @@ static void test_peer_api(const char *mount_path)
 	const char *name1 = "foo", *name2 = "bar";
 	const char *names[] = { name1, name2, name2, name1};
 	uint64_t dests[2] = { };
-	uint64_t id1, id2;
+	uint64_t id1, id2, offset;
 	unsigned i;
 	int r;
 
@@ -197,18 +201,30 @@ static void test_peer_api(const char *mount_path)
 	r = b1_client_track(client2, id1);
 	assert(r >= 0);
 
-	/* send and receive */
-	r = b1_client_recv(client1);
+	/* send, receive and free */
+	r = b1_client_recv(client1, NULL);
 	assert(r == -EAGAIN);
 
 	dests[0] = id1;
 	r = b1_client_send(client1, dests, 1, NULL, 0);
 	assert(r >= 0);
 
-	r = b1_client_recv(client1);
+	r = b1_client_recv(client1, &offset);
 	assert(r == 24);
 
-	r = b1_client_recv(client1);
+	r = b1_client_slice_release(client1, offset - 1);
+	assert(r == -ENXIO);
+
+	r = b1_client_slice_release(client1, offset + 1);
+	assert(r == -ENXIO);
+
+	r = b1_client_slice_release(client1, offset);
+	assert(r >= 0);
+
+	r = b1_client_slice_release(client1, offset);
+	assert(r == -ENXIO);
+
+	r = b1_client_recv(client1, NULL);
 	assert(r == -EAGAIN);
 
 	r = b1_client_send(client1, dests, 1, NULL, 0);
@@ -221,13 +237,13 @@ static void test_peer_api(const char *mount_path)
 	r = b1_client_send(client1, dests, 2, NULL, 0);
 	assert(r == -ENOTUNIQ);
 
-	r = b1_client_recv(client1);
+	r = b1_client_recv(client1, NULL);
 	assert(r == 24);
 
-	r = b1_client_recv(client1);
+	r = b1_client_recv(client1, NULL);
 	assert(r == 24);
 
-	r = b1_client_recv(client1);
+	r = b1_client_recv(client1, NULL);
 	assert(r == -EAGAIN);
 
 	/* cleanup */

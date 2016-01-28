@@ -35,6 +35,7 @@ int b1_client_track(struct b1_client *client, uint64_t id);
 int b1_client_untrack(struct b1_client *client, uint64_t id);
 
 int b1_client_send(struct b1_client *client, uint64_t *dests, size_t n_dests, void *payload, size_t len);
-int b1_client_recv(struct b1_client *client);
+int b1_client_recv(struct b1_client *client, uint64_t *offset);
+int b1_client_slice_release(struct b1_client *client, uint64_t offset);
 
 #endif /* __B1_CLIENT_H */
