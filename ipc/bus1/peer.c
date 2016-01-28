@@ -1206,7 +1206,8 @@ exit:
 	return r;
 }
 
-static int bus1_peer_ioctl_free(struct bus1_peer *peer, unsigned long arg)
+static int bus1_peer_ioctl_slice_release(struct bus1_peer *peer,
+					 unsigned long arg)
 {
 	struct bus1_peer_info *peer_info = bus1_peer_dereference(peer);
 	u64 offset;
@@ -1689,7 +1690,7 @@ int bus1_peer_ioctl(struct bus1_peer *peer,
 			r = -ESHUTDOWN;
 		} else {
 			if (cmd == BUS1_CMD_SLICE_RELEASE)
-				r = bus1_peer_ioctl_free(peer, arg);
+				r = bus1_peer_ioctl_slice_release(peer, arg);
 			else if (cmd == BUS1_CMD_TRACK)
 				r = bus1_peer_ioctl_track(peer, domain, arg);
 			else if (cmd == BUS1_CMD_UNTRACK)
