@@ -95,6 +95,20 @@ struct b1_client *b1_client_free(struct b1_client *client)
 	return NULL;
 }
 
+static int b1_client_ioctl(struct b1_client *client, unsigned int cmd,
+			   void *arg)
+{
+	int r;
+
+	assert(client);
+
+	r = ioctl(client->fd, cmd, arg);
+	if (r < 0)
+		return -errno;
+
+	return r;
+}
+
 int b1_client_connect(struct b1_client *client, const char **names, size_t n_names)
 {
 	struct bus1_cmd_connect *cmd;
@@ -102,8 +116,6 @@ int b1_client_connect(struct b1_client *client, const char **names, size_t n_nam
 	size_t nameslen;
 	unsigned i;
 	int r;
-
-	assert(client);
 
 	for (i = 0, nameslen = 0; i < n_names; i ++)
 		nameslen += strlen(names[i]) + 1;
@@ -117,24 +129,16 @@ int b1_client_connect(struct b1_client *client, const char **names, size_t n_nam
 	for (i = 0, name = cmd->names; i < n_names; name += strlen(names[i]) + 1, i ++)
 		memcpy(name, names[i], strlen(names[i]) + 1);
 
-	r = ioctl(client->fd, BUS1_CMD_CONNECT, cmd);
+	r = b1_client_ioctl(client, BUS1_CMD_CONNECT, cmd);
 	if (r < 0)
-		return -errno;
+		return r;
 
 	return cmd->unique_id;
 }
 
 int b1_client_disconnect(struct b1_client *client)
 {
-	int r;
-
-	assert(client);
-
-	r = ioctl(client->fd, BUS1_CMD_DISCONNECT, NULL);
-	if (r < 0)
-		return -errno;
-
-	return 0;
+	return b1_client_ioctl(client, BUS1_CMD_DISCONNECT, NULL);
 }
 
 int b1_client_resolve(struct b1_client *client, uint64_t *out_id, const char *name)
@@ -143,7 +147,6 @@ int b1_client_resolve(struct b1_client *client, uint64_t *out_id, const char *na
 	size_t namelen;
 	int r;
 
-	assert(client);
 	assert(name);
 
 	namelen = strlen(name) + 1;
@@ -156,40 +159,24 @@ int b1_client_resolve(struct b1_client *client, uint64_t *out_id, const char *na
 	cmd->unique_id = 0;
 	memcpy(cmd->name, name, namelen);
 
-	r = ioctl(client->fd, BUS1_CMD_RESOLVE, cmd);
+	r = b1_client_ioctl(client, BUS1_CMD_RESOLVE, cmd);
 	if (r < 0)
-		return -errno;
+		return r;
 
 	if (out_id)
 		*out_id = cmd->unique_id;
 
-	return 0;
+	return r;
 }
 
 int b1_client_track(struct b1_client *client, uint64_t id)
 {
-	int r;
-
-	assert(client);
-
-	r = ioctl(client->fd, BUS1_CMD_TRACK, &id);
-	if (r < 0)
-		return -errno;
-
-	return 0;
+	return b1_client_ioctl(client, BUS1_CMD_TRACK, &id);
 }
 
 int b1_client_untrack(struct b1_client *client, uint64_t id)
 {
-	int r;
-
-	assert(client);
-
-	r = ioctl(client->fd, BUS1_CMD_UNTRACK, &id);
-	if (r < 0)
-		return -errno;
-
-	return 0;
+	return b1_client_ioctl(client, BUS1_CMD_UNTRACK, &id);
 }
 
 int b1_client_send(struct b1_client *client, uint64_t *dests, size_t n_dests, void *payload, size_t len)
@@ -202,20 +189,13 @@ int b1_client_send(struct b1_client *client, uint64_t *dests, size_t n_dests, vo
 		.ptr_destinations = (unsigned long)dests,
 		.n_destinations = n_dests,
 	};
-	int r;
-
-	assert(client);
 
 	if (payload) {
 		cmd.ptr_vecs = (unsigned long)&vec;
 		cmd.n_vecs = 1;
 	}
 
-	r = ioctl(client->fd, BUS1_CMD_SEND, &cmd);
-	if (r < 0)
-		return -errno;
-
-	return 0;
+	return b1_client_ioctl(client, BUS1_CMD_SEND, &cmd);
 }
 
 int b1_client_recv(struct b1_client *client, uint64_t *offset)
@@ -225,9 +205,9 @@ int b1_client_recv(struct b1_client *client, uint64_t *offset)
 
 	assert(client);
 
-	r = ioctl(client->fd, BUS1_CMD_RECV, &cmd);
+	r = b1_client_ioctl(client, BUS1_CMD_RECV, &cmd);
 	if (r < 0)
-		return -errno;
+		return r;
 
 	if (offset)
 		*offset = cmd.msg_offset;
@@ -237,13 +217,5 @@ int b1_client_recv(struct b1_client *client, uint64_t *offset)
 
 int b1_client_slice_release(struct b1_client *client, uint64_t offset)
 {
-	int r;
-
-	assert(client);
-
-	r = ioctl(client->fd, BUS1_CMD_SLICE_RELEASE, &offset);
-	if (r < 0)
-		return -errno;
-
-	return 0;
+	return b1_client_ioctl(client, BUS1_CMD_SLICE_RELEASE, &offset);
 }
