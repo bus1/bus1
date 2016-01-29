@@ -1060,6 +1060,7 @@ static int bus1_peer_connect_query(struct bus1_peer *peer,
 
 static int bus1_peer_ioctl_connect(struct bus1_peer *peer,
 				   struct bus1_domain *domain,
+				   const struct file *file,
 				   unsigned long arg)
 {
 	struct bus1_cmd_connect __user *uparam = (void __user *)arg;
@@ -1090,6 +1091,9 @@ static int bus1_peer_ioctl_connect(struct bus1_peer *peer,
 	/* unique-id is never used as input */
 	if (param->unique_id != 0)
 		return -EINVAL;
+	/* only root can claim names */
+	if (!file_ns_capable(file, domain->info->user_ns, CAP_SYS_ADMIN))
+		return -EPERM;
 
 	/* lock against parallel CONNECT/DISCONNECT */
 	down_write(&peer->rwlock);
@@ -1651,6 +1655,7 @@ exit:
  */
 int bus1_peer_ioctl(struct bus1_peer *peer,
 		    struct bus1_domain *domain,
+		    const struct file *file,
 		    unsigned int cmd,
 		    unsigned long arg,
 		    bool is_compat)
@@ -1665,7 +1670,7 @@ int bus1_peer_ioctl(struct bus1_peer *peer,
 			return -ESHUTDOWN;
 
 		if (cmd == BUS1_CMD_CONNECT)
-			r = bus1_peer_ioctl_connect(peer, domain, arg);
+			r = bus1_peer_ioctl_connect(peer, domain, file, arg);
 		else if (cmd == BUS1_CMD_RESOLVE)
 			r = bus1_peer_ioctl_resolve(peer, domain, arg);
 

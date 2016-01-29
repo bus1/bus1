@@ -159,7 +159,8 @@ static long bus1_fs_bus_fop_ioctl_native(struct file *file,
 {
 	struct bus1_domain *domain = file_inode(file)->i_sb->s_fs_info;
 
-	return bus1_peer_ioctl(file->private_data, domain, cmd, arg, false);
+	return bus1_peer_ioctl(file->private_data, domain, file, cmd, arg,
+			       false);
 }
 
 #ifdef CONFIG_COMPAT
@@ -169,7 +170,8 @@ static long bus1_fs_bus_fop_ioctl_compat(struct file *file,
 {
 	struct bus1_domain *domain = file_inode(file)->i_sb->s_fs_info;
 
-	return bus1_peer_ioctl(file->private_data, domain, cmd, arg, true);
+	return bus1_peer_ioctl(file->private_data, domain, file, cmd, arg,
+			       true);
 }
 #endif
 

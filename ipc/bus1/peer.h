@@ -92,6 +92,7 @@ struct bus1_peer *bus1_peer_release_raw(struct bus1_peer *peer);
 struct bus1_peer_info *bus1_peer_dereference(struct bus1_peer *peer);
 int bus1_peer_ioctl(struct bus1_peer *peer,
 		    struct bus1_domain *domain,
+		    const struct file *file,
 		    unsigned int cmd,
 		    unsigned long arg,
 		    bool is_compat);
