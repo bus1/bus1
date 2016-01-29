@@ -210,6 +210,7 @@ static void bus1_peer_info_finish_trackees(struct rb_root *root)
 				kref_put(&track->ref, bus1_peer_track_no_free);
 			}
 			mutex_unlock(&trackee_info->lock);
+			bus1_peer_release(trackee);
 		}
 
 		kref_put(&track->ref, bus1_peer_track_free);
