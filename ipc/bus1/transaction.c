@@ -58,7 +58,7 @@ struct bus1_transaction {
 };
 
 static struct bus1_transaction *
-bus1_transaction_new(size_t n_vecs, size_t n_files)
+bus1_transaction_new(size_t n_vecs, size_t n_files, void *buf, size_t buf_len)
 {
 	struct bus1_transaction *transaction;
 	size_t size;
@@ -80,9 +80,15 @@ bus1_transaction_new(size_t n_vecs, size_t n_files)
 	size += n_vecs * sizeof(*transaction->vecs);
 	size += n_files * sizeof(*transaction->files);
 
-	transaction = kzalloc(size, GFP_TEMPORARY);
-	if (!transaction)
-		return ERR_PTR(-ENOMEM);
+	if (size <= buf_len) {
+		transaction = buf;
+	} else {
+		transaction = kmalloc(size, GFP_TEMPORARY);
+		if (!transaction)
+			return ERR_PTR(-ENOMEM);
+	}
+
+	memset(transaction, 0, size);
 
 	/* only reserve space, don't claim it */
 	transaction->vecs = (void *)(transaction + 1);
@@ -110,7 +116,7 @@ bus1_transaction_new(size_t n_vecs, size_t n_files)
  * Return: NULL is returned.
  */
 struct bus1_transaction *
-bus1_transaction_free(struct bus1_transaction *transaction)
+bus1_transaction_free(struct bus1_transaction *transaction, bool do_free)
 {
 	struct bus1_queue_entry *entry;
 	struct bus1_peer *peer;
@@ -148,7 +154,8 @@ bus1_transaction_free(struct bus1_transaction *transaction)
 		if (transaction->files[i])
 			fput(transaction->files[i]);
 
-	kfree(transaction);
+	if (do_free)
+		kfree(transaction);
 
 	return NULL;
 }
@@ -270,12 +277,15 @@ bus1_transaction_new_from_user(struct bus1_domain *domain,
 			       struct bus1_domain_info *domain_info,
 			       u64 sender_id,
 			       struct bus1_cmd_send *param,
+			       void *buf,
+			       size_t buf_len,
 			       bool is_compat)
 {
 	struct bus1_transaction *transaction;
 	int r;
 
-	transaction = bus1_transaction_new(param->n_vecs, param->n_fds);
+	transaction = bus1_transaction_new(param->n_vecs, param->n_fds,
+					   buf, buf_len);
 	if (IS_ERR(transaction))
 		return ERR_CAST(transaction);
 
@@ -304,7 +314,7 @@ bus1_transaction_new_from_user(struct bus1_domain *domain,
 	return transaction;
 
 error:
-	bus1_transaction_free(transaction);
+	bus1_transaction_free(transaction, transaction != buf);
 	return ERR_PTR(r);
 }
 

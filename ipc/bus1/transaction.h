@@ -28,9 +28,10 @@ bus1_transaction_new_from_user(struct bus1_domain *domain,
 			       struct bus1_domain_info *domain_info,
 			       u64 sender_id,
 			       struct bus1_cmd_send *param,
+			       void *buf, size_t buf_len,
 			       bool is_compat);
 struct bus1_transaction *
-bus1_transaction_free(struct bus1_transaction *transaction);
+bus1_transaction_free(struct bus1_transaction *transaction, bool do_free);
 
 int bus1_transaction_instantiate_for_id(struct bus1_transaction *transaction,
 					u64 peer_id,

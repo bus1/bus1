@@ -1385,6 +1385,8 @@ static int bus1_peer_ioctl_send(struct bus1_peer *peer,
 				bool is_compat)
 {
 	struct bus1_transaction *transaction = NULL;
+	/* Use a stack-allocated buffer for the transaction object if it fits */
+	u8 buf[512];
 	const u64 __user *ptr_dest;
 	struct bus1_cmd_send param;
 	u64 destination;
@@ -1415,8 +1417,8 @@ static int bus1_peer_ioctl_send(struct bus1_peer *peer,
 
 	/* peer is pinned, hence domain_info and ID can be accessed freely */
 	transaction = bus1_transaction_new_from_user(domain, domain->info,
-						     peer->id, &param,
-						     is_compat);
+						     peer->id, &param, buf,
+						     sizeof(buf), is_compat);
 	if (IS_ERR(transaction))
 		return PTR_ERR(transaction);
 
@@ -1451,7 +1453,7 @@ static int bus1_peer_ioctl_send(struct bus1_peer *peer,
 	r = 0;
 
 exit:
-	bus1_transaction_free(transaction);
+	bus1_transaction_free(transaction, transaction != (void*)buf);
 	return r;
 }
 
