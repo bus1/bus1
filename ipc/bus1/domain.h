@@ -37,6 +37,7 @@
 struct bus1_domain_info {
 	u64 peer_ids;
 	atomic64_t seq_ids;
+	struct user_namespace *user_ns;
 };
 
 /**
@@ -73,7 +74,7 @@ struct bus1_domain {
 	struct rb_root map_names;
 };
 
-struct bus1_domain *bus1_domain_new(void);
+struct bus1_domain *bus1_domain_new(struct user_namespace *user_ns);
 struct bus1_domain *bus1_domain_free(struct bus1_domain *domain);
 void bus1_domain_teardown(struct bus1_domain *domain);
 struct bus1_domain *bus1_domain_acquire(struct bus1_domain *domain);

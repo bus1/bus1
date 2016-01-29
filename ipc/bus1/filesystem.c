@@ -423,7 +423,7 @@ static struct dentry *bus1_fs_super_mount(struct file_system_type *fs_type,
 	struct super_block *sb;
 	int ret;
 
-	domain = bus1_domain_new();
+	domain = bus1_domain_new(current_user_ns());
 	if (IS_ERR(domain))
 		return ERR_CAST(domain);
 

@@ -16,12 +16,14 @@
 #include <linux/rcupdate.h>
 #include <linux/seqlock.h>
 #include <linux/slab.h>
+#include <linux/user_namespace.h>
 #include <linux/wait.h>
 #include "active.h"
 #include "domain.h"
 #include "peer.h"
 
-static struct bus1_domain_info *bus1_domain_info_new(void)
+static struct bus1_domain_info
+*bus1_domain_info_new(struct user_namespace *user_ns)
 {
 	struct bus1_domain_info *domain_info;
 
@@ -31,6 +33,7 @@ static struct bus1_domain_info *bus1_domain_info_new(void)
 
 	domain_info->peer_ids = 0;
 	atomic64_set(&domain_info->seq_ids, 0);
+	domain_info->user_ns = get_user_ns(user_ns);
 
 	return domain_info;
 }
@@ -41,6 +44,8 @@ bus1_domain_info_free(struct bus1_domain_info *domain_info)
 	if (!domain_info)
 		return NULL;
 
+	put_user_ns(domain_info->user_ns);
+
 	kfree(domain_info);
 
 	return NULL;
@@ -48,6 +53,7 @@ bus1_domain_info_free(struct bus1_domain_info *domain_info)
 
 /**
  * bus1_domain_new() - allocate new domain
+ * @user_ns:	user namespace to create domain in
  *
  * Allocate a new, unused domain. On return, the caller will be the only
  * context that can access the domain, and as such has exclusive ownership.
@@ -57,7 +63,7 @@ bus1_domain_info_free(struct bus1_domain_info *domain_info)
  *
  * Return: Pointer to object, ERR_PTR on failure.
  */
-struct bus1_domain *bus1_domain_new(void)
+struct bus1_domain *bus1_domain_new(struct user_namespace *user_ns)
 {
 	struct bus1_domain *domain;
 	int r;
@@ -77,7 +83,7 @@ struct bus1_domain *bus1_domain_new(void)
 	domain->map_names = RB_ROOT;
 
 	/* domains are implicitly activated during allocation */
-	domain->info = bus1_domain_info_new();
+	domain->info = bus1_domain_info_new(user_ns);
 	if (IS_ERR(domain->info)) {
 		r = PTR_ERR(domain->info);
 		domain->info = NULL;
