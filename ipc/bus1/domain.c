@@ -21,6 +21,7 @@
 #include "active.h"
 #include "domain.h"
 #include "peer.h"
+#include "user.h"
 
 static struct bus1_domain_info *
 bus1_domain_info_new(struct user_namespace *user_ns)
@@ -31,8 +32,10 @@ bus1_domain_info_new(struct user_namespace *user_ns)
 	if (!domain_info)
 		return ERR_PTR(-ENOMEM);
 
+	mutex_init(&domain_info->lock);
 	domain_info->peer_ids = 0;
 	atomic64_set(&domain_info->seq_ids, 0);
+	idr_init(&domain_info->user_idr);
 	domain_info->user_ns = get_user_ns(user_ns);
 
 	return domain_info;
@@ -44,6 +47,9 @@ bus1_domain_info_free(struct bus1_domain_info *domain_info)
 	if (!domain_info)
 		return NULL;
 
+	WARN_ON(!idr_is_empty(&domain_info->user_idr));
+
+	idr_destroy(&domain_info->user_idr);
 	put_user_ns(domain_info->user_ns);
 	kfree(domain_info);
 

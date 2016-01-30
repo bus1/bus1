@@ -46,6 +46,7 @@ struct bus1_peer_info {
 	};
 	struct bus1_pool pool;
 	struct bus1_queue queue;
+	struct bus1_user *user;
 	struct rb_root map_trackees;
 	struct list_head list_trackers;
 };

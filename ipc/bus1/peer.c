@@ -27,6 +27,7 @@
 #include "pool.h"
 #include "queue.h"
 #include "transaction.h"
+#include "user.h"
 #include "util.h"
 
 struct bus1_peer_track {
@@ -225,6 +226,8 @@ bus1_peer_info_free(struct bus1_peer_info *peer_info)
 	if (!peer_info)
 		return NULL;
 
+	WARN_ON(peer_info->user);
+
 	mutex_lock(&peer_info->lock); /* lock peer to make lockdep happy */
 	bus1_queue_flush(&peer_info->queue, &peer_info->pool, 0);
 	bus1_peer_info_flush_trackees(peer_info, &trackees);
@@ -263,6 +266,7 @@ bus1_peer_info_new(struct bus1_cmd_connect *param)
 	mutex_init(&peer_info->lock);
 	peer_info->pool = BUS1_POOL_NULL;
 	bus1_queue_init_for_peer(&peer_info->queue, peer_info);
+	peer_info->user = NULL;
 	peer_info->map_trackees = RB_ROOT;
 	INIT_LIST_HEAD(&peer_info->list_trackers);
 
@@ -511,6 +515,7 @@ static void bus1_peer_cleanup_runtime(struct bus1_active *active,
 int bus1_peer_teardown(struct bus1_peer *peer, struct bus1_domain *domain)
 {
 	struct bus1_peer_cleanup_context ctx = { .domain = domain, };
+	struct bus1_peer_info *peer_info;
 	int r;
 
 	/* lock against parallel CONNECT/DISCONNECT */
@@ -528,6 +533,12 @@ int bus1_peer_teardown(struct bus1_peer *peer, struct bus1_domain *domain)
 	 */
 	mutex_lock(&domain->lock);
 	write_seqcount_begin(&domain->seqcount);
+
+	peer_info = rcu_dereference_protected(peer->info,
+					      lockdep_is_held(&domain->lock));
+	if (peer_info)
+		peer_info->user = bus1_user_release(peer_info->user);
+
 	if (bus1_active_cleanup(&peer->active, NULL,
 				bus1_peer_cleanup_runtime, &ctx))
 		r = 0;
@@ -585,9 +596,15 @@ void bus1_peer_teardown_domain(struct bus1_peer *peer,
 			       struct bus1_domain *domain)
 {
 	struct bus1_peer_cleanup_context ctx = { .domain = domain, };
+	struct bus1_peer_info *peer_info;
 
 	lockdep_assert_held(&domain->lock);
 	lockdep_assert_held(&domain->seqcount);
+
+	peer_info = rcu_dereference_protected(peer->info,
+					      lockdep_is_held(&domain->lock));
+	if (peer_info)
+		peer_info->user = bus1_user_release(peer_info->user);
 
 	/*
 	 * We must not sleep on the peer->waitq, it could deadlock
@@ -816,6 +833,7 @@ static int bus1_peer_names_check(struct bus1_peer *peer, const char *names,
 
 static int bus1_peer_connect_new(struct bus1_peer *peer,
 				 struct bus1_domain *domain,
+				 kuid_t uid,
 				 struct bus1_cmd_connect *param)
 {
 	struct bus1_peer_name *peer_name, *names = NULL;
@@ -884,6 +902,14 @@ static int bus1_peer_connect_new(struct bus1_peer *peer,
 	if (IS_ERR(peer_info))
 		return PTR_ERR(peer_info);
 
+	/* pin a user object */
+	peer_info->user = bus1_user_acquire(domain, uid);
+	if (IS_ERR(peer_info->user)) {
+		r = PTR_ERR(peer_info->user);
+		peer_info->user = NULL;
+		goto error;
+	}
+
 	/* allocate names */
 	name = param->names;
 	remaining = param->size - sizeof(*param);
@@ -926,7 +952,7 @@ static int bus1_peer_connect_new(struct bus1_peer *peer,
 		rb_link_node_rcu(&peer->rb, NULL, &domain->map_peers.rb_node);
 	rb_insert_color(&peer->rb, &domain->map_peers);
 
-	/* acquire ID and activate handle */
+	/* acquire ID and activate peer */
 	peer->id = ++domain->info->peer_ids;
 	peer->names = names;
 	rcu_assign_pointer(peer->info, peer_info);
@@ -951,6 +977,7 @@ error:
 		names = names->next;
 		bus1_peer_name_free(peer_name);
 	}
+	peer_info->user = bus1_user_release(peer_info->user);
 	bus1_peer_info_free(peer_info);
 	return r;
 }
@@ -1104,7 +1131,8 @@ static int bus1_peer_ioctl_connect(struct bus1_peer *peer,
 	} else if (param->flags & (BUS1_CONNECT_FLAG_PEER |
 				   BUS1_CONNECT_FLAG_MONITOR)) {
 		/* fresh connect of a new peer */
-		r = bus1_peer_connect_new(peer, domain, param);
+		r = bus1_peer_connect_new(peer, domain, file->f_cred->uid,
+					  param);
 	} else if (param->flags & BUS1_CONNECT_FLAG_RESET) {
 		/* reset of the peer requested */
 		r = bus1_peer_connect_reset(peer, domain, param);
