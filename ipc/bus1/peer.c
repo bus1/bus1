@@ -1386,8 +1386,7 @@ exit:
 
 static int bus1_peer_ioctl_send(struct bus1_peer *peer,
 				struct bus1_domain *domain,
-				unsigned long arg,
-				bool is_compat)
+				unsigned long arg)
 {
 	struct bus1_transaction *transaction = NULL;
 	/* Use a stack-allocated buffer for the transaction object if it fits */
@@ -1423,7 +1422,8 @@ static int bus1_peer_ioctl_send(struct bus1_peer *peer,
 	/* peer is pinned, hence domain_info and ID can be accessed freely */
 	transaction = bus1_transaction_new_from_user(domain, domain->info,
 						     peer->id, &param, buf,
-						     sizeof(buf), is_compat);
+						     sizeof(buf),
+						     bus1_in_compat_syscall());
 	if (IS_ERR(transaction))
 		return PTR_ERR(transaction);
 
@@ -1644,7 +1644,6 @@ exit:
  * @file:		file this ioctl is called on
  * @cmd:		ioctl command
  * @arg:		ioctl argument
- * @is_compat:		compat ioctl
  *
  * This handles the given ioctl (cmd+arg) on the passed peer. @domain must be
  * the parent domain of @peer. The caller must not hold an active reference to
@@ -1658,8 +1657,7 @@ int bus1_peer_ioctl(struct bus1_peer *peer,
 		    struct bus1_domain *domain,
 		    const struct file *file,
 		    unsigned int cmd,
-		    unsigned long arg,
-		    bool is_compat)
+		    unsigned long arg)
 {
 	int r = -ENOTTY;
 
@@ -1701,8 +1699,7 @@ int bus1_peer_ioctl(struct bus1_peer *peer,
 			else if (cmd == BUS1_CMD_UNTRACK)
 				r = bus1_peer_ioctl_untrack(peer, domain, arg);
 			else if (cmd == BUS1_CMD_SEND)
-				r = bus1_peer_ioctl_send(peer, domain, arg,
-							 is_compat);
+				r = bus1_peer_ioctl_send(peer, domain, arg);
 			else if (cmd == BUS1_CMD_RECV)
 				r = bus1_peer_ioctl_recv(peer, arg);
 			bus1_peer_release(peer);

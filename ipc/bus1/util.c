@@ -243,3 +243,26 @@ struct file *bus1_import_fd(const u32 __user *user_fd)
 
 	return ret;
 }
+
+/**
+ * bus1_in_compat_syscall() - check whether running in compat syscall
+ *
+ * This function checks whether the current context runs in a compat syscall,
+ * that is, it was called via compat_ioctl(), rather than unlocked_ioctl().
+ *
+ * Return: True if running in a compat syscall
+ */
+bool bus1_in_compat_syscall(void)
+{
+	/*
+	 * XXX: in_compat_syscall() was introduced in v4.5-rc1, but for us it
+	 *      is totally fine to fall back to is_compat_task() on older
+	 *      kernels. But make sure to remove this fallback once v4.5 is
+	 *      released.
+	 */
+#ifdef in_compat_syscall
+	return in_compat_syscall();
+#else
+	return is_compat_task();
+#endif
+}

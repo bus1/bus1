@@ -94,7 +94,6 @@ int bus1_peer_ioctl(struct bus1_peer *peer,
 		    struct bus1_domain *domain,
 		    const struct file *file,
 		    unsigned int cmd,
-		    unsigned long arg,
-		    bool is_compat);
+		    unsigned long arg);
 
 #endif /* __BUS1_PEER_H */

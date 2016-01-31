@@ -153,27 +153,14 @@ static int bus1_fs_bus_fop_mmap(struct file *file, struct vm_area_struct *vma)
 	return r;
 }
 
-static long bus1_fs_bus_fop_ioctl_native(struct file *file,
-					 unsigned int cmd,
-					 unsigned long arg)
+static long bus1_fs_bus_fop_ioctl(struct file *file,
+				  unsigned int cmd,
+				 unsigned long arg)
 {
 	struct bus1_domain *domain = file_inode(file)->i_sb->s_fs_info;
 
-	return bus1_peer_ioctl(file->private_data, domain, file, cmd, arg,
-			       false);
+	return bus1_peer_ioctl(file->private_data, domain, file, cmd, arg);
 }
-
-#ifdef CONFIG_COMPAT
-static long bus1_fs_bus_fop_ioctl_compat(struct file *file,
-					 unsigned int cmd,
-					 unsigned long arg)
-{
-	struct bus1_domain *domain = file_inode(file)->i_sb->s_fs_info;
-
-	return bus1_peer_ioctl(file->private_data, domain, file, cmd, arg,
-			       true);
-}
-#endif
 
 const struct file_operations bus1_fs_bus_fops = {
 	.owner =		THIS_MODULE,
@@ -182,9 +169,9 @@ const struct file_operations bus1_fs_bus_fops = {
 	.poll =			bus1_fs_bus_fop_poll,
 	.llseek =		noop_llseek,
 	.mmap =			bus1_fs_bus_fop_mmap,
-	.unlocked_ioctl =	bus1_fs_bus_fop_ioctl_native,
+	.unlocked_ioctl =	bus1_fs_bus_fop_ioctl,
 #ifdef CONFIG_COMPAT
-	.compat_ioctl =		bus1_fs_bus_fop_ioctl_compat,
+	.compat_ioctl =		bus1_fs_bus_fop_ioctl,
 #endif
 };
 
