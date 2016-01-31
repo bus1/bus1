@@ -1641,6 +1641,7 @@ exit:
  * bus1_peer_ioctl() - handle peer ioctl
  * @peer:		peer to work on
  * @domain:		parent domain
+ * @file:		file this ioctl is called on
  * @cmd:		ioctl command
  * @arg:		ioctl argument
  * @is_compat:		compat ioctl

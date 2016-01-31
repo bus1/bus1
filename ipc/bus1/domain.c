@@ -22,8 +22,8 @@
 #include "domain.h"
 #include "peer.h"
 
-static struct bus1_domain_info
-*bus1_domain_info_new(struct user_namespace *user_ns)
+static struct bus1_domain_info *
+bus1_domain_info_new(struct user_namespace *user_ns)
 {
 	struct bus1_domain_info *domain_info;
 
@@ -45,7 +45,6 @@ bus1_domain_info_free(struct bus1_domain_info *domain_info)
 		return NULL;
 
 	put_user_ns(domain_info->user_ns);
-
 	kfree(domain_info);
 
 	return NULL;

@@ -21,6 +21,7 @@
 #include <linux/mutex.h>
 #include <linux/rbtree.h>
 #include <linux/seqlock.h>
+#include <linux/user_namespace.h>
 #include <linux/wait.h>
 #include "active.h"
 
@@ -28,6 +29,7 @@
  * struct bus1_domain_info - domain specific runtime information
  * @peer_ids:		counter for peer ID allocations
  * @seq_ids:		counter for transaction ID allocations
+ * @user_ns:		owning user namespace of this domain
  *
  * This object contains all runtime data of a domain, which is not required in
  * the handle object. That is, any data stored in this object will be
