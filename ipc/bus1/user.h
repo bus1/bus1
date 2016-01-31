@@ -26,13 +26,15 @@
  * @ref:		Reference counter
  * @domain_info:	Domain of the user
  * @uid:		UID of the user
+ * @id:		Internal index of this user
  * @rcu:		rcu
  */
 struct bus1_user {
 	struct kref ref;
 	struct bus1_domain_info *domain_info;
+	kuid_t uid;
 	union {
-		kuid_t uid;
+		unsigned int id;
 		struct rcu_head rcu;
 	};
 };

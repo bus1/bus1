@@ -36,6 +36,7 @@ bus1_domain_info_new(struct user_namespace *user_ns)
 	domain_info->peer_ids = 0;
 	atomic64_set(&domain_info->seq_ids, 0);
 	idr_init(&domain_info->user_idr);
+	ida_init(&domain_info->user_ida);
 	domain_info->user_ns = get_user_ns(user_ns);
 
 	return domain_info;
@@ -50,6 +51,7 @@ bus1_domain_info_free(struct bus1_domain_info *domain_info)
 	WARN_ON(!idr_is_empty(&domain_info->user_idr));
 
 	idr_destroy(&domain_info->user_idr);
+	ida_destroy(&domain_info->user_ida);
 	put_user_ns(domain_info->user_ns);
 	kfree(domain_info);
 
