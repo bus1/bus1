@@ -9,6 +9,8 @@
 
 #define _GNU_SOURCE
 #include <stdlib.h>
+#include <sys/socket.h>
+#include <sys/types.h>
 #include <time.h>
 #include "b1-test.h"
 
@@ -26,6 +28,50 @@ static inline uint64_t nsec_from_clock(clockid_t clock)
 	r = clock_gettime(clock, &ts);
 	assert(r >= 0);
 	return ts.tv_sec * UINT64_C(1000000000) + ts.tv_nsec;
+}
+
+/* by way of comparison test unicast message passing on unix domain sockets,
+ * we expect this to be faster than bus1, but the aim is of course to be
+ * competitive even in the degenerate unicast case */
+static int test_uds_sequential(size_t len_payload)
+{
+	uint64_t time_start, time_end, i, iterations = N_ITERATIONS;
+	uint8_t payload[PAYLOAD_SIZE] = {};
+	struct iovec vec = {
+		.iov_base = payload,
+		.iov_len = len_payload
+	};
+	int r, uds[2], one = 1;
+
+	assert(len_payload <= PAYLOAD_SIZE);
+
+	r = socketpair(AF_UNIX, SOCK_SEQPACKET, 0, uds);
+	assert(r >= 0);
+
+	r = setsockopt(uds[1], SOL_SOCKET, SO_PASSCRED, &one, sizeof(one));
+	assert(r >= 0);
+
+	r = writev(uds[0], &vec, 1);
+	assert(r == len_payload);
+
+	r = readv(uds[1], &vec, 1);
+	assert(r == len_payload);
+
+	time_start = nsec_from_clock(CLOCK_THREAD_CPUTIME_ID);
+	for (i = 0; i < iterations; i++) {
+		r = writev(uds[0], &vec, 1);
+		assert(r == len_payload);
+
+		r = readv(uds[1], &vec, 1);
+		assert(r == len_payload);
+	}
+
+	time_end = nsec_from_clock(CLOCK_THREAD_CPUTIME_ID);
+
+	close(uds[0]);
+	close(uds[1]);
+
+	return (time_end - time_start) / iterations;
 }
 
 /* test the degenerate un-contended case, this is only interesting in as far as
@@ -274,34 +320,50 @@ static void test_peer_api(const char *mount_path)
 int test_peer(const char *mount_path)
 {
 	unsigned i;
-	int r;
+	int r, with, without;
 
 	test_peer_api(mount_path);
 
+	/* initialize all caches */
+	r = test_peer_sequential(mount_path, N_DESTS, PAYLOAD_SIZE);
+	r = test_uds_sequential(PAYLOAD_SIZE);
+	assert(r >= 0);
+
 	r = test_peer_sequential(mount_path, 0, 0);
+	assert(r >= 0);
 	fprintf(stderr, "noop send takes %zu ns\n", r);
 
-	r = test_peer_sequential(mount_path, 1, 0);
-	fprintf(stderr, "unicast send without payload takes %zu ns\n", r);
+	without = test_uds_sequential(0);
+	assert(without >= 0);
+	with = test_uds_sequential(PAYLOAD_SIZE);
+	assert(with >= 0);
+	fprintf(stderr, "unicast UDS send without payload takes %d ns, with %d "
+		"byte payload is %d ns %s\n",
+		without, PAYLOAD_SIZE,
+		with > without ? with - without : without - with,
+		with > without ? "slower" : "faster");
+
+	without = test_peer_sequential(mount_path, 1, 0);
+	assert(without >= 0);
+	with = test_peer_sequential(mount_path, 1, PAYLOAD_SIZE);
+	assert(with >= 0);
+	fprintf(stderr, "unicast send without payload takes %d ns, with %d "
+		"byte payload is %d ns %s\n",
+		without, PAYLOAD_SIZE,
+		with > without ? with - without : without - with,
+		with > without ? "slower" : "faster");
 
 	for (i = 2; i <= N_DESTS; i *= 2) {
-		r = test_peer_sequential(mount_path, i, 0);
-		assert(r >= 0);
+		without = test_peer_sequential(mount_path, i, 0);
+		assert(without >= 0);
+		with = test_peer_sequential(mount_path, i, PAYLOAD_SIZE);
+		assert(with >= 0);
 
-		fprintf(stderr, "multicast %zu messages without payload in "
-			"%zu ns per destination\n", i, r / i);
-	}
-
-	r = test_peer_sequential(mount_path, 1, PAYLOAD_SIZE);
-	fprintf(stderr, "unicast send with %d byte payload takes %zu ns\n",
-		PAYLOAD_SIZE, r);
-
-	for (i = 2; i <= N_DESTS; i *= 2) {
-		r = test_peer_sequential(mount_path, i, PAYLOAD_SIZE);
-		assert(r >= 0);
-
-		fprintf(stderr, "multicast %zu messages with %d byte payload "
-			"in %zu ns per destination\n", i, PAYLOAD_SIZE, r / i);
+		fprintf(stderr, "multicast %3u messages without payload in "
+			"%4d ns per destination, with %d byte payload is %3d "
+			"ns %s\n", i, without / i, PAYLOAD_SIZE,
+		with > without ? (with - without) / i : (without - with) / i,
+			with > without ? "slower" : "faster");
 	}
 
 	fprintf(stderr, "\n\n");
