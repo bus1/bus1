@@ -195,7 +195,6 @@ int bus1_pool_create_internal(struct bus1_pool *pool, size_t size)
 	}
 
 	slice->free = true;
-	slice->accounted = false;
 	slice->ref_kernel = false;
 	slice->ref_user = false;
 
@@ -263,18 +262,12 @@ void bus1_pool_destroy(struct bus1_pool *pool)
  * bus1_pool_alloc() - allocate memory
  * @pool:	pool to allocate memory from
  * @size:	number of bytes to allocate
- * @accounted:	whether this slice should be accounted for
  *
  * This allocates a new slice of @size bytes from the memory pool at @pool. The
  * slice must be released via bus1_pool_release_kernel() by the caller. All
  * slices are aligned to 8 bytes (both offset and size).
  *
  * If no suitable slice can be allocated, an error is returned.
- *
- * If @accounted is true, the memory is accounted for in the pool. If it is not
- * set, the slice is allocated without accounting. This allows tracking two
- * different memory pools inside of a single pool, accounted and non-accounted
- * memory.
  *
  * Each pool slice can have two different references, a kernel reference and a
  * user-space reference. Initially, it only has a kernel-reference, which must
@@ -289,7 +282,7 @@ void bus1_pool_destroy(struct bus1_pool *pool)
  * Return: Pointer to new slice, or ERR_PTR on failure.
  */
 struct bus1_pool_slice *
-bus1_pool_alloc(struct bus1_pool *pool, size_t size, bool accounted)
+bus1_pool_alloc(struct bus1_pool *pool, size_t size)
 {
 	struct bus1_pool_slice *slice, *ps;
 	size_t slice_size;
@@ -313,7 +306,6 @@ bus1_pool_alloc(struct bus1_pool *pool, size_t size, bool accounted)
 			return ERR_CAST(ps);
 
 		ps->free = true;
-		ps->accounted = false;
 		ps->ref_kernel = false;
 		ps->ref_user = false;
 
@@ -326,13 +318,11 @@ bus1_pool_alloc(struct bus1_pool *pool, size_t size, bool accounted)
 	/* move from free-tree to busy-tree */
 	rb_erase(&slice->rb, &pool->slices_free);
 	bus1_pool_slice_link_busy(slice, pool);
-	if (accounted)
-		pool->accounted_size += slice_size;
+	pool->accounted_size += slice_size;
 
 	slice->ref_kernel = true;
 	slice->ref_user = false;
 	slice->free = false;
-	slice->accounted = accounted;
 
 	return slice;
 }
@@ -405,8 +395,7 @@ bus1_pool_release_kernel(struct bus1_pool *pool, struct bus1_pool_slice *slice)
 	slice->ref_kernel = false;
 
 	/* no longer kernel-owned, de-account slice */
-	if (slice->accounted &&
-	    !WARN_ON(slice->size > pool->accounted_size))
+	if (!WARN_ON(slice->size > pool->accounted_size))
 		pool->accounted_size -= slice->size;
 
 	bus1_pool_free(pool, slice);

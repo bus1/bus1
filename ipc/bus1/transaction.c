@@ -340,8 +340,7 @@ bus1_transaction_instantiate(struct bus1_transaction *transaction,
 	mutex_lock(&peer_info->lock);
 	slice = bus1_pool_alloc(&peer_info->pool,
 				transaction->length_vecs +
-				transaction->n_files * sizeof(int),
-				true);
+				transaction->n_files * sizeof(int));
 	mutex_unlock(&peer_info->lock);
 
 	if (IS_ERR(slice)) {

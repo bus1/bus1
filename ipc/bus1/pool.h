@@ -57,7 +57,6 @@
  * @offset:		relative offset in parent pool
  * @size:		slice size
  * @free:		whether this slice is in-use or not
- * @accounted:		whether this slice is accounted for
  * @ref_kernel:		whether a kernel reference exists
  * @ref_user:		whether a user reference exists
  * @entry:		link into linear list of slices
@@ -69,7 +68,6 @@ struct bus1_pool_slice {
 	/* merge @size with flags to save 8 bytes per existing slice */
 	u32 size : BUS1_POOL_SLICE_SIZE_BITS;
 	u32 free : 1;
-	u32 accounted : 1;
 	u32 ref_kernel : 1;
 	u32 ref_user : 1;
 
@@ -101,7 +99,7 @@ int bus1_pool_create_internal(struct bus1_pool *pool, size_t size);
 void bus1_pool_destroy(struct bus1_pool *pool);
 
 struct bus1_pool_slice *
-bus1_pool_alloc(struct bus1_pool *pool, size_t size, bool accounted);
+bus1_pool_alloc(struct bus1_pool *pool, size_t size);
 struct bus1_pool_slice *
 bus1_pool_release_kernel(struct bus1_pool *pool, struct bus1_pool_slice *slice);
 void bus1_pool_publish(struct bus1_pool *pool,
