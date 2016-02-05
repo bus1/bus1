@@ -19,22 +19,27 @@
 #include <linux/kernel.h>
 #include <linux/kref.h>
 #include <linux/rcupdate.h>
-#include "domain.h"
+#include <linux/uidgid.h>
+
+struct bus1_domain;
+struct bus1_domain_info;
 
 /**
  * struct bus1_user - resource accounting for users
- * @ref:		Reference counter
- * @domain_info:	Domain of the user
+ * @ref:		reference counter
+ * @domain_info:	domain of the user
  * @uid:		UID of the user
- * @id:		Internal index of this user
+ * @id:			internal index of this user
  * @rcu:		rcu
  */
 struct bus1_user {
 	struct kref ref;
-	struct bus1_domain_info *domain_info;
-	kuid_t uid;
 	union {
-		unsigned int id;
+		struct {
+			unsigned int id;
+			kuid_t uid;
+			struct bus1_domain_info *domain_info;
+		};
 		struct rcu_head rcu;
 	};
 };

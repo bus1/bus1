@@ -10,6 +10,7 @@
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 #include <linux/err.h>
 #include <linux/kernel.h>
+#include <linux/kref.h>
 #include <linux/mutex.h>
 #include <linux/rcupdate.h>
 #include <linux/slab.h>
@@ -17,8 +18,8 @@
 #include "domain.h"
 #include "user.h"
 
-static struct bus1_user *bus1_user_new(struct bus1_domain_info *domain_info,
-				       kuid_t uid)
+static struct bus1_user *
+bus1_user_new(struct bus1_domain_info *domain_info, kuid_t uid)
 {
 	struct bus1_user *u;
 
@@ -31,8 +32,9 @@ static struct bus1_user *bus1_user_new(struct bus1_domain_info *domain_info,
 
 	kref_init(&u->ref);
 	/*
-	 * in order for this pointer to always be valid, we rely on the user
-	 * object to be released before its parent is freed
+	 * User objects must be released *entirely* before the parent domain
+	 * is. As such, the domain pointer here is always valid and can be
+	 * dereferenced without any protection.
 	 */
 	u->domain_info = domain_info;
 	u->uid = uid;
@@ -41,8 +43,8 @@ static struct bus1_user *bus1_user_new(struct bus1_domain_info *domain_info,
 	return u;
 }
 
-static struct bus1_user *bus1_user_get(struct bus1_domain_info *domain_info,
-				       kuid_t uid)
+static struct bus1_user *
+bus1_user_get(struct bus1_domain_info *domain_info, kuid_t uid)
 {
 	struct bus1_user *user;
 
@@ -62,7 +64,8 @@ static struct bus1_user *bus1_user_get(struct bus1_domain_info *domain_info,
  * @uid:		uid of the user
  *
  * Find and return the user object for the uid if it exists, otherwise create it
- * first.
+ * first. The caller is responsible to release their reference (and all derived
+ * references) before the parent domain is deactivated!
  *
  * Return: A user object for the given uid, ERR_PTR on failure.
  */
@@ -86,71 +89,50 @@ struct bus1_user *bus1_user_acquire(struct bus1_domain *domain, kuid_t uid)
 		return new_user;
 
 	/*
-	 * try to allocate some space in the ida to avoid doing so under the
-	 * lock. this is best effort only, so ignore any errors.
+	 * Try to allocate some space in the ida to avoid doing so under the
+	 * lock. This is best effort only, so ignore any errors.
 	 */
-	(void) ida_pre_get(&domain->info->user_ida, GFP_KERNEL);
+	ida_pre_get(&domain->info->user_ida, GFP_KERNEL);
 
 	mutex_lock(&domain->info->lock);
 	/*
-	 * someone else might have raced us outside the lock, so check if the
-	 * user still does not exist
+	 * Someone else might have raced us outside the lock, so check if the
+	 * user still does not exist.
 	 */
 	old_user = idr_find(&domain->info->user_idr, __kuid_val(uid));
 	if (likely(!old_user)) {
-		/*
-		 * the user still does not exist, so link in the newly created
-		 * one
-		 */
+		/* user does not exist, link the newly created one */
 		r = idr_alloc(&domain->info->user_idr, new_user,
 			      __kuid_val(uid), __kuid_val(uid) + 1, GFP_KERNEL);
 		if (r < 0)
 			goto exit;
 	} else {
-		/*
-		 * there was a race and a new user has already created, check if
-		 * we can use it
-		 */
+		/* another allocation raced us, try re-using that one */
 		if (likely(kref_get_unless_zero(&old_user->ref))) {
-			/*
-			 * the preexisting user is not being destroyed so use
-			 * that and let the one we allocated be discarded later
-			 * on
-			 */
 			user = old_user;
 			goto exit;
 		} else {
-			/*
-			 * the old user is already being destroyd, so simply
-			 * replace it in the idr with the newly allocated one
-			 */
+			/* the other one is getting destroyed, replace it */
 			idr_replace(&domain->info->user_idr, new_user,
 				    __kuid_val(uid));
 			old_user->uid = INVALID_UID; /* mark old as removed */
 		}
 	}
 
-	/*
-	 * allocate the smallest possible internal id for this user; used in
-	 * arrays for accounting user quota in receiver pools.
-	 */
+	/* get a sparse identifier for this user */
 	r = ida_simple_get(&domain->info->user_ida, 1, 0, GFP_KERNEL);
 	if (r < 0)
 		goto exit;
-	else
-		new_user->id = r;
 
+	new_user->id = r;
 	user = new_user;
 	new_user = NULL;
 
 exit:
 	mutex_unlock(&domain->info->lock);
-
 	bus1_user_release(new_user);
-
 	if (r < 0)
 		return ERR_PTR(r);
-
 	return user;
 }
 
@@ -161,8 +143,7 @@ static void bus1_user_free(struct kref *ref)
 	mutex_lock(&user->domain_info->lock);
 	/* drop the id from the ida, initialized ids are >= 0 */
 	ida_simple_remove(&user->domain_info->user_ida, user->id);
-	if (uid_valid(user->uid))
-		/* the user was not already replaced by another in the idr */
+	if (uid_valid(user->uid)) /* if already dropped, it's set to invalid */
 		idr_remove(&user->domain_info->user_idr,
 			   __kuid_val(user->uid));
 	mutex_unlock(&user->domain_info->lock);
@@ -173,18 +154,17 @@ static void bus1_user_free(struct kref *ref)
 /**
  * bus1_user_release() - release the reference to the user object from the
  *			 domain
- * @user:	User
+ * @user:	user to release, or NULL
  *
  * The user object must be released before the corresponding domain is freed,
  * which in practice means that it should be released before its parent object
  * is freed.
  *
- * Return: NULL
+ * Return: NULL is returned.
  */
 struct bus1_user *bus1_user_release(struct bus1_user *user)
 {
 	if (user)
 		kref_put(&user->ref, bus1_user_free);
-
 	return NULL;
 }
