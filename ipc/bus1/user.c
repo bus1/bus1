@@ -61,7 +61,7 @@ bus1_user_get(struct bus1_domain_info *domain_info, kuid_t uid)
 }
 
 /**
- * bus1_user_acquire() - get a user object for a uid in the given domain
+ * bus1_user_acquire_by_uid() - get a user object for a uid in the given domain
  * @domain:		domain of the user
  * @uid:		uid of the user
  *
@@ -71,7 +71,8 @@ bus1_user_get(struct bus1_domain_info *domain_info, kuid_t uid)
  *
  * Return: A user object for the given uid, ERR_PTR on failure.
  */
-struct bus1_user *bus1_user_acquire(struct bus1_domain *domain, kuid_t uid)
+struct bus1_user *
+bus1_user_acquire_by_uid(struct bus1_domain *domain, kuid_t uid)
 {
 	struct bus1_user *user, *old_user, *new_user;
 	int r = 0;
@@ -169,4 +170,18 @@ struct bus1_user *bus1_user_release(struct bus1_user *user)
 	if (user)
 		kref_put(&user->ref, bus1_user_free);
 	return NULL;
+}
+
+/**
+ * bus1_user_acquire() - acquire a reference to the user
+ * @user:	User
+ *
+ * Return: @user
+ */
+struct bus1_user *bus1_user_acquire(struct bus1_user *user)
+{
+	if (user)
+		kref_get(&user->ref);
+
+	return user;
 }

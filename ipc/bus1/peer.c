@@ -903,7 +903,7 @@ static int bus1_peer_connect_new(struct bus1_peer *peer,
 		return PTR_ERR(peer_info);
 
 	/* pin a user object */
-	peer_info->user = bus1_user_acquire(domain, uid);
+	peer_info->user = bus1_user_acquire_by_uid(domain, uid);
 	if (IS_ERR(peer_info->user)) {
 		r = PTR_ERR(peer_info->user);
 		peer_info->user = NULL;

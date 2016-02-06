@@ -44,7 +44,8 @@ struct bus1_user {
 	};
 };
 
-struct bus1_user *bus1_user_acquire(struct bus1_domain *domain, kuid_t uid);
+struct bus1_user *
+bus1_user_acquire_by_uid(struct bus1_domain *domain, kuid_t uid);
 struct bus1_user *bus1_user_release(struct bus1_user *user);
-
+struct bus1_user *bus1_user_acquire(struct bus1_user *user);
 #endif /* __BUS1_USER_H */
