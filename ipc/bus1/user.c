@@ -18,6 +18,8 @@
 #include "domain.h"
 #include "user.h"
 
+#define BUS1_INTERNAL_UID_INVALID ((unsigned int) -1)
+
 static struct bus1_user *
 bus1_user_new(struct bus1_domain_info *domain_info, kuid_t uid)
 {
@@ -38,7 +40,7 @@ bus1_user_new(struct bus1_domain_info *domain_info, kuid_t uid)
 	 */
 	u->domain_info = domain_info;
 	u->uid = uid;
-	u->id = 0;
+	u->id = BUS1_INTERNAL_UID_INVALID;
 
 	return u;
 }
@@ -92,7 +94,7 @@ struct bus1_user *bus1_user_acquire(struct bus1_domain *domain, kuid_t uid)
 	 * Allocate the smallest possible internal id for this user; used in
 	 * arrays for accounting user quota in receiver pools.
 	 */
-	r = ida_simple_get(&domain->info->user_ida, 1, 0, GFP_KERNEL);
+	r = ida_simple_get(&domain->info->user_ida, 0, 0, GFP_KERNEL);
 	if (r < 0)
 		goto exit;
 
@@ -138,8 +140,8 @@ static void bus1_user_free(struct kref *ref)
 {
 	struct bus1_user *user = container_of(ref, struct bus1_user, ref);
 
-	/* drop the id from the ida, initialized ids are > 0 */
-	if (user->id > 0)
+	/* drop the id from the ida if it was initialized */
+	if (user->id != BUS1_INTERNAL_UID_INVALID)
 		ida_simple_remove(&user->domain_info->user_ida, user->id);
 
 	mutex_lock(&user->domain_info->lock);
