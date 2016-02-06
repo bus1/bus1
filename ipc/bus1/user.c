@@ -89,10 +89,14 @@ struct bus1_user *bus1_user_acquire(struct bus1_domain *domain, kuid_t uid)
 		return new_user;
 
 	/*
-	 * Try to allocate some space in the ida to avoid doing so under the
-	 * lock. This is best effort only, so ignore any errors.
+	 * Allocate the smallest possible internal id for this user; used in
+	 * arrays for accounting user quota in receiver pools.
 	 */
-	ida_pre_get(&domain->info->user_ida, GFP_KERNEL);
+	r = ida_simple_get(&domain->info->user_ida, 1, 0, GFP_KERNEL);
+	if (r < 0)
+		goto exit;
+
+	new_user->id = r;
 
 	mutex_lock(&domain->info->lock);
 	/*
@@ -119,12 +123,6 @@ struct bus1_user *bus1_user_acquire(struct bus1_domain *domain, kuid_t uid)
 		}
 	}
 
-	/* get a sparse identifier for this user */
-	r = ida_simple_get(&domain->info->user_ida, 1, 0, GFP_KERNEL);
-	if (r < 0)
-		goto exit;
-
-	new_user->id = r;
 	user = new_user;
 	new_user = NULL;
 
@@ -140,9 +138,11 @@ static void bus1_user_free(struct kref *ref)
 {
 	struct bus1_user *user = container_of(ref, struct bus1_user, ref);
 
+	/* drop the id from the ida, initialized ids are > 0 */
+	if (user->id > 0)
+		ida_simple_remove(&user->domain_info->user_ida, user->id);
+
 	mutex_lock(&user->domain_info->lock);
-	/* drop the id from the ida, initialized ids are >= 0 */
-	ida_simple_remove(&user->domain_info->user_ida, user->id);
 	if (uid_valid(user->uid)) /* if already dropped, it's set to invalid */
 		idr_remove(&user->domain_info->user_idr,
 			   __kuid_val(user->uid));
