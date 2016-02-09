@@ -79,7 +79,7 @@ struct bus1_pool_slice {
  * struct bus1_pool - client pool
  * @f:			backing shmem file
  * @size:		size of the file
- * @accounted_size:	currently accounted memory in bytes
+ * @allocated_size:	currently allocated memory in bytes
  * @slices:		all slices sorted by address
  * @slices_busy:	tree of allocated slices
  * @slices_free:	tree of free slices
@@ -87,7 +87,7 @@ struct bus1_pool_slice {
 struct bus1_pool {
 	struct file *f;
 	size_t size;
-	size_t accounted_size;
+	size_t allocated_size;
 	struct list_head slices;
 	struct rb_root slices_busy;
 	struct rb_root slices_free;

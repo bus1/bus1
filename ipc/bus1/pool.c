@@ -101,6 +101,10 @@ static void bus1_pool_slice_link_busy(struct bus1_pool_slice *slice,
 
 	rb_link_node(&slice->rb, prev, n);
 	rb_insert_color(&slice->rb, &pool->slices_busy);
+
+	pool->allocated_size += slice->size;
+
+	WARN_ON(pool->allocated_size > pool->size);
 }
 
 /* find free slice big enough to hold @size bytes */
@@ -200,7 +204,7 @@ int bus1_pool_create_internal(struct bus1_pool *pool, size_t size)
 
 	pool->f = f;
 	pool->size = size;
-	pool->accounted_size = 0;
+	pool->allocated_size = 0;
 	INIT_LIST_HEAD(&pool->slices);
 	pool->slices_free = RB_ROOT;
 	pool->slices_busy = RB_ROOT;
@@ -318,7 +322,6 @@ bus1_pool_alloc(struct bus1_pool *pool, size_t size)
 	/* move from free-tree to busy-tree */
 	rb_erase(&slice->rb, &pool->slices_free);
 	bus1_pool_slice_link_busy(slice, pool);
-	pool->accounted_size += slice_size;
 
 	slice->ref_kernel = true;
 	slice->ref_user = false;
@@ -343,6 +346,9 @@ static void bus1_pool_free(struct bus1_pool *pool,
 	 */
 
 	rb_erase(&slice->rb, &pool->slices_busy);
+
+	if (!WARN_ON(slice->size > pool->allocated_size))
+		pool->allocated_size -= slice->size;
 
 	if (pool->slices.next != &slice->entry) {
 		ps = container_of(slice->entry.prev, struct bus1_pool_slice,
@@ -393,10 +399,6 @@ bus1_pool_release_kernel(struct bus1_pool *pool, struct bus1_pool_slice *slice)
 
 	/* kernel must own a ref to @slice */
 	slice->ref_kernel = false;
-
-	/* no longer kernel-owned, de-account slice */
-	if (!WARN_ON(slice->size > pool->accounted_size))
-		pool->accounted_size -= slice->size;
 
 	bus1_pool_free(pool, slice);
 
