@@ -23,6 +23,8 @@
 
 struct bus1_domain;
 struct bus1_domain_info;
+struct bus1_pool;
+struct bus1_queue;
 
 /**
  * struct bus1_user - resource accounting for users
@@ -44,8 +46,27 @@ struct bus1_user {
 	};
 };
 
+/**
+ * struct bus1_user_quota - quota usage of a user in a peer
+ * @memory:		memory in bytes used by queued messages
+ * @messages:		number of queued messages
+ */
+struct bus1_user_quota {
+	u32 allocated_size;
+	u16 n_messages;
+};
+
 struct bus1_user *
 bus1_user_acquire_by_uid(struct bus1_domain *domain, kuid_t uid);
 struct bus1_user *bus1_user_release(struct bus1_user *user);
 struct bus1_user *bus1_user_acquire(struct bus1_user *user);
+
+int bus1_user_quotas_ensure_allocated(struct bus1_user_quota **quotasp,
+				      size_t *n_quotasp, unsigned int id);
+void bus1_user_quotas_destroy(struct bus1_user_quota **quotasp,
+			      size_t *n_quotasp);
+
+int bus1_user_quota_check(struct bus1_user_quota *quota, size_t size,
+			  struct bus1_pool *pool,
+			  struct bus1_queue *queue);
 #endif /* __BUS1_USER_H */

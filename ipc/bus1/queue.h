@@ -113,6 +113,8 @@ struct bus1_queue_entry;
 struct bus1_user;
 struct file;
 
+#define BUS1_QUEUE_MESSAGES_MAX ((size_t) 1024)
+
 /**
  * struct bus1_queue_entry - queue entry
  * @seq:			sequence number

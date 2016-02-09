@@ -16,6 +16,8 @@
 #include <linux/slab.h>
 #include <linux/uidgid.h>
 #include "domain.h"
+#include "pool.h"
+#include "queue.h"
 #include "user.h"
 
 #define BUS1_INTERNAL_UID_INVALID ((unsigned int) -1)
@@ -184,4 +186,91 @@ struct bus1_user *bus1_user_acquire(struct bus1_user *user)
 		kref_get(&user->ref);
 
 	return user;
+}
+
+int bus1_user_quotas_ensure_allocated(struct bus1_user_quota **quotasp,
+				      size_t *n_quotasp, unsigned int id)
+{
+	struct bus1_user_quota *quotas;
+	unsigned int n_quotas;
+
+	if (id < *n_quotasp)
+		return 0;
+
+	/*
+	 * Align the number of users and allocate a few extra, but protect
+	 * against overflows.
+	 */
+	n_quotas = max(ALIGN(id, 8) + 8, id);
+	quotas = *quotasp;
+
+	quotas = krealloc(quotas,
+			  n_quotas * sizeof(struct bus1_user_quota),
+			  GFP_KERNEL | __GFP_ZERO);
+	if (!quotas)
+		return -ENOMEM;
+
+	*quotasp = quotas;
+	*n_quotasp = n_quotas;
+
+	return 0;
+}
+
+void bus1_user_quotas_destroy(struct bus1_user_quota **quotasp,
+			      size_t *n_quotasp)
+{
+	if (!*quotasp)
+		return;
+
+	kfree(*quotasp);
+	*quotasp = NULL;
+
+	if (*n_quotasp)
+		*n_quotasp = 0;
+}
+
+int bus1_user_quota_check(struct bus1_user_quota *quota, size_t size,
+			  struct bus1_pool *pool,
+			  struct bus1_queue *queue)
+{
+	/* we can check a quota without allocating it first */
+	u32 allocated_size;
+	u16 n_messages;
+
+	if (quota) {
+		allocated_size = quota->allocated_size;
+		n_messages = quota->n_messages;
+	} else {
+		allocated_size = 0;
+		n_messages = 0;
+	}
+
+	/*
+	 * The max queue size is not a hard limit, as there is a race between
+	 * checking the quota and queuing the messages. However, it is not
+	 * important that this is strictly enforced, so we don't care.
+	 * WARN_ON(queue->n_messages > BUS1_QUEUE_MESSAGES_MAX);
+	 */
+	WARN_ON(n_messages > queue->n_messages);
+
+	/*
+	 * A given user can have half of the total in-flight message
+	 * budget that is not used by any other user.
+	 */
+	if (n_messages + 1 >
+	    (BUS1_QUEUE_MESSAGES_MAX - queue->n_messages + n_messages) / 2)
+		return -ENOBUFS;
+
+	WARN_ON(pool->allocated_size > pool->size);
+	WARN_ON(allocated_size > pool->allocated_size);
+
+	/*
+	 * Similarly, a given user can use half of the total available
+	 * in-flight pool size that is not used by any other user.
+	 */
+	if (allocated_size + size >
+	    (pool->size - pool->allocated_size + allocated_size) / 2)
+		return -ENOBUFS;
+
+	return 0;
 }
