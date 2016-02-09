@@ -22,6 +22,7 @@
 #include "pool.h"
 #include "queue.h"
 #include "transaction.h"
+#include "user.h"
 #include "util.h"
 
 /*
@@ -320,6 +321,7 @@ error:
 
 static struct bus1_queue_entry *
 bus1_transaction_instantiate(struct bus1_transaction *transaction,
+			     struct bus1_user *user,
 			     struct bus1_peer_info *peer_info,
 			     u64 peer_id)
 {
@@ -328,7 +330,7 @@ bus1_transaction_instantiate(struct bus1_transaction *transaction,
 	size_t i;
 	int r;
 
-	entry = bus1_queue_entry_new(transaction->n_files);
+	entry = bus1_queue_entry_new(user, transaction->n_files);
 	if (IS_ERR(entry))
 		return ERR_CAST(entry);
 
@@ -426,6 +428,7 @@ static int bus1_transaction_link(struct bus1_transaction *transaction,
  * Return: 0 on success, negative error code on failure.
  */
 int bus1_transaction_instantiate_for_id(struct bus1_transaction *transaction,
+					struct bus1_user *user,
 					u64 peer_id,
 					u64 flags)
 {
@@ -439,6 +442,7 @@ int bus1_transaction_instantiate_for_id(struct bus1_transaction *transaction,
 		return (flags & BUS1_SEND_FLAG_IGNORE_UNKNOWN) ? 0 : -ENXIO;
 
 	entry = bus1_transaction_instantiate(transaction,
+					     user,
 					     bus1_peer_dereference(peer),
 					     peer_id);
 	if (IS_ERR(entry)) {
@@ -599,6 +603,7 @@ void bus1_transaction_commit(struct bus1_transaction *transaction)
  * Return: 0 on success, negative error code on failure.
  */
 int bus1_transaction_commit_for_id(struct bus1_transaction *transaction,
+				   struct bus1_user *user,
 				   u64 peer_id,
 				   u64 flags)
 {
@@ -616,7 +621,7 @@ int bus1_transaction_commit_for_id(struct bus1_transaction *transaction,
 
 	peer_info = bus1_peer_dereference(peer);
 
-	e = bus1_transaction_instantiate(transaction, peer_info, peer_id);
+	e = bus1_transaction_instantiate(transaction, user, peer_info, peer_id);
 	if (IS_ERR(e)) {
 		r = PTR_ERR(e);
 		e = NULL;

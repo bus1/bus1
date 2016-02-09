@@ -34,10 +34,12 @@ struct bus1_transaction *
 bus1_transaction_free(struct bus1_transaction *transaction, bool do_free);
 
 int bus1_transaction_instantiate_for_id(struct bus1_transaction *transaction,
+					struct bus1_user *user,
 					u64 peer_id,
 					u64 flags);
 void bus1_transaction_commit(struct bus1_transaction *transaction);
 int bus1_transaction_commit_for_id(struct bus1_transaction *transaction,
+				   struct bus1_user *user,
 				   u64 peer_id,
 				   u64 flags);
 

@@ -19,6 +19,7 @@
 #include "peer.h"
 #include "pool.h"
 #include "queue.h"
+#include "user.h"
 
 /* lockdep assertion to verify the parent peer is locked */
 #define bus1_queue_assert_held(_queue) \
@@ -273,7 +274,7 @@ struct bus1_queue_entry *bus1_queue_peek(struct bus1_queue *queue)
 
 /**
  * bus1_queue_entry_new() - allocate new queue entry
- * @seq:	initial sequence number
+ * @user:	user to account the queue entry on
  * @n_files:	number of files to carry
  *
  * This allocates a new queue-entry with pre-allocated space to carry the given
@@ -283,7 +284,8 @@ struct bus1_queue_entry *bus1_queue_peek(struct bus1_queue *queue)
  *
  * Return: Pointer to slice, ERR_PTR on failure.
  */
-struct bus1_queue_entry *bus1_queue_entry_new(size_t n_files)
+struct bus1_queue_entry *
+bus1_queue_entry_new(struct bus1_user *user, size_t n_files)
 {
 	struct bus1_queue_entry *entry;
 
@@ -294,6 +296,7 @@ struct bus1_queue_entry *bus1_queue_entry_new(size_t n_files)
 
 	RB_CLEAR_NODE(&entry->transaction.rb);
 	RB_CLEAR_NODE(&entry->rb);
+	entry->user = bus1_user_acquire(user);
 	entry->n_files = n_files;
 
 	return entry;
@@ -320,6 +323,9 @@ bus1_queue_entry_free(struct bus1_queue_entry *entry)
 
 	if (!entry)
 		return NULL;
+
+	WARN_ON(!entry->user);
+	entry->user = bus1_user_release(entry->user);
 
 	for (i = 0; i < entry->n_files; ++i)
 		if (entry->files[i])
