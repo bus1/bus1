@@ -111,6 +111,7 @@ struct bus1_peer;
 struct bus1_pool_slice;
 struct bus1_queue_entry;
 struct bus1_user;
+struct bus1_user_quota;
 struct file;
 
 #define BUS1_QUEUE_MESSAGES_MAX ((size_t) 1024)
@@ -165,14 +166,18 @@ void bus1_queue_init_internal(struct bus1_queue *queue);
 void bus1_queue_destroy(struct bus1_queue *queue);
 bool bus1_queue_link(struct bus1_queue *queue,
 		     struct bus1_queue_entry *entry,
+		     struct bus1_user_quota *quota,
 		     u64 seq);
 bool bus1_queue_unlink(struct bus1_queue *queue,
-		       struct bus1_queue_entry *entry);
+		       struct bus1_queue_entry *entry,
+		       struct bus1_user_quota *quota);
 bool bus1_queue_relink(struct bus1_queue *queue,
 		       struct bus1_queue_entry *entry,
+		       struct bus1_user_quota *quota,
 		       u64 seq);
 void bus1_queue_flush(struct bus1_queue *queue,
 		      struct bus1_pool *pool,
+		      struct bus1_user_quota *quotas,
 		      u64 peer_id);
 struct bus1_queue_entry *bus1_queue_peek(struct bus1_queue *queue);
 

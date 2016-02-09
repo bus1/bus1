@@ -229,7 +229,8 @@ bus1_peer_info_free(struct bus1_peer_info *peer_info)
 	WARN_ON(peer_info->user);
 
 	mutex_lock(&peer_info->lock); /* lock peer to make lockdep happy */
-	bus1_queue_flush(&peer_info->queue, &peer_info->pool, 0);
+	bus1_queue_flush(&peer_info->queue, &peer_info->pool,
+			 peer_info->quotas, 0);
 	bus1_peer_info_flush_trackees(peer_info, &trackees);
 	mutex_unlock(&peer_info->lock);
 
@@ -238,6 +239,7 @@ bus1_peer_info_free(struct bus1_peer_info *peer_info)
 
 	bus1_queue_destroy(&peer_info->queue);
 	bus1_pool_destroy(&peer_info->pool);
+	bus1_user_quotas_destroy(&peer_info->quotas, &peer_info->n_quotas);
 
 	/*
 	 * Make sure the object is freed in a delayed-manner. Some
@@ -266,6 +268,8 @@ bus1_peer_info_new(struct bus1_cmd_connect *param)
 	mutex_init(&peer_info->lock);
 	peer_info->pool = BUS1_POOL_NULL;
 	bus1_queue_init_for_peer(&peer_info->queue, peer_info);
+	peer_info->quotas = NULL;
+	peer_info->n_quotas = 0;
 	peer_info->user = NULL;
 	peer_info->map_trackees = RB_ROOT;
 	INIT_LIST_HEAD(&peer_info->list_trackers);
@@ -287,7 +291,8 @@ static void bus1_peer_info_reset(struct bus1_peer_info *peer_info, u64 id)
 	struct rb_root trackees;
 
 	mutex_lock(&peer_info->lock);
-	bus1_queue_flush(&peer_info->queue, &peer_info->pool, id);
+	bus1_queue_flush(&peer_info->queue, &peer_info->pool,
+			 peer_info->quotas, id);
 	bus1_pool_flush(&peer_info->pool);
 	bus1_peer_info_flush_trackees(peer_info, &trackees);
 	mutex_unlock(&peer_info->lock);
@@ -1590,7 +1595,11 @@ static int bus1_peer_ioctl_recv(struct bus1_peer *peer, unsigned long arg)
 			/* re-allocate FD array and retry */
 			wanted_fds = entry->n_files;
 		} else {
-			bus1_queue_unlink(&peer_info->queue, entry);
+			struct bus1_user_quota *quota;
+
+			quota = &peer_info->quotas[entry->user->id];
+
+			bus1_queue_unlink(&peer_info->queue, entry, quota);
 			bus1_pool_publish(&peer_info->pool, entry->slice,
 					  &param.msg_offset, &param.msg_size);
 			param.msg_fds = entry->n_files;
@@ -1602,7 +1611,8 @@ static int bus1_peer_ioctl_recv(struct bus1_peer *peer, unsigned long arg)
 			 */
 			if (entry->n_files == 0)
 				bus1_pool_release_kernel(&peer_info->pool,
-							 entry->slice);
+							 entry->slice,
+							 quota);
 		}
 		mutex_unlock(&peer_info->lock);
 	} while (wanted_fds > n_fds);
@@ -1629,6 +1639,9 @@ static int bus1_peer_ioctl_recv(struct bus1_peer *peer, unsigned long arg)
 		 * We treat this OOM as if the actual message transaction OOMed
 		 * and simply drop the message.
 		 */
+		struct bus1_user_quota *quota;
+
+		quota = &peer_info->quotas[entry->user->id];
 
 		vec.iov_base = fds;
 		vec.iov_len = n_fds * sizeof(*fds);
@@ -1638,7 +1651,7 @@ static int bus1_peer_ioctl_recv(struct bus1_peer *peer, unsigned long arg)
 					 &vec, 1, vec.iov_len);
 
 		mutex_lock(&peer_info->lock);
-		bus1_pool_release_kernel(&peer_info->pool, entry->slice);
+		bus1_pool_release_kernel(&peer_info->pool, entry->slice, quota);
 		mutex_unlock(&peer_info->lock);
 
 		/* on success, install FDs; on error, see fput() in `exit:' */

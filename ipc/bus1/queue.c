@@ -82,6 +82,7 @@ void bus1_queue_destroy(struct bus1_queue *queue)
  */
 bool bus1_queue_link(struct bus1_queue *queue,
 		     struct bus1_queue_entry *entry,
+		     struct bus1_user_quota *quota,
 		     u64 seq)
 {
 	struct bus1_queue_entry *iter;
@@ -112,7 +113,9 @@ bool bus1_queue_link(struct bus1_queue *queue,
 	rb_link_node(&entry->rb, prev, slot);
 	rb_insert_color(&entry->rb, &queue->messages);
 
+	WARN_ON(queue->n_messages >= BUS1_QUEUE_MESSAGES_MAX);
 	++ queue->n_messages;
+	++ quota->n_messages;
 
 	if (is_leftmost) {
 		WARN_ON(rcu_access_pointer(queue->front));
@@ -143,12 +146,15 @@ bool bus1_queue_link(struct bus1_queue *queue,
  *         you unlink a staging entry, and thus a waiting entry becomes ready.
  */
 bool bus1_queue_unlink(struct bus1_queue *queue,
-		       struct bus1_queue_entry *entry)
+		       struct bus1_queue_entry *entry,
+		       struct bus1_user_quota *quota)
 {
 	struct rb_node *node;
 
 	if (!entry || RB_EMPTY_NODE(&entry->rb))
 		return false;
+
+	bus1_queue_assert_held(queue);
 
 	node = rcu_dereference_protected(queue->front,
 					 bus1_queue_is_held(queue));
@@ -165,6 +171,7 @@ bool bus1_queue_unlink(struct bus1_queue *queue,
 	RB_CLEAR_NODE(&entry->rb);
 
 	-- queue->n_messages;
+	-- quota->n_messages;
 
 	/*
 	 * If this entry was non-ready in front, but the next entry exists and
@@ -190,6 +197,7 @@ bool bus1_queue_unlink(struct bus1_queue *queue,
  */
 bool bus1_queue_relink(struct bus1_queue *queue,
 		       struct bus1_queue_entry *entry,
+		       struct bus1_user_quota *quota,
 		       u64 seq)
 {
 	struct rb_node *front;
@@ -210,8 +218,9 @@ bool bus1_queue_relink(struct bus1_queue *queue,
 	RB_CLEAR_NODE(&entry->rb);
 
 	-- queue->n_messages;
+	-- quota->n_messages;
 
-	bus1_queue_link(queue, entry, seq);
+	bus1_queue_link(queue, entry, quota, seq);
 
 	/* if this uncovered a front, then the queue became readable */
 	return !front && rcu_access_pointer(queue->front);
@@ -238,6 +247,7 @@ bool bus1_queue_relink(struct bus1_queue *queue,
  */
 void bus1_queue_flush(struct bus1_queue *queue,
 		      struct bus1_pool *pool,
+		      struct bus1_user_quota *quotas,
 		      u64 peer_id)
 {
 	struct bus1_queue_entry *entry;
@@ -248,12 +258,18 @@ void bus1_queue_flush(struct bus1_queue *queue,
 	for (node = rb_first(&queue->messages);
 	     node && ((t = rb_next(node)), true);
 	     node = t) {
+		struct bus1_user_quota *quota;
+
 		entry = bus1_queue_entry(node);
 		if ((entry->seq & 1) || peer_id == entry->destination_id)
 			continue;
 
-		bus1_queue_unlink(queue, entry);
-		entry->slice = bus1_pool_release_kernel(pool, entry->slice);
+		quota = &quotas[entry->user->id];
+
+		bus1_queue_unlink(queue, entry, quota);
+		entry->slice = bus1_pool_release_kernel(pool,
+							entry->slice,
+							quota);
 		bus1_queue_entry_free(entry);
 	}
 }

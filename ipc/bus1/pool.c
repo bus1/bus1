@@ -26,6 +26,7 @@
 #include <linux/uio.h>
 #include "peer.h"
 #include "pool.h"
+#include "user.h"
 
 /* lockdep assertion to verify the parent peer is locked */
 #define bus1_pool_assert_held(_pool) \
@@ -82,7 +83,8 @@ static void bus1_pool_slice_link_free(struct bus1_pool_slice *slice,
 
 /* insert slice into the busy tree */
 static void bus1_pool_slice_link_busy(struct bus1_pool_slice *slice,
-				      struct bus1_pool *pool)
+				      struct bus1_pool *pool,
+				      struct bus1_user_quota *quota)
 {
 	struct rb_node **n, *prev = NULL;
 	struct bus1_pool_slice *ps;
@@ -103,6 +105,7 @@ static void bus1_pool_slice_link_busy(struct bus1_pool_slice *slice,
 	rb_insert_color(&slice->rb, &pool->slices_busy);
 
 	pool->allocated_size += slice->size;
+	quota->allocated_size += slice->size;
 
 	WARN_ON(pool->allocated_size > pool->size);
 }
@@ -266,6 +269,7 @@ void bus1_pool_destroy(struct bus1_pool *pool)
  * bus1_pool_alloc() - allocate memory
  * @pool:	pool to allocate memory from
  * @size:	number of bytes to allocate
+ * @quota:	the user quota to account the slice on
  *
  * This allocates a new slice of @size bytes from the memory pool at @pool. The
  * slice must be released via bus1_pool_release_kernel() by the caller. All
@@ -286,7 +290,8 @@ void bus1_pool_destroy(struct bus1_pool *pool)
  * Return: Pointer to new slice, or ERR_PTR on failure.
  */
 struct bus1_pool_slice *
-bus1_pool_alloc(struct bus1_pool *pool, size_t size)
+bus1_pool_alloc(struct bus1_pool *pool, size_t size,
+		struct bus1_user_quota *quota)
 {
 	struct bus1_pool_slice *slice, *ps;
 	size_t slice_size;
@@ -321,7 +326,7 @@ bus1_pool_alloc(struct bus1_pool *pool, size_t size)
 
 	/* move from free-tree to busy-tree */
 	rb_erase(&slice->rb, &pool->slices_free);
-	bus1_pool_slice_link_busy(slice, pool);
+	bus1_pool_slice_link_busy(slice, pool, quota);
 
 	slice->ref_kernel = true;
 	slice->ref_user = false;
@@ -381,6 +386,7 @@ static void bus1_pool_free(struct bus1_pool *pool,
  * bus1_pool_release_kernel() - release kernel-owned slice reference
  * @pool:	pool to free memory on
  * @slice:	slice to release
+ * @quota:	the user quota the slice was accounted on
  *
  * This releases the kernel-reference to a slice that was previously allocated
  * via bus1_pool_alloc(). This only releases the kernel reference to the slice.
@@ -390,7 +396,8 @@ static void bus1_pool_free(struct bus1_pool *pool,
  * Return: NULL is returned.
  */
 struct bus1_pool_slice *
-bus1_pool_release_kernel(struct bus1_pool *pool, struct bus1_pool_slice *slice)
+bus1_pool_release_kernel(struct bus1_pool *pool, struct bus1_pool_slice *slice,
+			 struct bus1_user_quota *quota)
 {
 	if (!slice || WARN_ON(!slice->ref_kernel))
 		return NULL;
@@ -399,6 +406,9 @@ bus1_pool_release_kernel(struct bus1_pool *pool, struct bus1_pool_slice *slice)
 
 	/* kernel must own a ref to @slice */
 	slice->ref_kernel = false;
+
+	if (!WARN_ON(slice->size > quota->allocated_size))
+		quota->allocated_size -= slice->size;
 
 	bus1_pool_free(pool, slice);
 

@@ -29,6 +29,7 @@
 
 struct bus1_domain;
 struct bus1_peer_name;
+struct bus1_user_quota;
 
 /**
  * struct bus1_peer_info - peer specific runtime information
@@ -46,6 +47,8 @@ struct bus1_peer_info {
 	};
 	struct bus1_pool pool;
 	struct bus1_queue queue;
+	struct bus1_user_quota *quotas;
+	size_t n_quotas;
 	struct bus1_user *user;
 	struct rb_root map_trackees;
 	struct list_head list_trackers;

@@ -141,7 +141,8 @@ bus1_transaction_free(struct bus1_transaction *transaction, bool do_free)
 
 		mutex_lock(&peer_info->lock);
 		entry->slice = bus1_pool_release_kernel(&peer_info->pool,
-							entry->slice);
+					entry->slice,
+					&peer_info->quotas[entry->user->id]);
 		mutex_unlock(&peer_info->lock);
 
 		bus1_peer_release_raw(peer);
@@ -326,13 +327,16 @@ bus1_transaction_instantiate(struct bus1_transaction *transaction,
 			     u64 peer_id)
 {
 	struct bus1_queue_entry *entry;
-	struct bus1_pool_slice *slice;
-	size_t i;
+	struct bus1_pool_slice *slice = NULL;
+	size_t i, slice_size;
 	int r;
 
 	entry = bus1_queue_entry_new(user, transaction->n_files);
 	if (IS_ERR(entry))
 		return ERR_CAST(entry);
+
+	slice_size = transaction->length_vecs +
+			transaction->n_files * sizeof(int);
 
 	/*
 	 * Allocate unlinked pool slice. We need enough space to store the
@@ -340,9 +344,21 @@ bus1_transaction_instantiate(struct bus1_transaction *transaction,
 	 * by the importer.
 	 */
 	mutex_lock(&peer_info->lock);
-	slice = bus1_pool_alloc(&peer_info->pool,
-				transaction->length_vecs +
-				transaction->n_files * sizeof(int));
+	r = bus1_user_quota_check(user->id < peer_info->n_quotas ?
+				  &peer_info->quotas[user->id] : NULL,
+				  slice_size, &peer_info->pool,
+				  &peer_info->queue);
+	if (r < 0)
+		goto unlock;
+
+	r = bus1_user_quotas_ensure_allocated(&peer_info->quotas,
+					     &peer_info->n_quotas,
+					     user->id);
+	if (r < 0)
+		goto unlock;
+
+	slice = bus1_pool_alloc(&peer_info->pool, slice_size,
+				&peer_info->quotas[user->id]);
 	mutex_unlock(&peer_info->lock);
 
 	if (IS_ERR(slice)) {
@@ -375,10 +391,13 @@ bus1_transaction_instantiate(struct bus1_transaction *transaction,
 
 	return entry;
 
+unlock:
+	mutex_unlock(&peer_info->lock);
 error:
 	if (slice) {
 		mutex_lock(&peer_info->lock);
-		bus1_pool_release_kernel(&peer_info->pool, slice);
+		bus1_pool_release_kernel(&peer_info->pool, slice,
+					 &peer_info->quotas[entry->user->id]);
 		mutex_unlock(&peer_info->lock);
 	}
 	bus1_queue_entry_free(entry); /* fput()s entry->files[] */
@@ -471,7 +490,8 @@ error:
 		peer_info = bus1_peer_dereference(peer);
 
 		mutex_lock(&peer_info->lock);
-		bus1_pool_release_kernel(&peer_info->pool, entry->slice);
+		bus1_pool_release_kernel(&peer_info->pool, entry->slice,
+					 &peer_info->quotas[user->id]);
 		mutex_unlock(&peer_info->lock);
 
 		entry->slice = NULL;
@@ -510,6 +530,7 @@ void bus1_transaction_commit(struct bus1_transaction *transaction)
 	struct bus1_queue_entry *e;
 	struct bus1_peer *peer;
 	struct bus1_peer_info *peer_info;
+	struct bus1_user_quota *quota;
 	bool wake;
 	u64 seq = 0;
 
@@ -547,7 +568,8 @@ void bus1_transaction_commit(struct bus1_transaction *transaction)
 		peer_info = bus1_peer_dereference(e->transaction.peer);
 
 		mutex_lock(&peer_info->lock);
-		wake = bus1_queue_link(&peer_info->queue, e, seq);
+		quota = &peer_info->quotas[e->user->id];
+		wake = bus1_queue_link(&peer_info->queue, e, quota, seq);
 		mutex_unlock(&peer_info->lock);
 
 		WARN_ON(wake); /* in-flight; cannot cause a wake-up */
@@ -571,14 +593,17 @@ void bus1_transaction_commit(struct bus1_transaction *transaction)
 		e->transaction.peer = NULL;
 
 		mutex_lock(&peer_info->lock);
+		quota = &peer_info->quotas[e->user->id];
 		if (node == first) {
 			seq = atomic64_add_return(4,
 					&transaction->domain_info->seq_ids);
 			WARN_ON(seq & 1); /* must be even */
-			wake = bus1_queue_link(&peer_info->queue, e, seq);
+			wake = bus1_queue_link(&peer_info->queue,
+					       e, quota, seq);
 		} else {
 			WARN_ON(seq == 0); /* must be assigned */
-			wake = bus1_queue_relink(&peer_info->queue, e, seq);
+			wake = bus1_queue_relink(&peer_info->queue,
+						 e, quota, seq);
 		}
 		mutex_unlock(&peer_info->lock);
 
@@ -610,6 +635,7 @@ int bus1_transaction_commit_for_id(struct bus1_transaction *transaction,
 	struct bus1_peer *peer;
 	struct bus1_queue_entry *e;
 	struct bus1_peer_info *peer_info;
+	struct bus1_user_quota *quota;
 	bool wake;
 	u64 seq;
 	int r;
@@ -633,9 +659,10 @@ int bus1_transaction_commit_for_id(struct bus1_transaction *transaction,
 	 * previous and the next multicast message.
 	 */
 	mutex_lock(&peer_info->lock);
+	quota = &peer_info->quotas[user->id];
 	seq = atomic64_read(&transaction->domain_info->seq_ids) + 2;
 	WARN_ON(seq & 1); /* must be even */
-	wake = bus1_queue_link(&peer_info->queue, e, seq);
+	wake = bus1_queue_link(&peer_info->queue, e, quota, seq);
 	mutex_unlock(&peer_info->lock);
 
 	if (wake)
