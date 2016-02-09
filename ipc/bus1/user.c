@@ -40,9 +40,10 @@ bus1_user_new(struct bus1_domain_info *domain_info, kuid_t uid)
 	 * is. As such, the domain pointer here is always valid and can be
 	 * dereferenced without any protection.
 	 */
-	u->domain_info = domain_info;
 	u->uid = uid;
 	u->id = BUS1_INTERNAL_UID_INVALID;
+	u->domain_info = domain_info;
+	atomic_set(&u->fds_inflight, 0);
 
 	return u;
 }
@@ -142,6 +143,8 @@ exit:
 static void bus1_user_free(struct kref *ref)
 {
 	struct bus1_user *user = container_of(ref, struct bus1_user, ref);
+
+	WARN_ON(atomic_read(&user->fds_inflight));
 
 	/* drop the id from the ida if it was initialized */
 	if (user->id != BUS1_INTERNAL_UID_INVALID)

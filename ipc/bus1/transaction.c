@@ -320,6 +320,26 @@ error:
 	return ERR_PTR(r);
 }
 
+/*
+ * There is no atomic_add_unless_greater(), so we implement it here, similarly
+ * to their inc and dec counterparts.
+ */
+static int bus1_atomic_add_unless_greater(atomic_t *p, int add, int limit)
+{
+	int v, v1;
+
+	if (!add)
+		return 1;
+
+	for (v = atomic_read(p); v + add <= v && v + add <= limit; v = v1) {
+		v1 = atomic_cmpxchg(p, v, v + add);
+		if (likely(v1 == v))
+			return 1;
+	}
+
+	return 0;
+}
+
 static struct bus1_queue_entry *
 bus1_transaction_instantiate(struct bus1_transaction *transaction,
 			     struct bus1_user *user,
@@ -380,6 +400,14 @@ bus1_transaction_instantiate(struct bus1_transaction *transaction,
 				  transaction->length_vecs); /* total length */
 	if (r < 0)
 		goto error;
+
+	/* account the inflight fds */
+	if (!bus1_atomic_add_unless_greater(&user->fds_inflight,
+					    transaction->n_files,
+					    rlimit(RLIMIT_NOFILE))) {
+		r = -ETOOMANYREFS;
+		goto error;
+	}
 
 	/* link files into @entry */
 	for (i = 0; i < transaction->n_files; ++i)

@@ -350,11 +350,15 @@ bus1_queue_entry_free(struct bus1_queue_entry *entry)
 		return NULL;
 
 	WARN_ON(!entry->user);
-	entry->user = bus1_user_release(entry->user);
 
 	for (i = 0; i < entry->n_files; ++i)
 		if (entry->files[i])
 			fput(entry->files[i]);
+
+	if (entry->n_files)
+		atomic_sub(entry->n_files, &entry->user->fds_inflight);
+
+	entry->user = bus1_user_release(entry->user);
 
 	WARN_ON(entry->slice);
 	WARN_ON(entry->transaction.peer);

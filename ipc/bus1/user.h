@@ -16,6 +16,7 @@
  * XXX
  */
 
+#include <linux/atomic.h>
 #include <linux/kernel.h>
 #include <linux/kref.h>
 #include <linux/rcupdate.h>
@@ -29,17 +30,19 @@ struct bus1_queue;
 /**
  * struct bus1_user - resource accounting for users
  * @ref:		reference counter
- * @domain_info:	domain of the user
  * @uid:		UID of the user
  * @id:			internal index of this user
+ * @fds_inflight:	number of in-flight fds the user has in this domain
+ * @domain_info:	domain of the user
  * @rcu:		rcu
  */
 struct bus1_user {
 	struct kref ref;
 	union {
 		struct {
-			unsigned int id;
 			kuid_t uid;
+			unsigned int id;
+			atomic_t fds_inflight;
 			struct bus1_domain_info *domain_info;
 		};
 		struct rcu_head rcu;
