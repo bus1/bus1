@@ -150,10 +150,12 @@ struct bus1_queue_entry {
 /**
  * struct bus1_queue - message queue
  * @messages:		queued messages
+ * @n_messages:		number of messages
  * @front:		cached front entry
  */
 struct bus1_queue {
 	struct rb_root messages;
+	size_t n_messages;
 	struct rb_node __rcu *front;
 };
 

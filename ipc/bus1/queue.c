@@ -43,6 +43,7 @@
 void bus1_queue_init_internal(struct bus1_queue *queue)
 {
 	queue->messages = RB_ROOT;
+	queue->n_messages = 0;
 	rcu_assign_pointer(queue->front, NULL);
 }
 
@@ -62,6 +63,7 @@ void bus1_queue_init_internal(struct bus1_queue *queue)
 void bus1_queue_destroy(struct bus1_queue *queue)
 {
 	WARN_ON(!RB_EMPTY_ROOT(&queue->messages));
+	WARN_ON(queue->n_messages);
 	WARN_ON(rcu_access_pointer(queue->front));
 }
 
@@ -109,6 +111,8 @@ bool bus1_queue_link(struct bus1_queue *queue,
 	entry->seq = seq;
 	rb_link_node(&entry->rb, prev, slot);
 	rb_insert_color(&entry->rb, &queue->messages);
+
+	++ queue->n_messages;
 
 	if (is_leftmost) {
 		WARN_ON(rcu_access_pointer(queue->front));
@@ -160,6 +164,8 @@ bool bus1_queue_unlink(struct bus1_queue *queue,
 	rb_erase(&entry->rb, &queue->messages);
 	RB_CLEAR_NODE(&entry->rb);
 
+	-- queue->n_messages;
+
 	/*
 	 * If this entry was non-ready in front, but the next entry exists and
 	 * is ready, then the queue becomes readable if you pop the front.
@@ -202,6 +208,9 @@ bool bus1_queue_relink(struct bus1_queue *queue,
 	/* drop from rb-tree and insert again */
 	rb_erase(&entry->rb, &queue->messages);
 	RB_CLEAR_NODE(&entry->rb);
+
+	-- queue->n_messages;
+
 	bus1_queue_link(queue, entry, seq);
 
 	/* if this uncovered a front, then the queue became readable */
