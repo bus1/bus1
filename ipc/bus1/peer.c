@@ -18,6 +18,7 @@
 #include <linux/rbtree.h>
 #include <linux/rcupdate.h>
 #include <linux/rwsem.h>
+#include <linux/seqlock.h>
 #include <linux/slab.h>
 #include <linux/uaccess.h>
 #include <linux/wait.h>
@@ -273,6 +274,10 @@ bus1_peer_info_new(struct bus1_cmd_connect *param)
 	peer_info->user = NULL;
 	peer_info->map_trackees = RB_ROOT;
 	INIT_LIST_HEAD(&peer_info->list_trackers);
+	peer_info->map_handles_by_id = RB_ROOT;
+	peer_info->map_handles_by_node = RB_ROOT;
+	seqcount_init(&peer_info->seqcount);
+	peer_info->handle_ids = 0;
 
 	r = bus1_pool_create_for_peer(&peer_info->pool, peer_info,
 				      param->pool_size);

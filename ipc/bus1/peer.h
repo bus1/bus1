@@ -22,6 +22,7 @@
 #include <linux/rcupdate.h>
 #include <linux/rbtree.h>
 #include <linux/rwsem.h>
+#include <linux/seqlock.h>
 #include <linux/wait.h>
 #include "active.h"
 #include "pool.h"
@@ -33,12 +34,16 @@ struct bus1_user_quota;
 
 /**
  * struct bus1_peer_info - peer specific runtime information
- * @lock:		data lock
- * @rcu:		rcu
- * @pool:		data pool
- * @queue:		message queue, rcu-accessible
- * @map_trackees:	map of all peers we track
- * @list_trackers:	list of all peers tracking us
+ * @lock:			data lock
+ * @rcu:			rcu
+ * @pool:			data pool
+ * @queue:			message queue, rcu-accessible
+ * @map_trackees:		map of all peers we track
+ * @list_trackers:		list of all peers tracking us
+ * @map_handles_by_id:		map of owned handles, by handle id
+ * @map_handles_by_node:	map of owned handles, by node pointer
+ * @seqcount:			sequence counter
+ * @handle_ids:			handle ID allocator
  */
 struct bus1_peer_info {
 	union {
@@ -52,6 +57,10 @@ struct bus1_peer_info {
 	struct bus1_user *user;
 	struct rb_root map_trackees;
 	struct list_head list_trackers;
+	struct rb_root map_handles_by_id;
+	struct rb_root map_handles_by_node;
+	struct seqcount seqcount;
+	u64 handle_ids;
 };
 
 #define bus1_peer_info_from_pool(_pool) \

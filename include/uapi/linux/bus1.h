@@ -39,6 +39,8 @@
  *   ENOTUNIQ:          argument is not unique
  *   ELOOP:             argument points back to itself
  *   EALREADY:          operation already in progress
+ *   ESTALE:            referenced node has no local handles
+ *   EINPROGRESS:       handle destruction already in progress
  */
 
 #include <linux/ioctl.h>
@@ -50,6 +52,7 @@
 #define BUS1_OFFSET_INVALID ((__u64)-1)
 
 #define BUS1_IOCTL_MAGIC		0x96
+#define BUS1_ID_INVALID			((__u64)-1)
 #define BUS1_FLAG_NEGOTIATE		(1ULL << 63)
 
 enum {
