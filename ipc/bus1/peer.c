@@ -972,9 +972,6 @@ static int bus1_peer_connect_new(struct bus1_peer *peer,
 	write_seqcount_end(&domain->seqcount);
 	mutex_unlock(&domain->lock);
 
-	/* provide ID for caller, pool-size is already set */
-	param->unique_id = peer->id;
-
 	return 0;
 
 error_unlock:
@@ -1055,7 +1052,6 @@ static int bus1_peer_connect_reset(struct bus1_peer *peer,
 	mutex_unlock(&domain->lock);
 
 	/* provide information for caller */
-	param->unique_id = peer->id;
 	param->pool_size = peer_info->pool.size;
 
 	/* safe to call outside of domain-lock; we still hold the peer-lock */
@@ -1089,7 +1085,6 @@ static int bus1_peer_connect_query(struct bus1_peer *peer,
 	if (WARN_ON(!peer_info))
 		return -ESHUTDOWN;
 
-	param->unique_id = peer->id;
 	param->pool_size = peer_info->pool.size;
 
 	return 0;
@@ -1125,9 +1120,6 @@ static int bus1_peer_ioctl_connect(struct bus1_peer *peer,
 	    !!(param->flags & BUS1_CONNECT_FLAG_MONITOR) +
 	    !!(param->flags & BUS1_CONNECT_FLAG_RESET) > 1)
 		return -EINVAL;
-	/* unique-id is never used as input */
-	if (param->unique_id != 0)
-		return -EINVAL;
 	/* only root can claim names */
 	if (!file_ns_capable(file, domain->info->user_ns, CAP_SYS_ADMIN))
 		return -EPERM;
@@ -1157,13 +1149,12 @@ static int bus1_peer_ioctl_connect(struct bus1_peer *peer,
 
 	/*
 	 * QUERY can be combined with any CONNECT operation. On success, it
-	 * causes the peer-id and pool-size to be copied back to user-space.
+	 * causes the peer information to be copied back to user-space.
 	 * All handlers above must provide that information in @param for this
 	 * to copy it back.
 	 */
 	if (r >= 0 && (param->flags & BUS1_CONNECT_FLAG_QUERY)) {
-		if (put_user(param->unique_id, &uparam->unique_id) ||
-		    put_user(param->pool_size, &uparam->pool_size))
+		if (put_user(param->pool_size, &uparam->pool_size))
 			r = -EFAULT; /* Don't care.. keep what we did so far */
 	}
 

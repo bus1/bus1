@@ -66,7 +66,6 @@ struct bus1_cmd_connect {
 	__u64 size;
 	__u64 flags;
 	__u64 pool_size;
-	__u64 unique_id;
 	char names[];
 } __attribute__((__aligned__(8)));
 
