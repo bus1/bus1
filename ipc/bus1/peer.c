@@ -31,14 +31,6 @@
 #include "user.h"
 #include "util.h"
 
-struct bus1_peer_track {
-	struct kref ref;			/* reference counter */
-	struct bus1_peer __rcu *tracker;	/* points to the tracker */
-	struct bus1_peer __rcu *trackee;	/* points to the trackee */
-	struct rb_node rb_tracker;		/* link into @tracker */
-	struct list_head link_trackee;		/* link into @trackee */
-};
-
 struct bus1_peer_name {
 	union {
 		struct rcu_head rcu;
@@ -49,181 +41,9 @@ struct bus1_peer_name {
 	char name[];
 };
 
-static void bus1_peer_track_free(struct kref *ref)
-{
-	/*
-	 * The track object is never cleared and might have stale rb/list
-	 * entries at any time. Don't look at them here, just plain free the
-	 * object. No rcu. No warnings. Just get rid of it.
-	 */
-	kfree(container_of(ref, struct bus1_peer_track, ref));
-}
-
-static void bus1_peer_track_no_free(struct kref *ref)
-{
-	/* used if we know we hold more than 1 reference */
-	WARN(1, "Track object freed unexpectedly");
-}
-
-static struct bus1_peer *
-bus1_peer_info_pop_tracker(struct bus1_peer_info *trackee_info)
-{
-	struct bus1_peer_info *tracker_info;
-	struct bus1_peer_track *track;
-	struct bus1_peer *tracker;
-
-	/*
-	 * This unlinks a single tracker of @trackee_info, pins the owning peer
-	 * and returns a pointer to the pinned peer. Call this repeatedly to
-	 * drain all trackers, but make sure the peer is disconnected and no
-	 * new trackers are installed.
-	 *
-	 * This is usually used to instantiate a peer-disconnect notification
-	 * on each tracker, before destroying a peer.
-	 *
-	 * This implementation simply locks the peer and looks at the first
-	 * tracker it can get its hands on. We unlink the local side and try to
-	 * pin the remote side. If this fails, we know the remote will clean up
-	 * this track object, so we simply skip it and continue with the next
-	 * one. In case we can pin the remote entry, we unlink the object from
-	 * it, drop the last reference and return the pinned peer to the
-	 * caller.
-	 */
-
-	mutex_lock(&trackee_info->lock);
-	while ((track = list_first_entry_or_null(&trackee_info->list_trackers,
-						 struct bus1_peer_track,
-						 link_trackee))) {
-		/* unlink from protected trackee */
-		rcu_assign_pointer(track->trackee, NULL);
-		list_del(&track->link_trackee);
-
-		/* try to pin tracker (RCU protects runtime of acquisition) */
-		rcu_read_lock();
-		tracker = bus1_peer_acquire(rcu_dereference(track->tracker));
-		rcu_read_unlock();
-
-		/*
-		 * Remote tracker is pinned and local link is cleared. Unlock
-		 * the peer, then lock the tracker and drop their link. The
-		 * local ref is hold to guarantee the track object is not
-		 * dropped. As a last step, drop the local reference and return
-		 * the pinned tracker to the caller.
-		 *
-		 * Note that an UNTRACK operation of @tracker might race us. We
-		 * don't care, though. We just pretend it happened after we
-		 * popped the tracker.
-		 */
-		if (tracker) {
-			mutex_unlock(&trackee_info->lock);
-
-			tracker_info = bus1_peer_dereference(tracker);
-			mutex_lock(&tracker_info->lock);
-			if (rcu_access_pointer(track->tracker)) {
-				rcu_assign_pointer(track->tracker, NULL);
-				rb_erase(&track->rb_tracker,
-					 &tracker_info->map_trackees);
-				kref_put(&track->ref, bus1_peer_track_no_free);
-			}
-			mutex_unlock(&tracker_info->lock);
-
-			kref_put(&track->ref, bus1_peer_track_free);
-			return tracker;
-		}
-
-		/*
-		 * We cannot pin the tracker, it either is already gone or it
-		 * is about to go. Either way, we don't have to care for their
-		 * reference, it is enough to drop ours and continue.
-		 */
-		kref_put(&track->ref, bus1_peer_track_free);
-	}
-	mutex_unlock(&trackee_info->lock);
-
-	return NULL;
-}
-
-static void bus1_peer_info_notify(struct bus1_peer_info *peer_info)
-{
-	struct bus1_peer *tracker;
-
-	/*
-	 * XXX: Notifications are not implemented, yet. This is a stub that
-	 * just flushes the trackees, but never sends any message.
-	 */
-
-	while ((tracker = bus1_peer_info_pop_tracker(peer_info)))
-		bus1_peer_release(tracker);
-}
-
-static void bus1_peer_info_flush_trackees(struct bus1_peer_info *peer_info,
-					  struct rb_root *root)
-{
-	struct bus1_peer_track *track, *t;
-
-	/*
-	 * This flushes all tracks that a peer has set up. The peer must be
-	 * locked by the caller. We then *pretend* to unlink all tracks. We do
-	 * this by setting the tracker to NULL on all tracks, but retain the
-	 * reference and rbtree. We also clear the rbtree to NULL. It now looks
-	 * like the peer has no tracks, and all previous tracks are
-	 * half-unlinked with an additional ref holder.
-	 *
-	 * This temporary tree is then handed back to the caller, which can
-	 * unlock the peer and then safely finish the tracks without having to
-	 * keep the peer locked. See bus1_peer_info_finish_trackees().
-	 */
-
-	lockdep_assert_held(&peer_info->lock);
-
-	*root = peer_info->map_trackees;
-	peer_info->map_trackees = RB_ROOT;
-
-	rbtree_postorder_for_each_entry_safe(track, t, root, rb_tracker)
-		rcu_assign_pointer(track->tracker, NULL);
-}
-
-static void bus1_peer_info_finish_trackees(struct rb_root *root)
-{
-	struct bus1_peer_track *track, *t;
-	struct bus1_peer_info *trackee_info;
-	struct bus1_peer *trackee;
-
-	/*
-	 * This is the tail of bus1_peer_info_flush_trackees(). It takes a tree
-	 * of unlinked tracks and tries dropping them from their remote
-	 * trackee. There is no need to hold any local lock, as the tree itself
-	 * is accessible exclusively by this context (since it was already
-	 * unlinked before).
-	 */
-
-	rbtree_postorder_for_each_entry_safe(track, t, root, rb_tracker) {
-		/* try to pin trackee (RCU protects runtime of acquisition) */
-		rcu_read_lock();
-		trackee = bus1_peer_acquire(rcu_dereference(track->trackee));
-		rcu_read_unlock();
-
-		if (trackee) {
-			trackee_info = bus1_peer_dereference(trackee);
-			mutex_lock(&trackee_info->lock);
-			if (rcu_access_pointer(track->trackee)) {
-				rcu_assign_pointer(track->trackee, NULL);
-				list_del(&track->link_trackee);
-				kref_put(&track->ref, bus1_peer_track_no_free);
-			}
-			mutex_unlock(&trackee_info->lock);
-			bus1_peer_release(trackee);
-		}
-
-		kref_put(&track->ref, bus1_peer_track_free);
-	}
-}
-
 static struct bus1_peer_info *
 bus1_peer_info_free(struct bus1_peer_info *peer_info)
 {
-	struct rb_root trackees;
-
 	if (!peer_info)
 		return NULL;
 
@@ -232,11 +52,7 @@ bus1_peer_info_free(struct bus1_peer_info *peer_info)
 	mutex_lock(&peer_info->lock); /* lock peer to make lockdep happy */
 	bus1_queue_flush(&peer_info->queue, &peer_info->pool,
 			 peer_info->quotas, 0);
-	bus1_peer_info_flush_trackees(peer_info, &trackees);
 	mutex_unlock(&peer_info->lock);
-
-	bus1_peer_info_finish_trackees(&trackees);
-	bus1_peer_info_notify(peer_info);
 
 	bus1_queue_destroy(&peer_info->queue);
 	bus1_pool_destroy(&peer_info->pool);
@@ -272,8 +88,6 @@ bus1_peer_info_new(struct bus1_cmd_connect *param)
 	peer_info->quotas = NULL;
 	peer_info->n_quotas = 0;
 	peer_info->user = NULL;
-	peer_info->map_trackees = RB_ROOT;
-	INIT_LIST_HEAD(&peer_info->list_trackers);
 	peer_info->map_handles_by_id = RB_ROOT;
 	peer_info->map_handles_by_node = RB_ROOT;
 	seqcount_init(&peer_info->seqcount);
@@ -293,17 +107,11 @@ error:
 
 static void bus1_peer_info_reset(struct bus1_peer_info *peer_info, u64 id)
 {
-	struct rb_root trackees;
-
 	mutex_lock(&peer_info->lock);
 	bus1_queue_flush(&peer_info->queue, &peer_info->pool,
 			 peer_info->quotas, id);
 	bus1_pool_flush(&peer_info->pool);
-	bus1_peer_info_flush_trackees(peer_info, &trackees);
 	mutex_unlock(&peer_info->lock);
-
-	bus1_peer_info_finish_trackees(&trackees);
-	bus1_peer_info_notify(peer_info);
 }
 
 static struct bus1_peer_name *
@@ -1258,161 +1066,6 @@ static int bus1_peer_ioctl_slice_release(struct bus1_peer *peer,
 	return r;
 }
 
-static int bus1_peer_ioctl_track(struct bus1_peer *tracker,
-				 struct bus1_domain *domain,
-				 unsigned long arg)
-{
-	struct bus1_peer_info *tracker_info, *trackee_info;
-	struct bus1_peer_track *track = NULL, *iter;
-	struct rb_node *prev, **slot;
-	struct bus1_peer *trackee;
-	u64 id;
-	int r;
-
-	lockdep_assert_held(&tracker->active);
-
-	r = bus1_import_fixed_ioctl(&id, arg, sizeof(id));
-	if (r < 0)
-		return r;
-
-	/* pin remote */
-	trackee = bus1_peer_acquire_raw_by_id(domain, id);
-	if (!trackee)
-		return -ENXIO;
-
-	/* prevent tracking yourself */
-	if (trackee == tracker) {
-		r = -ELOOP;
-		goto exit;
-	}
-
-	track = kmalloc(sizeof(*track), GFP_KERNEL);
-	if (!track) {
-		r = -ENOMEM;
-		goto exit;
-	}
-
-	track->tracker = tracker;
-	track->trackee = trackee;
-
-	/* lock both peers (order is defined by absolute address) */
-	tracker_info = bus1_peer_dereference(tracker);
-	trackee_info = bus1_peer_dereference(trackee);
-	if (tracker_info < trackee_info) {
-		mutex_lock(&tracker_info->lock);
-		mutex_lock_nested(&trackee_info->lock, 1);
-	} else {
-		mutex_lock(&trackee_info->lock);
-		mutex_lock_nested(&tracker_info->lock, 1);
-	}
-
-	/* insert into tracker, prevent duplicates */
-	slot = &tracker_info->map_trackees.rb_node;
-	prev = NULL;
-	while (*slot) {
-		prev = *slot;
-		iter = container_of(prev, struct bus1_peer_track, rb_tracker);
-		if (trackee == iter->trackee) {
-			r = -EALREADY;
-			goto exit_unlock;
-		} else if (trackee < iter->trackee) {
-			slot = &prev->rb_left;
-		} else /* if (trackee > iter->trackee) */ {
-			slot = &prev->rb_right;
-		}
-	}
-	rb_link_node(&track->rb_tracker, prev, slot);
-	rb_insert_color(&track->rb_tracker, &tracker_info->map_trackees);
-
-	/* link into trackee */
-	list_add_tail(&track->link_trackee, &trackee_info->list_trackers);
-
-	/* two ref-counts, one for each link */
-	kref_init(&track->ref);
-	kref_get(&track->ref);
-
-	track = NULL;
-	r = 0;
-
-exit_unlock:
-	mutex_unlock(&trackee_info->lock);
-	mutex_unlock(&tracker_info->lock);
-exit:
-	bus1_peer_release_raw(trackee);
-	kfree(track);
-	return r;
-}
-
-static int bus1_peer_ioctl_untrack(struct bus1_peer *tracker,
-				   struct bus1_domain *domain,
-				   unsigned long arg)
-{
-	struct bus1_peer_info *tracker_info = bus1_peer_dereference(tracker);
-	struct bus1_peer_info *trackee_info;
-	struct bus1_peer_track *track;
-	struct bus1_peer *trackee;
-	struct rb_node *n;
-	u64 id;
-	int r;
-
-	lockdep_assert_held(&tracker->active);
-
-	r = bus1_import_fixed_ioctl(&id, arg, sizeof(id));
-	if (r < 0)
-		return r;
-
-	/*
-	 * Intuitively, one would simply iterate map_trackees until we find an
-	 * entry for @id. However, this tree is *not* indexed by the peer id,
-	 * hence, we have to do the double lookup here.
-	 */
-	trackee = bus1_peer_acquire_raw_by_id(domain, id);
-	if (!trackee)
-		return -ENXIO;
-
-	/* search for track entry and unlink it locally, if found */
-	mutex_lock(&tracker_info->lock);
-	n = tracker_info->map_trackees.rb_node;
-	while (n) {
-		track = container_of(n, struct bus1_peer_track, rb_tracker);
-		if (trackee < track->trackee) {
-			n = n->rb_left;
-		} else if (trackee > track->trackee) {
-			n = n->rb_right;
-		} else {
-			rcu_assign_pointer(track->tracker, NULL);
-			rb_erase(&track->rb_tracker,
-				 &tracker_info->map_trackees);
-			/* keep the reference, so @track stays valid */
-			break;
-		}
-	}
-	mutex_unlock(&tracker_info->lock);
-
-	if (!n) {
-		r = -ENXIO;
-		goto exit;
-	}
-
-	/* now unlink @track from the remote peer */
-	trackee_info = bus1_peer_dereference(trackee);
-	mutex_lock(&trackee_info->lock);
-	if (rcu_access_pointer(track->trackee)) {
-		rcu_assign_pointer(track->trackee, NULL);
-		list_del(&track->link_trackee);
-		kref_put(&track->ref, bus1_peer_track_no_free);
-	}
-	mutex_unlock(&trackee_info->lock);
-
-	/* at last we drop the local reference used to pin the object */
-	kref_put(&track->ref, bus1_peer_track_free);
-	r = 0;
-
-exit:
-	bus1_peer_release_raw(trackee);
-	return r;
-}
-
 static int bus1_peer_ioctl_send(struct bus1_peer *peer,
 				struct bus1_domain *domain,
 				unsigned long arg)
@@ -1726,8 +1379,6 @@ int bus1_peer_ioctl(struct bus1_peer *peer,
 		return bus1_peer_teardown(peer, domain);
 
 	case BUS1_CMD_SLICE_RELEASE:
-	case BUS1_CMD_TRACK:
-	case BUS1_CMD_UNTRACK:
 	case BUS1_CMD_SEND:
 	case BUS1_CMD_RECV:
 		down_read(&peer->rwlock);
@@ -1736,10 +1387,6 @@ int bus1_peer_ioctl(struct bus1_peer *peer,
 		} else {
 			if (cmd == BUS1_CMD_SLICE_RELEASE)
 				r = bus1_peer_ioctl_slice_release(peer, arg);
-			else if (cmd == BUS1_CMD_TRACK)
-				r = bus1_peer_ioctl_track(peer, domain, arg);
-			else if (cmd == BUS1_CMD_UNTRACK)
-				r = bus1_peer_ioctl_untrack(peer, domain, arg);
 			else if (cmd == BUS1_CMD_SEND)
 				r = bus1_peer_ioctl_send(peer, domain, arg);
 			else if (cmd == BUS1_CMD_RECV)

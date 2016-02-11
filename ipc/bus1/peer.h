@@ -38,8 +38,6 @@ struct bus1_user_quota;
  * @rcu:			rcu
  * @pool:			data pool
  * @queue:			message queue, rcu-accessible
- * @map_trackees:		map of all peers we track
- * @list_trackers:		list of all peers tracking us
  * @map_handles_by_id:		map of owned handles, by handle id
  * @map_handles_by_node:	map of owned handles, by node pointer
  * @seqcount:			sequence counter
@@ -55,8 +53,6 @@ struct bus1_peer_info {
 	struct bus1_user_quota *quotas;
 	size_t n_quotas;
 	struct bus1_user *user;
-	struct rb_root map_trackees;
-	struct list_head list_trackers;
 	struct rb_root map_handles_by_id;
 	struct rb_root map_handles_by_node;
 	struct seqcount seqcount;
