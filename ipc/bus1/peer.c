@@ -995,7 +995,7 @@ static int bus1_peer_ioctl_resolve(struct bus1_peer *peer,
 	}
 
 	/* result must be cleared by caller */
-	if (param->unique_id != 0) {
+	if (param->id != 0) {
 		r = -EINVAL;
 		goto exit;
 	}
@@ -1023,7 +1023,7 @@ static int bus1_peer_ioctl_resolve(struct bus1_peer *peer,
 			v = strcmp(param->name, peer_name->name);
 			if (v == 0) {
 				if (bus1_active_is_active(&peer_name->peer->active))
-					param->unique_id = peer_name->peer->id;
+					param->id = peer_name->peer->id;
 				break;
 			} else if (v < 0) {
 				n = rcu_dereference(n->rb_left);
@@ -1038,7 +1038,7 @@ static int bus1_peer_ioctl_resolve(struct bus1_peer *peer,
 
 	if (!n)
 		r = -ENXIO; /* not found, or deactivated */
-	else if (put_user(param->unique_id, &uparam->unique_id))
+	else if (put_user(param->id, &uparam->id))
 		r = -EFAULT;
 	else
 		r = 0;

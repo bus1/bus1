@@ -72,7 +72,7 @@ struct bus1_cmd_connect {
 struct bus1_cmd_resolve {
 	__u64 size;
 	__u64 flags;
-	__u64 unique_id;
+	__u64 id;
 	char name[];
 } __attribute__((__aligned__(8)));
 
