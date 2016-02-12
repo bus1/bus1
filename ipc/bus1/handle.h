@@ -81,6 +81,104 @@ struct bus1_handle;
 struct bus1_peer;
 struct bus1_peer_info;
 
+/**
+ * BUS1_HANDLE_BATCH_SIZE - number of handles per set in a batch
+ *
+ * We need to support large handle transactions, bigger than any linear
+ * allocation we're supposed to do in a running kernel. Hence, we batch all
+ * handles in a transaction into sets of this size. The `bus1_handle_batch`
+ * object transparently hides this, and pretends it is a linear array.
+ */
+#define BUS1_HANDLE_BATCH_SIZE (1024)
+
+/**
+ * union bus1_handle_entry - batch entry
+ * @next:		pointer to next batch entry
+ * @handle:		pointer to stored handle
+ * @id:			stored handle ID
+ *
+ * This union represents a single handle-entry in a batch. To support large
+ * batches, we only store a limited number of handles consequetively. Once the
+ * batch size is reached, a new batch is allocated and linked  This is all
+ * hidden in the batch implementation, the details are hidden from the caller.
+ */
+union bus1_handle_entry {
+	union bus1_handle_entry *next;
+	struct bus1_handle *handle;
+	u64 id;
+};
+
+/**
+ * struct bus1_handle_batch - dynamic set of handles
+ * @n_handles:		number of actually stored handles
+ * @n_allocated:	number of slots allocated
+ * @entries:		stored entries
+ *
+ * The batch object allows handling multiple handles in a single set. Each
+ * batch can store an unlimited amount of handles, and internally they're
+ * grouped into batches of BUS1_HANDLE_BATCH_SIZE entries.
+ *
+ * All handles are put into the trailing array @entries. However, at most
+ * BUS1_HANDLE_BATCH_SIZE entries are stored there. If this number is exceeded,
+ * then batch->entries[BUS1_HANDLE_BATCH_SIZE].next points to the next
+ * dynamically allocated array of bus1_handle_entry objects. This can be
+ * extended as often as you want, to support unlimited sized batches.
+ *
+ * The caller must not access @entries directly!
+ */
+struct bus1_handle_batch {
+	size_t n_handles;
+	size_t n_allocated;
+	union bus1_handle_entry entries[0];
+};
+
+/**
+ * struct bus1_handle_transfer - handle transfer context
+ * @peer:		pinned owner of the context
+ * @n_new:		number of newly allocated nodes
+ * @batch:		associated handles
+ *
+ * The bus1_handle_transfer object contains context state for message
+ * transactions, regarding handle transfers. It pins all the local handles of
+ * the sending peer for the whole duration of a transaction. It is usually used
+ * to instantiate bus1_handle_inflight objects for each destination.
+ *
+ * A transfer context should have the same lifetime as the parent transaction
+ * context.
+ *
+ * Note that the tail of the object contains a dynamically sized array with the
+ * first handle-set of @batch.
+ */
+struct bus1_handle_transfer {
+	struct bus1_peer *peer;
+	size_t n_new;
+	struct bus1_handle_batch batch;
+	/* @batch must be last */
+};
+
+/**
+ * struct bus1_handle_inflight - set of inflight handles
+ * @n_new:		number of newly allocated nodes
+ * @n_new_local:	number of newly allocated local nodes
+ * @batch:		associated handles
+ *
+ * The bus1_handle_inflight object carries state for each message instance
+ * regarding handle transfers. That is, it contains all the handle instances
+ * for the receiver of the message (while bus1_handle_transfer pins the handles
+ * of the sender). This object is usually embedded in the queue-entry that is
+ * used to send a single message instance to another peer.
+ *
+ * Note that the tail of the object contains a dynamically sized array with the
+ * first handle-set of @batch.
+ */
+struct bus1_handle_inflight {
+	size_t n_new;
+	size_t n_new_local;
+	struct bus1_handle_batch batch;
+	/* @batch must be last */
+};
+
+/* handles */
 struct bus1_handle *bus1_handle_new_copy(struct bus1_handle *existing);
 struct bus1_handle *bus1_handle_new(void);
 struct bus1_handle *bus1_handle_ref(struct bus1_handle *handle);
@@ -89,24 +187,67 @@ struct bus1_handle *bus1_handle_find_by_id(struct bus1_peer_info *peer_info,
 					   u64 id);
 struct bus1_handle *bus1_handle_find_by_node(struct bus1_peer_info *peer_info,
 					     struct bus1_handle *existing);
-
 bool bus1_handle_is_public(struct bus1_handle *handle);
 struct bus1_handle *bus1_handle_acquire(struct bus1_handle *handle);
 struct bus1_handle *bus1_handle_release(struct bus1_handle *handle);
 struct bus1_handle *bus1_handle_release_pinned(struct bus1_handle *handle,
 					struct bus1_peer_info *peer_info);
-
 bool bus1_handle_attach(struct bus1_handle *handle, struct bus1_peer *holder);
 bool bus1_handle_attach_unlocked(struct bus1_handle *handle,
 				 struct bus1_peer *holder);
 struct bus1_handle *bus1_handle_install_unlocked(struct bus1_handle *handle);
 u64 bus1_handle_commit(struct bus1_handle *handle, u64 msg_seq);
-
 int bus1_handle_release_by_id(struct bus1_peer_info *peer_info, u64 id);
 int bus1_handle_destroy_by_id(struct bus1_peer_info *peer_info, u64 id);
 void bus1_handle_flush_all(struct bus1_peer_info *peer_info,
 			   struct rb_root *map);
 void bus1_handle_finish_all(struct bus1_peer_info *peer_info,
 			    struct rb_root *map);
+
+/* transfer contexts */
+void bus1_handle_transfer_init(struct bus1_handle_transfer *transfer,
+			       struct bus1_peer *peer,
+			       size_t n_entries);
+void bus1_handle_transfer_destroy(struct bus1_handle_transfer *transfer);
+int bus1_handle_transfer_instantiate(struct bus1_handle_transfer *transfer,
+				     const u64 __user *ids,
+				     size_t n_ids);
+
+/* inflight tracking */
+void bus1_handle_inflight_init(struct bus1_handle_inflight *inflight,
+			       size_t n_entries);
+void bus1_handle_inflight_destroy(struct bus1_handle_inflight *inflight);
+int bus1_handle_inflight_instantiate(struct bus1_handle_inflight *inflight,
+				     struct bus1_peer_info *peer_info,
+				     struct bus1_handle_transfer *transfer);
+void bus1_handle_inflight_install(struct bus1_handle_inflight *inflight,
+				  struct bus1_peer *peer,
+				  struct bus1_handle_transfer *transfer);
+void bus1_handle_inflight_commit(struct bus1_handle_inflight *inflight,
+				 u64 seq);
+
+/**
+ * bus1_handle_batch_inline_size() - calculate required inline size
+ * @n_entries:		size of batch
+ *
+ * This calculates the size of the trailing entries array that is to be
+ * embedded into a "struct bus1_handle_batch". That is, to statically allocate
+ * a batch, you need a memory block of size:
+ *
+ *     sizeof(struct bus1_handle_batch) + bus1_handle_batch_inline_size(n);
+ *
+ * where 'n' is the number of entries to store. Note that @n is capped. You
+ * still need to call bus1_handle_batch_create() afterwards, to make sure the
+ * memory is properly allocated, in case it does not fit into a single set.
+ *
+ * Return: Size of required trailing bytes of a batch structure.
+ */
+static inline size_t bus1_handle_batch_inline_size(size_t n_entries)
+{
+	if (n_entries < BUS1_HANDLE_BATCH_SIZE)
+		return sizeof(union bus1_handle_entry) * n_entries;
+
+	return sizeof(union bus1_handle_entry) * (BUS1_HANDLE_BATCH_SIZE + 1);
+}
 
 #endif /* __BUS1_HANDLE_H */

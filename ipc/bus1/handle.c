@@ -69,6 +69,7 @@
 #include <linux/rcupdate.h>
 #include <linux/seqlock.h>
 #include <linux/slab.h>
+#include <linux/uaccess.h>
 #include <uapi/linux/bus1.h>
 #include "handle.h"
 #include "peer.h"
@@ -639,6 +640,12 @@ bool bus1_handle_is_public(struct bus1_handle *handle)
 	return handle && atomic_read(&handle->n_inflight) >= 0;
 }
 
+static bool bus1_handle_has_id(struct bus1_handle *handle)
+{
+	/* true _iff_ the handle has been installed before */
+	return handle && handle->id != BUS1_ID_INVALID;
+}
+
 /**
  * bus1_handle_acquire() - try acquiring a handle
  * @handle:		handle to acquire, or NULL
@@ -1192,4 +1199,386 @@ void bus1_handle_finish_all(struct bus1_peer_info *peer_info,
 	}
 
 	bus1_handle_finalize_destruction(&list_handles);
+}
+
+#define BUS1_HANDLE_BATCH_FIRST(_batch, _pos)			\
+	((_pos) = 0, (_batch)->entries)
+
+#define BUS1_HANDLE_BATCH_NEXT(_iter, _pos)			\
+	((!(++(_pos) % BUS1_HANDLE_BATCH_SIZE)) ?		\
+			((_iter) + 1)->next :			\
+			((_iter) + 1))
+
+#define BUS1_HANDLE_BATCH_FOREACH_ALLOCATED(_iter, _pos, _batch)	\
+	for ((_iter) = BUS1_HANDLE_BATCH_FIRST((_batch), (_pos));	\
+	     (_pos) < (_batch)->n_allocated;				\
+	     (_iter) = BUS1_HANDLE_BATCH_NEXT((_iter), (_pos)))
+
+#define BUS1_HANDLE_BATCH_FOREACH_HANDLE(_iter, _pos, _batch)		\
+	for ((_iter) = BUS1_HANDLE_BATCH_FIRST((_batch), (_pos));	\
+	     (_pos) < (_batch)->n_handles;				\
+	     (_iter) = BUS1_HANDLE_BATCH_NEXT((_iter), (_pos)))
+
+static void bus1_handle_batch_init(struct bus1_handle_batch *batch,
+				   size_t n_entries)
+{
+	batch->n_handles = 0;
+	if (n_entries < BUS1_HANDLE_BATCH_SIZE) {
+		batch->n_allocated = n_entries;
+	} else {
+		batch->n_allocated = BUS1_HANDLE_BATCH_SIZE;
+		batch->entries[BUS1_HANDLE_BATCH_SIZE].next = NULL;
+	}
+}
+
+static int bus1_handle_batch_create(struct bus1_handle_batch *batch,
+				    size_t n_entries)
+{
+	union bus1_handle_entry *slot, *e;
+
+	if (n_entries == batch->n_allocated)
+		return 0;
+
+	/* the set must be unused and newly initialized */
+	if (WARN_ON(n_entries < batch->n_allocated ||
+		    batch->n_handles > 0 ||
+		    batch->n_allocated != BUS1_HANDLE_BATCH_SIZE ||
+		    batch->entries[BUS1_HANDLE_BATCH_SIZE].next))
+		return -EINVAL;
+
+	/* skip already allocated entries */
+	n_entries -= BUS1_HANDLE_BATCH_SIZE;
+	slot = &batch->entries[BUS1_HANDLE_BATCH_SIZE];
+
+	while (n_entries > 0) {
+		if (n_entries < BUS1_HANDLE_BATCH_SIZE) {
+			e = kmalloc(sizeof(*e) * n_entries, GFP_KERNEL);
+			if (e)
+				return -ENOMEM;
+
+			slot->next = e;
+			batch->n_allocated += n_entries;
+			break;
+		}
+
+		e = kmalloc(sizeof(*e) * (BUS1_HANDLE_BATCH_SIZE + 1),
+			    GFP_KERNEL);
+		if (!e)
+			return -ENOMEM;
+
+		slot->next = e;
+		slot = &e[BUS1_HANDLE_BATCH_SIZE];
+		slot->next = NULL;
+
+		batch->n_allocated += BUS1_HANDLE_BATCH_SIZE;
+		n_entries -= BUS1_HANDLE_BATCH_SIZE;
+	}
+
+	return 0;
+}
+
+static void bus1_handle_batch_destroy(struct bus1_handle_batch *batch)
+{
+	union bus1_handle_entry *t, *entry;
+	size_t pos;
+
+	if (!batch || !batch->n_allocated)
+		return;
+
+	BUS1_HANDLE_BATCH_FOREACH_HANDLE(entry, pos, batch) {
+		if (!entry->handle)
+			continue;
+		if (bus1_handle_is_public(entry->handle))
+			bus1_handle_release(entry->handle);
+		bus1_handle_unref(entry->handle);
+	}
+
+	if (batch->n_allocated > BUS1_HANDLE_BATCH_SIZE) {
+		batch->n_allocated -= BUS1_HANDLE_BATCH_SIZE;
+		entry = batch->entries[BUS1_HANDLE_BATCH_SIZE].next;
+		while (batch->n_allocated > BUS1_HANDLE_BATCH_SIZE) {
+			t = entry;
+			entry = entry[BUS1_HANDLE_BATCH_SIZE].next;
+			batch->n_allocated -= BUS1_HANDLE_BATCH_SIZE;
+			kfree(t);
+		}
+		kfree(entry);
+	}
+
+	batch->n_allocated = 0;
+	batch->n_handles = 0;
+}
+
+static int bus1_handle_batch_import(struct bus1_handle_batch *batch,
+				    const u64 __user *ids,
+				    size_t n_ids)
+{
+	union bus1_handle_entry *block;
+
+	if (WARN_ON(n_ids != batch->n_allocated || batch->n_handles > 0))
+		return -EINVAL;
+
+	BUILD_BUG_ON(sizeof(*block) != sizeof(*ids));
+
+	block = batch->entries;
+	while (n_ids > BUS1_HANDLE_BATCH_SIZE) {
+		if (copy_from_user(block, ids,
+				   BUS1_HANDLE_BATCH_SIZE * sizeof(*ids)))
+			return -EFAULT;
+
+		ids += BUS1_HANDLE_BATCH_SIZE;
+		n_ids -= BUS1_HANDLE_BATCH_SIZE;
+		block = block[BUS1_HANDLE_BATCH_SIZE].next;
+	}
+
+	if (n_ids > 0 && copy_from_user(block, ids, n_ids * sizeof(*ids)))
+		return -EFAULT;
+
+	return 0;
+}
+
+void bus1_handle_transfer_init(struct bus1_handle_transfer *transfer,
+			       struct bus1_peer *peer,
+			       size_t n_entries)
+{
+	transfer->peer = peer;
+	transfer->n_new = 0;
+	bus1_handle_batch_init(&transfer->batch, n_entries);
+}
+
+void bus1_handle_transfer_destroy(struct bus1_handle_transfer *transfer)
+{
+	if (!transfer)
+		return;
+
+	/* safe to be called multiple times */
+	bus1_handle_batch_destroy(&transfer->batch);
+}
+
+int bus1_handle_transfer_instantiate(struct bus1_handle_transfer *transfer,
+				     const u64 __user *ids,
+				     size_t n_ids)
+{
+	struct bus1_peer_info *peer_info;
+	union bus1_handle_entry *entry;
+	struct bus1_handle *handle;
+	size_t pos;
+	int r;
+
+	r = bus1_handle_batch_create(&transfer->batch, n_ids);
+	if (r < 0)
+		return r;
+
+	r = bus1_handle_batch_import(&transfer->batch, ids, n_ids);
+	if (r < 0)
+		return r;
+
+	peer_info = bus1_peer_dereference(transfer->peer);
+
+	BUS1_HANDLE_BATCH_FOREACH_ALLOCATED(entry, pos, &transfer->batch) {
+		if (entry->id == BUS1_ID_INVALID) {
+			handle = bus1_handle_new();
+			if (IS_ERR(handle))
+				return PTR_ERR(handle);
+			++transfer->n_new;
+		} else {
+			/*
+			 * If you transfer non-existant, or destructed handles,
+			 * we simply store NULL in the batch. We might
+			 * optionally allow returning an error instead. But
+			 * given the async nature of handle destruction, it
+			 * seems rather unlikely that callers want to handle
+			 * that.
+			 */
+			handle = bus1_handle_find_by_id(peer_info, entry->id);
+			if (handle && !bus1_handle_acquire(handle))
+				handle = bus1_handle_unref(handle);
+		}
+
+		entry->handle = handle;
+		++transfer->batch.n_handles;
+	}
+
+	return 0;
+}
+
+void bus1_handle_inflight_init(struct bus1_handle_inflight *inflight,
+			       size_t n_entries)
+{
+	inflight->n_new = 0;
+	inflight->n_new_local = 0;
+	bus1_handle_batch_init(&inflight->batch, n_entries);
+}
+
+void bus1_handle_inflight_destroy(struct bus1_handle_inflight *inflight)
+{
+	if (!inflight)
+		return;
+
+	/* safe to be called multiple times */
+	bus1_handle_batch_destroy(&inflight->batch);
+}
+
+int bus1_handle_inflight_instantiate(struct bus1_handle_inflight *inflight,
+				     struct bus1_peer_info *peer_info,
+				     struct bus1_handle_transfer *transfer)
+{
+	union bus1_handle_entry *from, *to;
+	struct bus1_handle *handle;
+	size_t pos_from, pos_to;
+	int r;
+
+	r = bus1_handle_batch_create(&inflight->batch,
+				     transfer->batch.n_handles);
+	if (r < 0)
+		return r;
+
+	to = BUS1_HANDLE_BATCH_FIRST(&inflight->batch, pos_to);
+
+	BUS1_HANDLE_BATCH_FOREACH_HANDLE(from, pos_from, &transfer->batch) {
+		WARN_ON(pos_to >= inflight->batch.n_allocated);
+
+		if (!from->handle) {
+			handle = NULL;
+		} else {
+			handle = bus1_handle_find_by_node(peer_info,
+							  from->handle);
+			if (handle && !bus1_handle_acquire(handle))
+				handle = bus1_handle_unref(handle);
+			if (!handle) {
+				handle = bus1_handle_new_copy(from->handle);
+				if (IS_ERR(handle))
+					return PTR_ERR(handle);
+			}
+		}
+
+		to->handle = handle;
+		to = BUS1_HANDLE_BATCH_NEXT(to, pos_to);
+		++inflight->batch.n_handles;
+	}
+
+	return 0;
+}
+
+void bus1_handle_inflight_install(struct bus1_handle_inflight *inflight,
+				  struct bus1_peer *peer,
+				  struct bus1_handle_transfer *transfer)
+{
+	struct bus1_peer_info *src_info, *dst_info;
+	struct bus1_peer *src, *dst;
+	struct bus1_handle *h, *t;
+	union bus1_handle_entry *e;
+	size_t pos, n_installs;
+
+	if (inflight->batch.n_handles < 1)
+		return;
+
+	src = transfer->peer;
+	dst = peer;
+	src_info = bus1_peer_dereference(src);
+	dst_info = bus1_peer_dereference(dst);
+	n_installs = inflight->n_new;
+
+	if (transfer->n_new > 0 || inflight->n_new_local > 0) {
+		mutex_lock(&src_info->lock);
+
+		BUS1_HANDLE_BATCH_FOREACH_HANDLE(e, pos, &transfer->batch) {
+			if (transfer->n_new < 1)
+				break;
+
+			h = e->handle;
+			if (!h || bus1_handle_is_public(h))
+				continue;
+
+			--transfer->n_new;
+			WARN_ON(!bus1_handle_attach_unlocked(h, src));
+			WARN_ON(bus1_handle_install_unlocked(h) != h);
+		}
+		WARN_ON(transfer->n_new > 0);
+
+		BUS1_HANDLE_BATCH_FOREACH_HANDLE(e, pos, &inflight->batch) {
+			if (inflight->n_new_local < 1)
+				break;
+
+			h = e->handle;
+			if (!h || bus1_handle_is_public(h))
+				continue;
+
+			--inflight->n_new;
+			--inflight->n_new_local;
+
+			if (!bus1_handle_attach_unlocked(h, dst))
+				e->handle = bus1_handle_unref(h);
+		}
+		WARN_ON(inflight->n_new_local > 0);
+
+		mutex_unlock(&src_info->lock);
+	}
+
+	if (inflight->n_new > 0) {
+		BUS1_HANDLE_BATCH_FOREACH_HANDLE(e, pos, &inflight->batch) {
+			if (inflight->n_new < 1)
+				break;
+
+			h = e->handle;
+			if (!h || bus1_handle_is_public(h))
+				continue;
+
+			--inflight->n_new;
+
+			if (!bus1_handle_attach(h, dst))
+				e->handle = bus1_handle_unref(h);
+		}
+		WARN_ON(inflight->n_new > 0);
+	}
+
+	if (n_installs > 0) {
+		mutex_lock(&dst_info->lock);
+		BUS1_HANDLE_BATCH_FOREACH_HANDLE(e, pos, &inflight->batch) {
+			if (n_installs < 1)
+				break;
+
+			h = e->handle;
+			if (!h || bus1_handle_has_id(h))
+				continue;
+
+			--n_installs;
+
+			t = bus1_handle_install_unlocked(h);
+			if (!t) {
+				e->handle = bus1_handle_unref(h);
+			} else if (t != h) {
+				/* conflict: detach @h, switch to @t */
+				mutex_unlock(&dst_info->lock);
+				bus1_handle_release(h);
+				bus1_handle_unref(h);
+				e->handle = t;
+				mutex_lock(&dst_info->lock);
+			}
+		}
+		mutex_unlock(&dst_info->lock);
+		WARN_ON(n_installs > 0);
+	}
+}
+
+void bus1_handle_inflight_commit(struct bus1_handle_inflight *inflight,
+				 u64 seq)
+{
+	union bus1_handle_entry *e;
+	struct bus1_handle *h;
+	size_t pos;
+
+	WARN_ON(inflight->batch.n_handles != inflight->batch.n_allocated);
+
+	BUS1_HANDLE_BATCH_FOREACH_HANDLE(e, pos, &inflight->batch) {
+		h = e->handle;
+		if (h) {
+			e->id = bus1_handle_commit(h, seq);
+			bus1_handle_unref(h);
+		} else {
+			e->id = BUS1_ID_INVALID;
+		}
+	}
+
+	inflight->batch.n_handles = 0;
 }
