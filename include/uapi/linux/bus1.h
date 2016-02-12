@@ -87,6 +87,8 @@ struct bus1_cmd_send {
 	__u64 n_destinations;
 	__u64 ptr_vecs;
 	__u64 n_vecs;
+	__u64 ptr_ids;
+	__u64 n_ids;
 	__u64 ptr_fds;
 	__u64 n_fds;
 } __attribute__((__aligned__(8)));
@@ -99,6 +101,7 @@ struct bus1_cmd_recv {
 	__u64 flags;
 	__u64 msg_offset;
 	__u64 msg_size;
+	__u64 msg_ids;
 	__u64 msg_fds;
 } __attribute__((__aligned__(8)));
 

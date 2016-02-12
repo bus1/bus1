@@ -1099,6 +1099,8 @@ static int bus1_peer_ioctl_send(struct bus1_peer *peer,
 		     (u64)(unsigned long)param.ptr_destinations) ||
 	    unlikely(param.ptr_vecs !=
 		     (u64)(unsigned long)param.ptr_vecs) ||
+	    unlikely(param.ptr_ids !=
+		     (u64)(unsigned long)param.ptr_ids) ||
 	    unlikely(param.ptr_fds !=
 		     (u64)(unsigned long)param.ptr_fds))
 		return -EFAULT;
@@ -1168,6 +1170,7 @@ static int bus1_peer_ioctl_recv(struct bus1_peer *peer, unsigned long arg)
 
 	if (unlikely(param.msg_offset != BUS1_OFFSET_INVALID) ||
 	    unlikely(param.msg_size != 0) ||
+	    unlikely(param.msg_ids != 0) ||
 	    unlikely(param.msg_fds != 0))
 		return -EINVAL;
 
@@ -1323,6 +1326,7 @@ exit:
 	if (r >= 0) {
 		if (put_user(param.msg_offset, &uparam->msg_offset) ||
 		    put_user(param.msg_size, &uparam->msg_size) ||
+		    put_user(param.msg_ids, &uparam->msg_ids) ||
 		    put_user(param.msg_fds, &uparam->msg_fds))
 			r = -EFAULT; /* Don't care.. keep what we did so far */
 	}
