@@ -9,23 +9,47 @@
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 #include <linux/err.h>
-#include <linux/file.h>
-#include <linux/fs.h>
 #include <linux/kernel.h>
 #include <linux/lockdep.h>
 #include <linux/rbtree.h>
 #include <linux/rcupdate.h>
 #include <linux/slab.h>
 #include "peer.h"
-#include "pool.h"
 #include "queue.h"
-#include "user.h"
 
 /* lockdep assertion to verify the parent peer is locked */
-#define bus1_queue_assert_held(_queue) \
-	lockdep_assert_held(&bus1_peer_info_from_queue(_queue)->lock)
-#define bus1_queue_is_held(_queue) \
-	lockdep_is_held(&bus1_peer_info_from_queue(_queue)->lock)
+#define bus1_queue_assert_held(_queue)				\
+	lockdep_assert_held(&container_of((_queue),		\
+					  struct bus1_peer_info, queue)->lock)
+#define bus1_queue_is_held(_queue)				\
+	lockdep_is_held(&container_of((_queue),			\
+				      struct bus1_peer_info, queue)->lock)
+
+/* distinguish different node types via these masks */
+#define BUS1_QUEUE_NODE_MASK_TYPE	((u64)(1ULL << 63))
+#define BUS1_QUEUE_NODE_MASK_TS		(~BUS1_QUEUE_NODE_MASK_TYPE)
+
+static u64 bus1_queue_node_get_timestamp(struct bus1_queue_node *node)
+{
+	return node->timestamp_and_type & BUS1_QUEUE_NODE_MASK_TS;
+}
+
+static u64 bus1_queue_node_get_type(struct bus1_queue_node *node)
+{
+	return node->timestamp_and_type & BUS1_QUEUE_NODE_MASK_TYPE;
+}
+
+static void bus1_queue_node_set_timestamp(struct bus1_queue_node *node, u64 ts)
+{
+	WARN_ON(ts & BUS1_QUEUE_NODE_MASK_TYPE);
+	node->timestamp_and_type = bus1_queue_node_get_type(node) | ts;
+}
+
+static void bus1_queue_node_set_type(struct bus1_queue_node *node, u64 type)
+{
+	WARN_ON(type & BUS1_QUEUE_NODE_MASK_TS);
+	node->timestamp_and_type = bus1_queue_node_get_timestamp(node) | type;
+}
 
 /**
  * bus1_queue_init_internal() - initialize queue
@@ -36,15 +60,15 @@
  *
  * NOTE: All queues must be embedded into a parent bus1_peer_info object. The
  *       code works fine, if you don't, but the lockdep-annotations will fail
- *       horribly. They rely on bus1_peer_info_from_queue() to be valid on
- *       every queue. Use the bus1_queue_init_for_peer() macro to make sure you
- *       never violate this rule.
+ *       horribly. They rely on container_of() to be valid on every queue. Use
+ *       the bus1_queue_init_for_peer() macro to make sure you never violate
+ *       this rule.
  */
 void bus1_queue_init_internal(struct bus1_queue *queue)
 {
 	queue->messages = RB_ROOT;
-	queue->n_messages = 0;
 	rcu_assign_pointer(queue->front, NULL);
+	queue->clock = 0;
 }
 
 /**
@@ -62,216 +86,198 @@ void bus1_queue_init_internal(struct bus1_queue *queue)
  */
 void bus1_queue_destroy(struct bus1_queue *queue)
 {
-	WARN_ON(!RB_EMPTY_ROOT(&queue->messages));
-	WARN_ON(queue->n_messages);
+	if (!queue)
+		return;
+
 	WARN_ON(rcu_access_pointer(queue->front));
+	WARN_ON(!RB_EMPTY_ROOT(&queue->messages));
 }
 
 /**
- * bus1_queue_link() - link entry into sorted queue
- * @queue:	queue to link into
- * @entry:	entry to link
- * @seq:	sequence number to use
+ * bus1_queue_post_flush() - flush queue
+ * @queue:		queue to flush
  *
- * This links @entry into the message queue @queue. The caller must guarantee
- * that the entry is unlinked and was never marked as ready.
+ * To flush an entire queue, callers should lock the peer and iterate the
+ * entire message tree, removing each entry without touching the tree. When
+ * done, calling into bus1_queue_post_flush() will reset the tree, assuming the
+ * caller completely cleared all entries.
  *
- * The caller must hold the write-side peer-lock of the parent peer.
- *
- * Return: True if the queue became readable with this call.
+ * We cannot implement flushing inside of queue-handling, as it requires
+ * knowledge about the attached payload of each message. Hence, we'd have to
+ * use a callback to let the caller release each message. This is cumbersome,
+ * hence we decided to force callers to traverse the tree themselves.
  */
-bool bus1_queue_link(struct bus1_queue *queue,
-		     struct bus1_queue_entry *entry,
-		     struct bus1_user_quota *quota,
-		     u64 seq)
+void bus1_queue_post_flush(struct bus1_queue *queue)
 {
-	struct bus1_queue_entry *iter;
-	struct rb_node *prev, **slot;
-	bool is_leftmost = true;
-
-	if (WARN_ON(seq == 0 ||
-		    !RB_EMPTY_NODE(&entry->rb) ||
-		    (entry->seq > 0 && !(entry->seq & 1))))
-		return false;
-
 	bus1_queue_assert_held(queue);
 
+	queue->messages = RB_ROOT;
+	rcu_assign_pointer(queue->front, NULL);
+}
+
+/**
+ * bus1_queue_stage() - stage queue entry with new timestamp
+ * @queue:		queue to operate on
+ * @node:		queue entry to stage
+ * @timestamp:		new timestamp for @node
+ *
+ * Link or update a queue entry according to @timestamp. If the entry was not
+ * linked, yet, this will insert the entry into the queue. If it was already
+ * linked, it is updated and sorted according to @timestamp.
+ *
+ * The caller can provide both, odd timestamps (i.e., mark entry as staging),
+ * or even timestamps (i.e., commit the entry). If an entry is marked as
+ * staging, it can be updated as often as you want. However, once an entry is
+ * committed, it must not be updated, anymore.
+ *
+ * Furthermore, the queue clock must be synced with the new timestamp *before*
+ * staging an entry. Similarly, the timestamp of an entry can only be
+ * increased, never decreased.
+ *
+ * Return: True if this call turned the queue readable, false otherwise.
+ */
+bool bus1_queue_stage(struct bus1_queue *queue,
+		      struct bus1_queue_node *node,
+		      u64 timestamp)
+{
+	struct rb_node *front, *n, **slot;
+	struct bus1_queue_node *iter;
+	bool is_leftmost;
+	u64 ts;
+
+	bus1_queue_assert_held(queue);
+	ts = bus1_queue_node_get_timestamp(node);
+
+	/* provided timestamp must be valid */
+	if (WARN_ON(timestamp == 0 || timestamp > queue->clock))
+		return false;
+	/* if unstamped, it must be unlinked, and vice versa */
+	if (WARN_ON(!ts == !RB_EMPTY_NODE(&node->rb)))
+		return false;
+	/* if stamped, it must be a valid staging timestamp from earlier */
+	if (ts != 0 && WARN_ON(!(ts & 0) || timestamp < ts))
+		return false;
+	/* nothing to do? */
+	if (ts == timestamp)
+		return false;
+
+	/*
+	 * On updates, we remove our entry and re-insert it with a higher
+	 * timestamp. Hence, _iff_ we were the first entry, we might uncover
+	 * some new front entry. Make sure we mark it as front entry then.
+	 */
+	front = rcu_dereference_protected(queue->front,
+					  bus1_queue_is_held(queue));
+	if (front) {
+		/*
+		 * If there already is a front entry, just verify that we will
+		 * not order *before* it. We *must not* replace it as front.
+		 */
+		iter = container_of(front, struct bus1_queue_node, rb);
+		WARN_ON(node == iter);
+		WARN_ON(timestamp <= bus1_queue_node_get_timestamp(iter));
+	} else if (!RB_EMPTY_NODE(&node->rb) && !rb_prev(&node->rb)) {
+		/*
+		 * We are linked into the queue as staging entry *and* we are
+		 * the first entry. Now look at the following entry. If it is
+		 * already committed *and* has a lower timestamp than we do, it
+		 * will become the new front, so mark it as such!
+		 */
+		n = rb_next(&node->rb);
+		if (n) {
+			iter = container_of(n, struct bus1_queue_node, rb);
+			ts = bus1_queue_node_get_timestamp(iter);
+			if (!(ts & 1)) {
+				if (ts < timestamp ||
+				    (ts == timestamp && iter < node))
+					rcu_assign_pointer(queue->front, n);
+			}
+		}
+	}
+
+	/* drop from rb-tree if already linked */
+	if (!RB_EMPTY_NODE(&node->rb))
+		rb_erase(&node->rb, &queue->messages);
+
+	/* re-insert into sorted rb-tree with new timestamp */
 	slot = &queue->messages.rb_node;
-	prev = NULL;
+	n = NULL;
+	is_leftmost = true;
 	while (*slot) {
-		prev = *slot;
-		iter = bus1_queue_entry(prev);
-		if (seq < iter->seq) {
-			slot = &prev->rb_left;
-		} else /* if (seq >= iter->seq) */ {
-			slot = &prev->rb_right;
+		n = *slot;
+		iter = container_of(n, struct bus1_queue_node, rb);
+		ts = bus1_queue_node_get_timestamp(iter);
+		if (timestamp < ts || (timestamp == ts && node < iter)) {
+			slot = &n->rb_left;
+		} else {
+			slot = &n->rb_right;
 			is_leftmost = false;
 		}
 	}
 
-	entry->seq = seq;
-	rb_link_node(&entry->rb, prev, slot);
-	rb_insert_color(&entry->rb, &queue->messages);
+	rb_link_node(&node->rb, n, slot);
+	rb_insert_color(&node->rb, &queue->messages);
+	bus1_queue_node_set_timestamp(node, timestamp);
 
-	WARN_ON(queue->n_messages >= BUS1_QUEUE_MESSAGES_MAX);
-	++ queue->n_messages;
-	++ quota->n_messages;
-
-	if (is_leftmost) {
-		WARN_ON(rcu_access_pointer(queue->front));
-		if (!(seq & 1))
-			rcu_assign_pointer(queue->front, &entry->rb);
-	}
-
-	/*
-	 * If we're linked leftmost, we're the new front. If we're ready to be
-	 * dequeued, the list has become readable via this entry. Note that the
-	 * previous front cannot be ready in this case, as we *never* order
-	 * ready entries in front of other ready entries.
-	 */
-	return is_leftmost && !(seq & 1);
-}
-
-/**
- * bus1_queue_unlink() - unlink entry from sorted queue
- * @queue:	queue to unlink from
- * @entry:	entry to unlink, or NULL
- *
- * This unlinks @entry from the message queue @queue. If the entry was already
- * unlinked (or NULL is passed), this is a no-op.
- *
- * The caller must hold the write-side peer-lock of the parent peer.
- *
- * Return: True if the queue became readable with this call. This can happen if
- *         you unlink a staging entry, and thus a waiting entry becomes ready.
- */
-bool bus1_queue_unlink(struct bus1_queue *queue,
-		       struct bus1_queue_entry *entry,
-		       struct bus1_user_quota *quota)
-{
-	struct rb_node *node;
-
-	if (!entry || RB_EMPTY_NODE(&entry->rb))
-		return false;
-
-	bus1_queue_assert_held(queue);
-
-	node = rcu_dereference_protected(queue->front,
-					 bus1_queue_is_held(queue));
-	if (node == &entry->rb) {
-		node = rb_next(node);
-		if (node && bus1_queue_entry(node)->seq & 1)
-			node = NULL;
-		rcu_assign_pointer(queue->front, node);
-	} else {
-		node = NULL;
-	}
-
-	rb_erase(&entry->rb, &queue->messages);
-	RB_CLEAR_NODE(&entry->rb);
-
-	-- queue->n_messages;
-	-- quota->n_messages;
-
-	/*
-	 * If this entry was non-ready in front, but the next entry exists and
-	 * is ready, then the queue becomes readable if you pop the front.
-	 */
-	return (entry->seq & 1) && node && !(bus1_queue_entry(node)->seq & 1);
-}
-
-/**
- * bus1_queue_relink() - change sequence number of an entry
- * @queue:	queue to operate on
- * @entry:	entry to relink
- * @seq:	sequence number to set
- *
- * This changes the sequence number of @entry to @seq. The caller must
- * guarantee that the entry was already linked with an odd-numbered sequence
- * number. This will unlink the entry, change the sequence number and link it
- * again.
- *
- * The caller must hold the write-side peer-lock of the parent peer.
- *
- * Return: True if the queue became readable with this call.
- */
-bool bus1_queue_relink(struct bus1_queue *queue,
-		       struct bus1_queue_entry *entry,
-		       struct bus1_user_quota *quota,
-		       u64 seq)
-{
-	struct rb_node *front;
-
-	if (WARN_ON(seq == 0 ||
-		    RB_EMPTY_NODE(&entry->rb) ||
-		    !(entry->seq & 1)))
-		return false;
-
-	bus1_queue_assert_held(queue);
-
-	/* remember front, cannot point to @entry */
-	front = rcu_access_pointer(queue->front);
-	WARN_ON(front == &entry->rb);
-
-	/* drop from rb-tree and insert again */
-	rb_erase(&entry->rb, &queue->messages);
-	RB_CLEAR_NODE(&entry->rb);
-
-	-- queue->n_messages;
-	-- quota->n_messages;
-
-	bus1_queue_link(queue, entry, quota, seq);
+	if (is_leftmost && !(timestamp & 1))
+		rcu_assign_pointer(queue->front, &node->rb);
 
 	/* if this uncovered a front, then the queue became readable */
 	return !front && rcu_access_pointer(queue->front);
 }
 
 /**
- * bus1_queue_flush() - flush all entries from a queue
- * @queue:	queue to flush
- * @pool:	pool associated with this queue
- * @peer_id:	new peer ID
+ * bus1_queue_remove() - remove entry from queue
+ * @queue:		queue to operate on
+ * @node:		queue entry to remove
  *
- * This drops all queued entries that are not targetted at @peer_id. Staging
- * entries are ignored. The caller must provide a pointer to the pool that was
- * used to allocate the slices for the stored entries.
+ * This unlinks @node and fully removes it from the queue @queue. You must
+ * never reuse that node again, once removed.
  *
- * This call should be used after a peer reset. It flushes all old entries, but
- * leaves any new entries linked. However, note that transactions might race
- * with this call, therefore, callers must make sure to drop entries during
- * reception, in case they don't match their ID.
+ * If @node was still in staging, this call might uncover a new front entry and
+ * as such turn the queue readable. Hence, the caller *must* handle its return
+ * value.
  *
- * Set @peer_id to 0 to flush all non-staging entries.
- *
- * The caller must hold the write-side peer-lock of the parent peer.
+ * Return: True if this call turned the queue readable, false otherwise.
  */
-void bus1_queue_flush(struct bus1_queue *queue,
-		      struct bus1_pool *pool,
-		      struct bus1_user_quota *quotas,
-		      u64 peer_id)
+bool bus1_queue_remove(struct bus1_queue *queue,
+		       struct bus1_queue_node *node)
 {
-	struct bus1_queue_entry *entry;
-	struct rb_node *node, *t;
+	struct bus1_queue_node *iter;
+	struct rb_node *front, *n;
+	u64 ts;
 
 	bus1_queue_assert_held(queue);
 
-	for (node = rb_first(&queue->messages);
-	     node && ((t = rb_next(node)), true);
-	     node = t) {
-		struct bus1_user_quota *quota;
+	if (!node || RB_EMPTY_NODE(&node->rb))
+		return false;
 
-		entry = bus1_queue_entry(node);
-		if ((entry->seq & 1) || peer_id == entry->destination_id)
-			continue;
+	front = rcu_dereference_protected(queue->front,
+					  bus1_queue_is_held(queue));
 
-		quota = &quotas[entry->user->id];
-
-		bus1_queue_unlink(queue, entry, quota);
-		entry->slice = bus1_pool_release_kernel(pool,
-							entry->slice,
-							quota);
-		bus1_queue_entry_free(entry);
+	if (!rb_prev(&node->rb)) {
+		/*
+		 * We are the first entry in the queue. Regardless whether we
+		 * are marked as front or not, our removal might uncover a new
+		 * front. Hence, always look at the next following entry and
+		 * see whether it is fully committed. If it is, mark it as
+		 * front, but otherwise reset the front to NULL.
+		 */
+		n = rb_next(&node->rb);
+		if (n) {
+			iter = container_of(n, struct bus1_queue_node, rb);
+			ts = bus1_queue_node_get_timestamp(iter);
+			if (ts & 1)
+				n = NULL;
+		}
+		rcu_assign_pointer(queue->front, n);
 	}
+
+	rb_erase(&node->rb, &queue->messages);
+	RB_CLEAR_NODE(&node->rb);
+
+	/* if this uncovered a front, then the queue became readable */
+	return !front && rcu_access_pointer(queue->front);
 }
 
 /**
@@ -289,160 +295,95 @@ void bus1_queue_flush(struct bus1_queue *queue,
  *
  * Return: Pointer to first available entry, NULL if none available.
  */
-struct bus1_queue_entry *bus1_queue_peek(struct bus1_queue *queue)
+struct bus1_queue_node *bus1_queue_peek(struct bus1_queue *queue)
 {
+	struct rb_node *n;
+
 	bus1_queue_assert_held(queue);
 
-	return bus1_queue_entry(rcu_dereference_protected(queue->front,
-						bus1_queue_is_held(queue)));
-}
-
-/**
- * bus1_queue_entry_new() - allocate new queue entry
- * @user:	user to account the queue entry on
- * @n_files:	number of files to carry
- *
- * This allocates a new queue-entry with pre-allocated space to carry the given
- * amount of file descriptors. The queue entry is initially unlinked and no
- * slice is associated to it. The caller is free to modify the files array and
- * the slice as they wish.
- *
- * Return: Pointer to slice, ERR_PTR on failure.
- */
-struct bus1_queue_entry *
-bus1_queue_entry_new(struct bus1_user *user, size_t n_files)
-{
-	struct bus1_queue_entry *entry;
-
-	entry = kzalloc(sizeof(*entry) + n_files * sizeof(struct file *),
-			GFP_KERNEL);
-	if (!entry)
-		return ERR_PTR(-ENOMEM);
-
-	RB_CLEAR_NODE(&entry->transaction.rb);
-	RB_CLEAR_NODE(&entry->rb);
-	entry->user = bus1_user_acquire(user);
-	entry->n_files = n_files;
-
-	return entry;
-}
-
-/**
- * bus1_queue_entry_free() - free a queue entry
- * @entry:	entry to free, or NULL
- *
- * This destroys an existing queue entry and releases all associated resources.
- * Any files that were put into entry->files are released as well.
- *
- * If NULL is passed, this is a no-op.
- *
- * The caller must make sure the queue-entry is unlinked before calling this.
- * Furthermore, the slice must be released and reset to NULL by the caller.
- *
- * Return: NULL is returned.
- */
-struct bus1_queue_entry *
-bus1_queue_entry_free(struct bus1_queue_entry *entry)
-{
-	size_t i;
-
-	if (!entry)
+	n = rcu_dereference_protected(queue->front,
+				      bus1_queue_is_held(queue));
+	if (!n)
 		return NULL;
 
-	WARN_ON(!entry->user);
-
-	for (i = 0; i < entry->n_files; ++i)
-		if (entry->files[i])
-			fput(entry->files[i]);
-
-	if (entry->n_files)
-		atomic_sub(entry->n_files, &entry->user->fds_inflight);
-
-	entry->user = bus1_user_release(entry->user);
-
-	WARN_ON(entry->slice);
-	WARN_ON(entry->transaction.peer);
-	WARN_ON(!RB_EMPTY_NODE(&entry->transaction.rb));
-
-	/*
-	 * Entry must be unlinked by the caller. The rb-storage is re-used by
-	 * the rcu-head to enforced delayed memory release. This guarantees
-	 * that the entry is accessible via rcu-protected readers.
-	 */
-	WARN_ON(!RB_EMPTY_NODE(&entry->rb));
-	kfree_rcu(entry, rcu);
-
-	return NULL;
+	return container_of(n, struct bus1_queue_node, rb);
 }
 
 /**
- * bus1_queue_entry_install() - install file descriptors
- * @entry:	queue entry carrying file descriptors
- * @pool:	parent pool of the queue entry
+ * bus1_queue_node_init() - initialize queue node
+ * @node:		node to initialize
+ * @is_message:		whether this node should be marked as ordinary message
  *
- * This installs the file-descriptors that are carried by @entry into the
- * current process. If no file-descriptors are carried, this is a no-op. If
- * anything goes wrong, an error is returned without any file-descriptor being
- * installed (i.e., this operation either installs all, or none).
- *
- * The caller must make sure the queue-entry @entry has a linked slice with
- * enough trailing space to place the file-descriptors into. Furthermore, @pool
- * must point to the pool where that slice resides in.
- *
- * Return: 0 on success, negative error code on failure.
+ * This initializes a previously unused node, and prepares it for use with a
+ * message queue. If @is_message is true, the node is marked as ordinary
+ * message. It is a boolean flag that can be queried via
+ * bus1_queue_node_is_message(). It does not affect queue behavior at all, but
+ * is for private use of the caller. It is usually used to get the type of the
+ * surrounding object, for use with container_of().
  */
-int bus1_queue_entry_install(struct bus1_queue_entry *entry,
-			     struct bus1_pool *pool)
+void bus1_queue_node_init(struct bus1_queue_node *node, bool is_message)
 {
-	struct kvec vec;
-	size_t i, n = 0;
-	int r, *fds;
+	RB_CLEAR_NODE(&node->rb);
+	node->timestamp_and_type = 0;
+	if (is_message)
+		bus1_queue_node_set_type(node, BUS1_QUEUE_NODE_MASK_TYPE);
+}
 
-	/* bail out if no files are passed or if the entry is invalid */
-	if (entry->n_files == 0)
-		return 0;
-	if (WARN_ON(!entry->slice ||
-		    entry->slice->size < entry->n_files * sizeof(*fds)))
-		return -EFAULT;
+/**
+ * bus1_queue_node_destroy() - destroy queue node
+ * @node:		node to destroy, or NULL
+ *
+ * This destroys a previously initialized queue node. This is a no-op and only
+ * serves as debugger, testing whether the node was properly unqueued before.
+ */
+void bus1_queue_node_destroy(struct bus1_queue_node *node)
+{
+	WARN_ON(node && !RB_EMPTY_NODE(&node->rb));
+}
 
-	/* allocate temporary array to hold all FDs */
-	fds = kmalloc_array(entry->n_files, sizeof(*fds), GFP_TEMPORARY);
-	if (!fds)
-		return -ENOMEM;
+/**
+ * bus1_queue_node_is_message() - query node type
+ * @node:		node to query
+ *
+ * This queries the "message" flag that was provided for this node via
+ * bus1_queue_node_init(). See its description for details.
+ *
+ * Return: True if @node is marked as message.
+ */
+bool bus1_queue_node_is_message(struct bus1_queue_node *node)
+{
+	return bus1_queue_node_get_type(node) == BUS1_QUEUE_NODE_MASK_TYPE;
+}
 
-	/* pre-allocate unused FDs */
-	for (i = 0; i < entry->n_files; ++i) {
-		if (WARN_ON(!entry->files[i])) {
-			fds[n++] = -1;
-		} else {
-			r = get_unused_fd_flags(O_CLOEXEC);
-			if (r < 0)
-				goto exit;
+/**
+ * bus1_queue_node_is_queued() - check whether a node is queued
+ * @node:		node to query, or NULL
+ *
+ * This checks whether a node is currently queued in a message queue. That is,
+ * the node was linked via bus1_queue_stage() and as not been dequeued, yet
+ * (both via bus1_queue_remove() or bus1_queue_flush()).
+ *
+ * Return: True if @node is currently queued.
+ */
+bool bus1_queue_node_is_queued(struct bus1_queue_node *node)
+{
+	return node && !RB_EMPTY_NODE(&node->rb);
+}
 
-			fds[n++] = r;
-		}
-	}
+/**
+ * bus1_queue_node_is_committed() - check whether a node is committed
+ * @node:		node to query, or NULL
+ *
+ * This checks whether a given node was already committed. In this case, the
+ * queue node is owned by the queue. In all other cases, the node is usually
+ * owned by an ongoing transaction or some other ongoing operation.
+ *
+ * Return: True if @node is committed.
+ */
+bool bus1_queue_node_is_committed(struct bus1_queue_node *node)
+{
+	u64 ts;
 
-	/* copy FD numbers into the slice */
-	vec.iov_base = fds;
-	vec.iov_len = n * sizeof(*fds);
-	r = bus1_pool_write_kvec(pool, entry->slice,
-				 entry->slice->size - n * sizeof(*fds),
-				 &vec, 1, vec.iov_len);
-	if (r < 0)
-		goto exit;
-
-	/* all worked out fine, now install the actual files */
-	for (i = 0; i < n; ++i)
-		if (fds[i] >= 0)
-			fd_install(fds[i], get_file(entry->files[i]));
-
-	r = 0;
-
-exit:
-	if (r < 0)
-		for (i = 0; i < n; ++i)
-			put_unused_fd(fds[i]);
-	kfree(fds);
-	return r;
+	ts = node ? bus1_queue_node_get_timestamp(node) : 0;
+	return ts != 0 && !(ts & 1);
 }

@@ -16,31 +16,27 @@
 #include <linux/slab.h>
 #include <linux/uidgid.h>
 #include "domain.h"
-#include "pool.h"
-#include "queue.h"
+#include "main.h"
 #include "user.h"
 
 #define BUS1_INTERNAL_UID_INVALID ((unsigned int) -1)
 
 static struct bus1_user *
-bus1_user_new(struct bus1_domain_info *domain_info, kuid_t uid)
+bus1_user_new(struct bus1_domain_info *domain_info)
 {
 	struct bus1_user *u;
-
-	if (WARN_ON(!uid_valid(uid)))
-		return ERR_PTR(-EINVAL);
 
 	u = kmalloc(sizeof(*u), GFP_KERNEL);
 	if (!u)
 		return ERR_PTR(-ENOMEM);
 
-	kref_init(&u->ref);
 	/*
 	 * User objects must be released *entirely* before the parent domain
 	 * is. As such, the domain pointer here is always valid and can be
 	 * dereferenced without any protection.
 	 */
-	u->uid = uid;
+	kref_init(&u->ref);
+	u->uid = INVALID_UID;
 	u->id = BUS1_INTERNAL_UID_INVALID;
 	u->domain_info = domain_info;
 	atomic_set(&u->fds_inflight, 0);
@@ -48,19 +44,26 @@ bus1_user_new(struct bus1_domain_info *domain_info, kuid_t uid)
 	return u;
 }
 
-static struct bus1_user *
-bus1_user_get(struct bus1_domain_info *domain_info, kuid_t uid)
+static void bus1_user_free(struct kref *ref)
 {
-	struct bus1_user *user;
+	struct bus1_user *user = container_of(ref, struct bus1_user, ref);
 
-	rcu_read_lock();
-	user = idr_find(&domain_info->user_idr, __kuid_val(uid));
-	if (user && !kref_get_unless_zero(&user->ref))
-		/* the user is about to be destroyed, ignore it */
-		user = NULL;
-	rcu_read_unlock();
+	WARN_ON(atomic_read(&user->fds_inflight));
 
-	return user;
+	/* if already dropped, it's set to invalid */
+	if (uid_valid(user->uid)) {
+		mutex_lock(&user->domain_info->lock);
+		if (uid_valid(user->uid)) /* check again underneath lock */
+			idr_remove(&user->domain_info->user_idr,
+				   __kuid_val(user->uid));
+		mutex_unlock(&user->domain_info->lock);
+	}
+
+	/* drop the id from the ida if it was initialized */
+	if (user->id != BUS1_INTERNAL_UID_INVALID)
+		ida_simple_remove(&user->domain_info->user_ida, user->id);
+
+	kfree_rcu(user, rcu);
 }
 
 /**
@@ -77,22 +80,25 @@ bus1_user_get(struct bus1_domain_info *domain_info, kuid_t uid)
 struct bus1_user *
 bus1_user_acquire_by_uid(struct bus1_domain *domain, kuid_t uid)
 {
-	struct bus1_user *user, *old_user, *new_user;
-	int r = 0;
+	struct bus1_user *user, *old_user;
+	int r;
 
 	WARN_ON(!uid_valid(uid));
-
 	lockdep_assert_held(&domain->active);
 
 	/* try to get the user without taking a lock */
-	user = bus1_user_get(domain->info, uid);
+	rcu_read_lock();
+	user = idr_find(&domain->info->user_idr, __kuid_val(uid));
+	if (user && !kref_get_unless_zero(&user->ref))
+		user = NULL;
+	rcu_read_unlock();
 	if (user)
 		return user;
 
 	/* didn't exist, allocate a new one */
-	new_user = bus1_user_new(domain->info, uid);
-	if (IS_ERR(new_user))
-		return new_user;
+	user = bus1_user_new(domain->info);
+	if (IS_ERR(user))
+		return ERR_CAST(user);
 
 	/*
 	 * Allocate the smallest possible internal id for this user; used in
@@ -100,73 +106,82 @@ bus1_user_acquire_by_uid(struct bus1_domain *domain, kuid_t uid)
 	 */
 	r = ida_simple_get(&domain->info->user_ida, 0, 0, GFP_KERNEL);
 	if (r < 0)
-		goto exit;
+		goto error;
+	user->id = r;
 
-	new_user->id = r;
-
-	mutex_lock(&domain->info->lock);
 	/*
-	 * Someone else might have raced us outside the lock, so check if the
-	 * user still does not exist.
+	 * Now insert the new user object into the lookup tree. Note that
+	 * someone might have raced us, in which case we need to switch over
+	 * and drop our object. However, if the racing entry itself is already
+	 * about to be destroyed again (ref-count is 0, cleanup handler is
+	 * blocking on the domain-lock to drop the object), we rather replace
+	 * the entry in the IDR with our own and mark the old one as removed.
+	 *
+	 * Note that we must set user->uid *before* the idr insertion, to make
+	 * sure any rcu-lookup can properly read it, even before we drop the
+	 * lock.
 	 */
+	mutex_lock(&domain->info->lock);
+	user->uid = uid;
 	old_user = idr_find(&domain->info->user_idr, __kuid_val(uid));
 	if (likely(!old_user)) {
-		/* user does not exist, link the newly created one */
-		r = idr_alloc(&domain->info->user_idr, new_user,
-			      __kuid_val(uid), __kuid_val(uid) + 1, GFP_KERNEL);
-		if (r < 0)
-			goto exit;
-	} else {
-		/* another allocation raced us, try re-using that one */
-		if (likely(kref_get_unless_zero(&old_user->ref))) {
-			user = old_user;
-			goto exit;
-		} else {
-			/* the other one is getting destroyed, replace it */
-			idr_replace(&domain->info->user_idr, new_user,
-				    __kuid_val(uid));
-			old_user->uid = INVALID_UID; /* mark old as removed */
+		r = idr_alloc(&domain->info->user_idr, user, __kuid_val(uid),
+			      __kuid_val(uid) + 1, GFP_KERNEL);
+		if (r < 0) {
+			mutex_unlock(&domain->info->lock);
+			user->uid = INVALID_UID; /* couldn't insert */
+			goto error;
 		}
+	} else if (unlikely(!kref_get_unless_zero(&old_user->ref))) {
+		idr_replace(&domain->info->user_idr, user, __kuid_val(uid));
+		old_user->uid = INVALID_UID; /* mark old as removed */
+		old_user = NULL;
+	} else {
+		user->uid = INVALID_UID; /* didn't insert, drop the marker */
+	}
+	mutex_unlock(&domain->info->lock);
+
+	if (old_user) {
+		bus1_user_release(user);
+		user = old_user;
 	}
 
-	user = new_user;
-	new_user = NULL;
-
-exit:
-	mutex_unlock(&domain->info->lock);
-	bus1_user_release(new_user);
-	if (r < 0)
-		return ERR_PTR(r);
 	return user;
-}
 
-static void bus1_user_free(struct kref *ref)
-{
-	struct bus1_user *user = container_of(ref, struct bus1_user, ref);
-
-	WARN_ON(atomic_read(&user->fds_inflight));
-
-	/* drop the id from the ida if it was initialized */
-	if (user->id != BUS1_INTERNAL_UID_INVALID)
-		ida_simple_remove(&user->domain_info->user_ida, user->id);
-
-	mutex_lock(&user->domain_info->lock);
-	if (uid_valid(user->uid)) /* if already dropped, it's set to invalid */
-		idr_remove(&user->domain_info->user_idr,
-			   __kuid_val(user->uid));
-	mutex_unlock(&user->domain_info->lock);
-
-	kfree_rcu(user, rcu);
+error:
+	bus1_user_release(user);
+	return ERR_PTR(r);
 }
 
 /**
- * bus1_user_release() - release the reference to the user object from the
- *			 domain
+ * bus1_user_acquire() - acquire reference
+ * @user:	user to acquire, or NULL
+ *
+ * Acquire an additional reference to a user-object. The caller must already
+ * own a reference. Furthermore, any acquired reference must be dropped before
+ * the parent domain is dropped.
+ *
+ * If NULL is passed, this is a no-op.
+ *
+ * Return: @user is returned.
+ */
+struct bus1_user *bus1_user_acquire(struct bus1_user *user)
+{
+	if (user)
+		kref_get(&user->ref);
+	return user;
+}
+
+/**
+ * bus1_user_release() - release reference
  * @user:	user to release, or NULL
  *
- * The user object must be released before the corresponding domain is freed,
- * which in practice means that it should be released before its parent object
- * is freed.
+ * Release a reference to a user-object. The caller must make sure to release
+ * all their references before the parent domain is dropped.
+ *
+ * This function *might* lock the parent domain!
+ *
+ * If NULL is passed, this is a no-op.
  *
  * Return: NULL is returned.
  */
@@ -178,102 +193,159 @@ struct bus1_user *bus1_user_release(struct bus1_user *user)
 }
 
 /**
- * bus1_user_acquire() - acquire a reference to the user
- * @user:	User
+ * bus1_user_quota_init() - initialize quota object
+ * @quota:		quota object to initialize
  *
- * Return: @user
+ * Initialize all fields of a quota object.
  */
-struct bus1_user *bus1_user_acquire(struct bus1_user *user)
+void bus1_user_quota_init(struct bus1_user_quota *quota)
 {
-	if (user)
-		kref_get(&user->ref);
-
-	return user;
+	quota->n_stats = 0;
+	quota->stats = NULL;
+	quota->n_messages = 0;
+	quota->allocated_size = 0;
 }
 
-int bus1_user_quotas_ensure_allocated(struct bus1_user_quota **quotasp,
-				      size_t *n_quotasp, unsigned int id)
+/**
+ * bus1_user_quota_destroy() - destroy quota object
+ * @quota:		quota object to destroy, or NULL
+ *
+ * Destroy and deallocate a quota object. All linked resources are freed, and
+ * the object is ready for re-use.
+ *
+ * If NULL is passed, this is a no-op.
+ */
+void bus1_user_quota_destroy(struct bus1_user_quota *quota)
 {
-	struct bus1_user_quota *quotas;
-	unsigned int n_quotas;
-
-	if (id < *n_quotasp)
-		return 0;
-
-	/*
-	 * Align the number of users and allocate a few extra, but protect
-	 * against overflows.
-	 */
-	n_quotas = max(ALIGN(id, 8) + 8, id);
-	quotas = *quotasp;
-
-	quotas = krealloc(quotas,
-			  n_quotas * sizeof(struct bus1_user_quota),
-			  GFP_KERNEL | __GFP_ZERO);
-	if (!quotas)
-		return -ENOMEM;
-
-	*quotasp = quotas;
-	*n_quotasp = n_quotas;
-
-	return 0;
-}
-
-void bus1_user_quotas_destroy(struct bus1_user_quota **quotasp,
-			      size_t *n_quotasp)
-{
-	if (!*quotasp)
+	if (!quota)
 		return;
 
-	kfree(*quotasp);
-	*quotasp = NULL;
-
-	if (*n_quotasp)
-		*n_quotasp = 0;
+	kfree(quota->stats);
+	bus1_user_quota_init(quota);
 }
 
-int bus1_user_quota_check(struct bus1_user_quota *quota, size_t size,
-			  struct bus1_pool *pool,
-			  struct bus1_queue *queue)
+static struct bus1_user_stats *
+bus1_user_quota_query(struct bus1_user_quota *quota,
+		      struct bus1_user *user)
 {
-	/* we can check a quota without allocating it first */
-	u32 allocated_size;
-	u16 n_messages;
+	struct bus1_user_stats *stats;
+	size_t n;
 
-	if (quota) {
-		allocated_size = quota->allocated_size;
-		n_messages = quota->n_messages;
-	} else {
-		allocated_size = 0;
-		n_messages = 0;
+	if (user->id >= quota->n_stats) {
+		/* allocate some additional space, but prevent overflow */
+		n = max(ALIGN(user->id, 8) + 8, user->id);
+		stats = krealloc(quota->stats, n * sizeof(*stats), GFP_KERNEL);
+		if (!stats)
+			return ERR_PTR(-ENOMEM);
+
+		memset(stats + quota->n_stats, 0,
+		       (n - quota->n_stats) * sizeof(*stats));
+		quota->stats = stats;
+		quota->n_stats = n;
 	}
 
-	/*
-	 * The max queue size is not a hard limit, as there is a race between
-	 * checking the quota and queuing the messages. However, it is not
-	 * important that this is strictly enforced, so we don't care.
-	 * WARN_ON(queue->n_messages > BUS1_QUEUE_MESSAGES_MAX);
-	 */
-	WARN_ON(n_messages > queue->n_messages);
+	return quota->stats + user->id;
+}
+
+/**
+ * bus1_user_quota_charge() - try charging a user
+ * @quota:		quota to operate on
+ * @user:		user to charge
+ * @pool_size:		pool size of the quota owner
+ * @size:		size to charge
+ * @n_fds:		number of FDs to charge
+ *
+ * This performs a quota charge on the passes quota object for the given user.
+ * It first checks whether any quota is exceeded, and if not, it commits the
+ * charge immediately.
+ *
+ * This charges for _one_ message with a size of @size bytes, carrying @n_fds
+ * file descriptors as payload. The caller must provide the pool-size of the
+ * target user via @pool_size (which us usually peer_info->pool.size on the
+ * same peer as @quota is on).
+ *
+ * The caller must provide suitable locking.
+ *
+ * Return: 0 on success, negative error code on failure.
+ */
+int bus1_user_quota_charge(struct bus1_user_quota *quota,
+			   struct bus1_user *user,
+			   size_t pool_size,
+			   size_t size,
+			   size_t n_fds)
+{
+	struct bus1_user_stats *stats;
+	size_t max;
+
+	stats = bus1_user_quota_query(quota, user);
+	if (IS_ERR(stats))
+		return PTR_ERR(stats);
+
+	WARN_ON(quota->n_messages > BUS1_MESSAGES_MAX);
+	WARN_ON(stats->n_messages > quota->n_messages);
+	WARN_ON(quota->allocated_size > pool_size);
+	WARN_ON(stats->allocated_size > quota->allocated_size);
 
 	/*
 	 * A given user can have half of the total in-flight message
 	 * budget that is not used by any other user.
 	 */
-	if (n_messages + 1 >
-	    (BUS1_QUEUE_MESSAGES_MAX - queue->n_messages + n_messages) / 2)
-		return -ENOBUFS;
-
-	WARN_ON(pool->allocated_size > pool->size);
-	WARN_ON(allocated_size > pool->allocated_size);
+	max = BUS1_MESSAGES_MAX - quota->n_messages + stats->n_messages;
+	if (stats->n_messages + 1 > max / 2)
+		return -EDQUOT;
 
 	/*
 	 * Similarly, a given user can use half of the total available
 	 * in-flight pool size that is not used by any other user.
 	 */
-	if (allocated_size + size >
-	    (pool->size - pool->allocated_size + allocated_size) / 2)
-		return -ENOBUFS;
+	max = pool_size - quota->allocated_size + stats->allocated_size;
+	if (stats->allocated_size + size > max / 2)
+		return -EDQUOT;
 
+	/*
+	 * Unlike the other quotas, file-descriptors have global per-user
+	 * limits, just like UDS does it. Preferably, we would use
+	 * user_struct->unix_inflight, but it is not accessible by modules.
+	 * Hence, we have our own per-user counter.
+	 * Note that this check is racy. However, we couldn't care less.. There
+	 * is no reason to enforce it strictly. We'd want something like
+	 * atomic_add_unless_greater().
+	 */
+	if (atomic_read(&user->fds_inflight) + n_fds > rlimit(RLIMIT_NOFILE))
+		return -ETOOMANYREFS;
+
+	stats->allocated_size += size;
+	stats->n_messages += 1;
+	atomic_add(n_fds, &user->fds_inflight);
 	return 0;
+}
+
+/**
+ * bus1_user_quota_discharge() - discharge a user
+ * @quota:		quota to operate on
+ * @user:		user to discharge
+ * @size:		size to discharge
+ * @n_fds:		number of FDs to discharge
+ *
+ * This reverts a single charge done via bus1_user_quota_charge(). It discharges
+ * a single message with a slice size of @size and @n_fds file-descriptors.
+ */
+void bus1_user_quota_discharge(struct bus1_user_quota *quota,
+			       struct bus1_user *user,
+			       size_t size,
+			       size_t n_fds)
+{
+	struct bus1_user_stats *stats;
+
+	stats = bus1_user_quota_query(quota, user);
+	if (WARN_ON(IS_ERR_OR_NULL(stats)))
+		return;
+
+	WARN_ON(size > stats->allocated_size);
+	WARN_ON(stats->n_messages < 1);
+	WARN_ON(n_fds > atomic_read(&user->fds_inflight));
+
+	stats->allocated_size -= size;
+	stats->n_messages -= 1;
+	atomic_sub(n_fds, &user->fds_inflight);
 }

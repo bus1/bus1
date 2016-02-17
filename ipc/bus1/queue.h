@@ -13,6 +13,11 @@
 /**
  * Message Queue
  *
+ * (You are highly encouraged to read up on 'Lamport Timestamps', the
+ *  concept of 'happened-before', and 'causal ordering'. The queue
+ *  implementation has its roots in Lamport Timestamps, treating a set of local
+ *  CPUs as a distributed system to avoid any global synchronization.)
+ *
  * Every peer on the bus has its own message queue. This is used to queue all
  * messages that are sent to this peer. From a user-space perspective, this
  * queue is a FIFO, that is, messages are linearly ordered by their time they
@@ -40,51 +45,44 @@
  *             synchronization between the two operations.)
  *
  * The queue object implements this global order in a lockless fashion. It
- * solely relies on an atomic sequence counter on the bus object. Each message
- * to be sent gets assigned a sequence ID. Initially, this ID equals the
- * sequence counter of the bus plus 1. The sequence counter is not modified.
- * Now the message is inserted into the *sorted* queues of all its
- * destinations. After it is queued on all its destinations, the global
- * sequence counter is atomically incremented by 2, and this is also used as
- * the new sequence ID of the message. Now all queued instances of the message
- * are updated to this new ID and re-inserted into the sorted queues.
+ * solely relies on a distributed clock on each peer. Each message to be sent
+ * causes a clock tick on the local clock and on all destination clocks.
+ * Furthermore, all clocks are synchronized, meaning they're fast-forwarded in
+ * case they're behind the highest of all participating peers. No global state
+ * tracking is involved.
  *
- * This algorithm guarantees:
- *
- *   * The global sequence counter is always an even number, since it is only
- *     ever incremented by 2.
- *
- *   * The initial sequence number of a message is always an odd number, as it
- *     equals the even global sequence counter plus 1.
- *
- *   * The final sequence number of a message is always an even number greater
- *     than zero, as it equals the even global sequence counter.
- *
- *   * The final sequence number of a message identifies it uniquely. Only odd
- *     sequence numbers can clash (since they do not imply an atomic increment)
- *     but even sequence numbers can never clash.
+ * During a message transaction, we first queue a message as "staging" entry in
+ * each destination with a preliminary timestamp. This timestamp is explicitly
+ * odd numbered. Any odd numbered timestamp is considered 'staging' and causes
+ * *any* message ordered after it to be blocked until it is no longer staging.
+ * This allows us to queue the message in parallel with any racing multicast,
+ * and be guaranteed that all possible conflicts are blocked until we
+ * eventually committed a transaction.
+ * To commit a transaction (after all staging entries are queued), we choose
+ * the highest timestamp we have seen across all destinations and re-queue all
+ * our entries on each peer. Here we use a commit timestamp (even numbered).
  *
  * With this in mind, we define that a client can only dequeue messages from
- * its queue, which have an even sequence number. Furthermore, if there is a
- * message queued with an odd sequence number that is lower than the even
- * sequence number of another message, then neither message can be dequeued.
- * They're considered to be in-flight. This guarantees that two concurrent
- * multicast messages can be queued without any locks, but either can only be
- * dequeued by a peer if their ordering has been established.
+ * its queue, which have an even timestamp. Furthermore, if there is a message
+ * queued with an odd timestamp that is lower than the even timestamp of
+ * another message, then neither message can be dequeued. They're considered to
+ * be in-flight conflicts. This guarantees that two concurrent multicast
+ * messages can be queued without any *global* locks, but either can only be
+ * dequeued by a peer if their ordering has been established (via commit
+ * timestamps).
  *
  * NOTE: So far, in-flight messages is not blocked on. That is, a send-ioctl
  *       might return to user-space, but a following recv-ioctl on the
  *       destination of the message might fail with EAGAIN. That is, a message
  *       might be in-flight for an undefined amount of time.
  *
- *       In other words: Message transmission is not instanteous. Side-channels
- *                       do not order against messages.
+ *       In other words: Message transmission is not instantaneous.
  *
- * The queue implementation uses an rb-tree (ordered by sequence numbers), with
- * a cached pointer to the front of the queue. The front pointer is only set if
+ * The queue implementation uses an rb-tree (ordered by timestamps), with a
+ * cached pointer to the front of the queue. The front pointer is only set if
  * the first entry in the queue is ready to be dequeued (that is, it has an
- * even sequence number). If the first entry is not ready to be dequeued, or if
- * the queue is empty, the front pointer is NULL.
+ * even timestamp). If the first entry is not ready to be dequeued, or if the
+ * queue is empty, the front pointer is NULL.
  *
  * The queue itself must be embedded into the parent peer structure. We do not
  * access any of the peer-data from within the queue, but we rely on the
@@ -92,106 +90,102 @@
  * locks are required). Therefore, the lockdep annotations might access the
  * surrounding peer object that the queue is embedded in. See
  * bus1_queue_init_internal() for details.
- *
- * Queue entries are disconnected from a queue. Callers can allocate and free
- * them as they wish. Furthermore, the payload of the queue-entry is never
- * touched by the queue implementation (except for sanity checks in the release
- * functions). Only as soon as an entry is linked into the queue (and marked as
- * ready), other contexts may dequeue it (*and* free it!).
- * For lockless access to queue entries, we also support rcu-protected access
- * to the front of the queue. This is used in the poll() implementation right
- * now.
  */
 
 #include <linux/kernel.h>
 #include <linux/rbtree.h>
 #include <linux/rcupdate.h>
 
-struct bus1_peer;
-struct bus1_pool_slice;
-struct bus1_queue_entry;
-struct bus1_user;
-struct bus1_user_quota;
-struct file;
-
-#define BUS1_QUEUE_MESSAGES_MAX ((size_t) 1024)
+/**
+ * struct bus1_queue - message queue
+ * @messages:		queued messages
+ * @front:		cached front entry
+ * @clock:		local clock (used for Lamport Timestamps)
+ */
+struct bus1_queue {
+	struct rb_root messages;
+	struct rb_node __rcu *front;
+	u64 clock;
+};
 
 /**
- * struct bus1_queue_entry - queue entry
- * @seq:			sequence number
- * @destination_id:		destination ID used for the message
- * @transaction.next:		transaction: links all instances, or NULL
- * @transaction.peer:		transaction: pins destination peer, or NULL
- * @rb:				link into the queue
- * @rcu:			rcu-head
- * @user:			the user to account the queue entry on
- * @slice:			carried data, or NULL
- * @n_files:			number of carried files
- * @files:			carried files, or NULL
+ * struct bus1_queue_node - node into message queue
+ * @rb:				link into sorted message queue
+ * @rcu:			rcu
+ * @timestamp_and_type:		message timestamp and type of parent object
  */
-struct bus1_queue_entry {
-	u64 seq;
-	u64 destination_id;
-	struct {
-		struct rb_node rb;
-		struct bus1_peer *peer;
-	} transaction;
+struct bus1_queue_node {
 	union {
 		struct rb_node rb;
 		struct rcu_head rcu;
 	};
-	struct bus1_user *user;
-	struct bus1_pool_slice *slice;
-	size_t n_files;
-	struct file *files[0];
+	u64 timestamp_and_type;
 };
 
-/* turn rb_node pointer into queue entry */
-#define bus1_queue_entry(_rb) \
-	((_rb) ? container_of((_rb), struct bus1_queue_entry, rb) : NULL)
-
-/**
- * struct bus1_queue - message queue
- * @messages:		queued messages
- * @n_messages:		number of messages
- * @front:		cached front entry
- */
-struct bus1_queue {
-	struct rb_root messages;
-	size_t n_messages;
-	struct rb_node __rcu *front;
-};
-
+/* queue */
 void bus1_queue_init_internal(struct bus1_queue *queue);
 void bus1_queue_destroy(struct bus1_queue *queue);
-bool bus1_queue_link(struct bus1_queue *queue,
-		     struct bus1_queue_entry *entry,
-		     struct bus1_user_quota *quota,
-		     u64 seq);
-bool bus1_queue_unlink(struct bus1_queue *queue,
-		       struct bus1_queue_entry *entry,
-		       struct bus1_user_quota *quota);
-bool bus1_queue_relink(struct bus1_queue *queue,
-		       struct bus1_queue_entry *entry,
-		       struct bus1_user_quota *quota,
-		       u64 seq);
-void bus1_queue_flush(struct bus1_queue *queue,
-		      struct bus1_pool *pool,
-		      struct bus1_user_quota *quotas,
-		      u64 peer_id);
-struct bus1_queue_entry *bus1_queue_peek(struct bus1_queue *queue);
+void bus1_queue_post_flush(struct bus1_queue *queue);
+bool bus1_queue_stage(struct bus1_queue *queue,
+		      struct bus1_queue_node *node,
+		      u64 timestamp);
+bool bus1_queue_remove(struct bus1_queue *queue,
+		       struct bus1_queue_node *node);
+struct bus1_queue_node *bus1_queue_peek(struct bus1_queue *queue);
 
-struct bus1_queue_entry *
-bus1_queue_entry_new(struct bus1_user *user, size_t n_files);
-struct bus1_queue_entry *bus1_queue_entry_free(struct bus1_queue_entry *entry);
-int bus1_queue_entry_install(struct bus1_queue_entry *entry,
-			     struct bus1_pool *pool);
+/* nodes */
+void bus1_queue_node_init(struct bus1_queue_node *node, bool is_message);
+void bus1_queue_node_destroy(struct bus1_queue_node *node);
+bool bus1_queue_node_is_message(struct bus1_queue_node *node);
+bool bus1_queue_node_is_queued(struct bus1_queue_node *node);
+bool bus1_queue_node_is_committed(struct bus1_queue_node *node);
 
 /* see bus1_queue_init_internal() for details */
 #define bus1_queue_init_for_peer(_queue, _peer) ({		\
 		BUILD_BUG_ON((_queue) != &(_peer)->queue);	\
 		bus1_queue_init_internal(&(_peer)->queue);	\
 	})
+
+/**
+ * bus1_queue_tick() - increment queue clock
+ * @queue:		queue to operate on
+ *
+ * This performs a clock-tick on @queue. The clock is incremented by a full
+ * interval (+2). The caller is free to use both, the new value (even numbered)
+ * and its predecessor (odd numbered). Both are uniquely allocated to the
+ * caller.
+ *
+ * The caller must hold the peer lock.
+ *
+ * Return: New clock value is returned.
+ */
+static inline u64 bus1_queue_tick(struct bus1_queue *queue)
+{
+	queue->clock += 2;
+	return queue->clock;
+}
+
+/**
+ * bus1_queue_sync() - sync queue clock
+ * @queue:		queue to operate on
+ * @timestamp:		timestamp to sync on
+ *
+ * This synchronizes the clock of @queue with the externally provided timestamp
+ * @timestamp. That is, the queue clock is fast-forwarded to @timestamp, in
+ * case it is newer than the queue clock. Otherwise, nothing is done.
+ *
+ * This function works with even *and* odd timestamps. It is internally
+ * converted to the corresponding even timestamp, in case it is odd.
+ *
+ * The caller must hold the peer lock.
+ *
+ * Return: New clock value is returned.
+ */
+static inline u64 bus1_queue_sync(struct bus1_queue *queue, u64 timestamp)
+{
+	queue->clock = max(queue->clock, timestamp + (timestamp & 1));
+	return queue->clock;
+}
 
 /**
  * bus1_queue_peek_rcu() - peek first available entry
@@ -212,10 +206,11 @@ int bus1_queue_entry_install(struct bus1_queue_entry *entry,
  *
  * Return: Pointer to first available entry, NULL if none available.
  */
-static inline struct bus1_queue_entry *
+static inline struct bus1_queue_node *
 bus1_queue_peek_rcu(struct bus1_queue *queue)
 {
-	return bus1_queue_entry(rcu_dereference(queue->front));
+	return rb_entry_safe(rcu_dereference(queue->front),
+			     struct bus1_queue_node, rb);
 }
 
 #endif /* __BUS1_QUEUE_H */

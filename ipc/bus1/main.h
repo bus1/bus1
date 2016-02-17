@@ -40,5 +40,6 @@
  */
 
 #define BUS1_IOCTL_MAX_SIZE (4096)
+#define BUS1_MESSAGES_MAX (1024)
 
 #endif /* __BUS1_MAIN_H */

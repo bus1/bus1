@@ -450,6 +450,7 @@ struct bus1_active *bus1_active_release_raw(struct bus1_active *active,
 					    wait_queue_head_t *waitq)
 {
 	if (active) {
+		/* XXX: rcu_read_lock() ? */
 		if (atomic_dec_return(&active->count) == BUS1_ACTIVE_BIAS)
 			if (waitq)
 				wake_up(waitq);

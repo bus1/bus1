@@ -38,9 +38,10 @@ struct bus1_queue;
  */
 struct bus1_user {
 	struct kref ref;
+	kuid_t uid;
+
 	union {
 		struct {
-			kuid_t uid;
 			unsigned int id;
 			atomic_t fds_inflight;
 			struct bus1_domain_info *domain_info;
@@ -50,26 +51,46 @@ struct bus1_user {
 };
 
 /**
- * struct bus1_user_quota - quota usage of a user in a peer
- * @memory:		memory in bytes used by queued messages
- * @messages:		number of queued messages
+ * struct bus1_user_stats - quota statistics between a user and a peer
+ * @allocated_size:	memory in bytes used by queued messages
+ * @n_messages:		number of queued messages
  */
-struct bus1_user_quota {
+struct bus1_user_stats {
 	u32 allocated_size;
 	u16 n_messages;
 };
 
+/**
+ * struct bus1_user_quota - quota handling
+ * @n_stats:		number of allocated user entries
+ * @stats:		user entries
+ * @n_messages:		total amount of accounted messages
+ * @allocated_size:	total amount of accounted pool size
+ */
+struct bus1_user_quota {
+	size_t n_stats;
+	struct bus1_user_stats *stats;
+	size_t n_messages;
+	size_t allocated_size;
+};
+
+/* users */
 struct bus1_user *
 bus1_user_acquire_by_uid(struct bus1_domain *domain, kuid_t uid);
-struct bus1_user *bus1_user_release(struct bus1_user *user);
 struct bus1_user *bus1_user_acquire(struct bus1_user *user);
+struct bus1_user *bus1_user_release(struct bus1_user *user);
 
-int bus1_user_quotas_ensure_allocated(struct bus1_user_quota **quotasp,
-				      size_t *n_quotasp, unsigned int id);
-void bus1_user_quotas_destroy(struct bus1_user_quota **quotasp,
-			      size_t *n_quotasp);
+/* quota */
+void bus1_user_quota_init(struct bus1_user_quota *quota);
+void bus1_user_quota_destroy(struct bus1_user_quota *quota);
+int bus1_user_quota_charge(struct bus1_user_quota *quota,
+			   struct bus1_user *user,
+			   size_t pool_size,
+			   size_t size,
+			   size_t n_fds);
+void bus1_user_quota_discharge(struct bus1_user_quota *quota,
+			       struct bus1_user *user,
+			       size_t size,
+			       size_t n_fds);
 
-int bus1_user_quota_check(struct bus1_user_quota *quota, size_t size,
-			  struct bus1_pool *pool,
-			  struct bus1_queue *queue);
 #endif /* __BUS1_USER_H */

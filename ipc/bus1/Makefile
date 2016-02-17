@@ -15,6 +15,7 @@ bus$(BUS1_EXT)-y :=	\
 	filesystem.o	\
 	handle.o	\
 	main.o		\
+	message.o	\
 	peer.o		\
 	pool.o		\
 	queue.o		\

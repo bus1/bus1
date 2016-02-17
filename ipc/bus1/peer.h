@@ -27,15 +27,17 @@
 #include "active.h"
 #include "pool.h"
 #include "queue.h"
+#include "user.h"
 
 struct bus1_domain;
 struct bus1_peer_name;
-struct bus1_user_quota;
 
 /**
  * struct bus1_peer_info - peer specific runtime information
  * @lock:			data lock
  * @rcu:			rcu
+ * @user:			object owner
+ * @quota:			quota handling
  * @pool:			data pool
  * @queue:			message queue, rcu-accessible
  * @map_handles_by_id:		map of owned handles, by handle id
@@ -48,11 +50,10 @@ struct bus1_peer_info {
 		struct mutex lock;
 		struct rcu_head rcu;
 	};
+	struct bus1_user *user;
+	struct bus1_user_quota quota;
 	struct bus1_pool pool;
 	struct bus1_queue queue;
-	struct bus1_user_quota *quotas;
-	size_t n_quotas;
-	struct bus1_user *user;
 	struct rb_root map_handles_by_id;
 	struct rb_root map_handles_by_node;
 	struct seqcount seqcount;
@@ -61,8 +62,6 @@ struct bus1_peer_info {
 
 #define bus1_peer_info_from_pool(_pool) \
 	container_of((_pool), struct bus1_peer_info, pool)
-#define bus1_peer_info_from_queue(_queue) \
-	container_of((_queue), struct bus1_peer_info, queue)
 
 /**
  * struct bus1_peer - peer handle

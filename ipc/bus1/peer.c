@@ -24,6 +24,7 @@
 #include <linux/wait.h>
 #include <uapi/linux/bus1.h>
 #include "domain.h"
+#include "message.h"
 #include "peer.h"
 #include "pool.h"
 #include "queue.h"
@@ -41,6 +42,33 @@ struct bus1_peer_name {
 	char name[];
 };
 
+static void bus1_peer_info_reset(struct bus1_peer_info *peer_info)
+{
+	struct bus1_queue_node *node, *t;
+	struct bus1_message *message;
+
+	mutex_lock(&peer_info->lock);
+
+	rbtree_postorder_for_each_entry_safe(node, t,
+					     &peer_info->queue.messages, rb) {
+		if (WARN_ON(!bus1_queue_node_is_message(node)))
+			continue;
+
+		message = container_of(node, struct bus1_message, qnode);
+		RB_CLEAR_NODE(&node->rb);
+		if (bus1_queue_node_is_committed(node)) {
+			bus1_message_deallocate_locked(message, peer_info);
+			bus1_message_free(message);
+		}
+		/* if uncommitted, the unlink serves as removal marker */
+	}
+	bus1_queue_post_flush(&peer_info->queue);
+
+	bus1_pool_flush(&peer_info->pool);
+
+	mutex_unlock(&peer_info->lock);
+}
+
 static struct bus1_peer_info *
 bus1_peer_info_free(struct bus1_peer_info *peer_info)
 {
@@ -49,14 +77,11 @@ bus1_peer_info_free(struct bus1_peer_info *peer_info)
 
 	WARN_ON(peer_info->user);
 
-	mutex_lock(&peer_info->lock); /* lock peer to make lockdep happy */
-	bus1_queue_flush(&peer_info->queue, &peer_info->pool,
-			 peer_info->quotas, 0);
-	mutex_unlock(&peer_info->lock);
+	bus1_peer_info_reset(peer_info);
 
 	bus1_queue_destroy(&peer_info->queue);
 	bus1_pool_destroy(&peer_info->pool);
-	bus1_user_quotas_destroy(&peer_info->quotas, &peer_info->n_quotas);
+	bus1_user_quota_destroy(&peer_info->quota);
 
 	/*
 	 * Make sure the object is freed in a delayed-manner. Some
@@ -83,11 +108,10 @@ bus1_peer_info_new(struct bus1_cmd_connect *param)
 		return ERR_PTR(-ENOMEM);
 
 	mutex_init(&peer_info->lock);
+	peer_info->user = NULL;
+	bus1_user_quota_init(&peer_info->quota);
 	peer_info->pool = BUS1_POOL_NULL;
 	bus1_queue_init_for_peer(&peer_info->queue, peer_info);
-	peer_info->quotas = NULL;
-	peer_info->n_quotas = 0;
-	peer_info->user = NULL;
 	peer_info->map_handles_by_id = RB_ROOT;
 	peer_info->map_handles_by_node = RB_ROOT;
 	seqcount_init(&peer_info->seqcount);
@@ -103,15 +127,6 @@ bus1_peer_info_new(struct bus1_cmd_connect *param)
 error:
 	bus1_peer_info_free(peer_info);
 	return ERR_PTR(r);
-}
-
-static void bus1_peer_info_reset(struct bus1_peer_info *peer_info, u64 id)
-{
-	mutex_lock(&peer_info->lock);
-	bus1_queue_flush(&peer_info->queue, &peer_info->pool,
-			 peer_info->quotas, id);
-	bus1_pool_flush(&peer_info->pool);
-	mutex_unlock(&peer_info->lock);
 }
 
 static struct bus1_peer_name *
@@ -863,7 +878,7 @@ static int bus1_peer_connect_reset(struct bus1_peer *peer,
 	param->pool_size = peer_info->pool.size;
 
 	/* safe to call outside of domain-lock; we still hold the peer-lock */
-	bus1_peer_info_reset(peer_info, peer->id);
+	bus1_peer_info_reset(peer_info);
 
 	return 0;
 }
@@ -1070,6 +1085,7 @@ static int bus1_peer_ioctl_send(struct bus1_peer *peer,
 				struct bus1_domain *domain,
 				unsigned long arg)
 {
+	struct bus1_peer_info *peer_info = bus1_peer_dereference(peer);
 	struct bus1_transaction *transaction = NULL;
 	/* Use a stack-allocated buffer for the transaction object if it fits */
 	u8 buf[512];
@@ -1106,9 +1122,8 @@ static int bus1_peer_ioctl_send(struct bus1_peer *peer,
 		return -EFAULT;
 
 	/* peer is pinned, hence domain_info and ID can be accessed freely */
-	transaction = bus1_transaction_new_from_user(domain, domain->info,
-						     peer->id, &param, buf,
-						     sizeof(buf),
+	transaction = bus1_transaction_new_from_user(peer_info, domain, &param,
+						     buf, sizeof(buf),
 						     bus1_in_compat_syscall());
 	if (IS_ERR(transaction))
 		return PTR_ERR(transaction);
@@ -1155,7 +1170,8 @@ static int bus1_peer_ioctl_recv(struct bus1_peer *peer, unsigned long arg)
 {
 	struct bus1_peer_info *peer_info = bus1_peer_dereference(peer);
 	struct bus1_cmd_recv __user *uparam = (void __user *)arg;
-	struct bus1_queue_entry *entry;
+	struct bus1_queue_node *node;
+	struct bus1_message *message;
 	struct bus1_cmd_recv param;
 	size_t wanted_fds, n_fds = 0;
 	int r, *t, *fds = NULL;
@@ -1182,10 +1198,14 @@ static int bus1_peer_ioctl_recv(struct bus1_peer *peer, unsigned long arg)
 	 * us for message retrieval, so we have to check it again below.
 	 */
 	rcu_read_lock();
-	entry = bus1_queue_peek_rcu(&peer_info->queue);
-	wanted_fds = entry ? entry->n_files : 0;
+	node = bus1_queue_peek_rcu(&peer_info->queue);
+	if (node) {
+		WARN_ON(!bus1_queue_node_is_message(node));
+		message = bus1_message_from_node(node);
+		wanted_fds = message->n_files;
+	}
 	rcu_read_unlock();
-	if (!entry)
+	if (!node)
 		return -EAGAIN;
 
 	/*
@@ -1198,15 +1218,16 @@ static int bus1_peer_ioctl_recv(struct bus1_peer *peer, unsigned long arg)
 	 */
 	if (param.flags & BUS1_RECV_FLAG_PEEK) {
 		mutex_lock(&peer_info->lock);
-		entry = bus1_queue_peek(&peer_info->queue);
-		if (entry) {
-			bus1_pool_publish(&peer_info->pool, entry->slice,
+		node = bus1_queue_peek(&peer_info->queue);
+		if (node) {
+			message = bus1_message_from_node(node);
+			bus1_pool_publish(&peer_info->pool, message->slice,
 					  &param.msg_offset, &param.msg_size);
-			param.msg_fds = entry->n_files;
+			param.msg_fds = message->n_files;
 		}
 		mutex_unlock(&peer_info->lock);
 
-		if (!entry)
+		if (!node)
 			return -EAGAIN;
 
 		r = 0;
@@ -1240,41 +1261,37 @@ static int bus1_peer_ioctl_recv(struct bus1_peer *peer, unsigned long arg)
 		}
 
 		mutex_lock(&peer_info->lock);
-		entry = bus1_queue_peek(&peer_info->queue);
-		if (!entry) {
+		node = bus1_queue_peek(&peer_info->queue);
+		message = node ? bus1_message_from_node(node) : NULL;
+		if (!node) {
 			/* nothing to do, caught below */
-		} else if (entry->n_files > n_fds) {
+		} else if (message->n_files > n_fds) {
 			/* re-allocate FD array and retry */
-			wanted_fds = entry->n_files;
+			wanted_fds = message->n_files;
 		} else {
-			struct bus1_user_quota *quota;
-
-			quota = &peer_info->quotas[entry->user->id];
-
-			bus1_queue_unlink(&peer_info->queue, entry, quota);
-			bus1_pool_publish(&peer_info->pool, entry->slice,
+			bus1_queue_remove(&peer_info->queue, node);
+			bus1_pool_publish(&peer_info->pool, message->slice,
 					  &param.msg_offset, &param.msg_size);
-			param.msg_fds = entry->n_files;
+			param.msg_fds = message->n_files;
 
 			/*
 			 * Fastpath: If no FD is transmitted, we can avoid the
 			 *           second lock below. Directly release the
 			 *           slice.
 			 */
-			if (entry->n_files == 0)
-				bus1_pool_release_kernel(&peer_info->pool,
-							 entry->slice,
-							 quota);
+			if (message->n_files == 0)
+				bus1_message_deallocate_locked(message,
+							       peer_info);
 		}
 		mutex_unlock(&peer_info->lock);
 	} while (wanted_fds > n_fds);
 
-	if (!entry) {
+	if (!node) {
 		r = -EAGAIN;
 		goto exit;
 	}
 
-	while (n_fds > entry->n_files)
+	while (n_fds > message->n_files)
 		put_unused_fd(fds[--n_fds]);
 
 	if (n_fds > 0) {
@@ -1291,26 +1308,23 @@ static int bus1_peer_ioctl_recv(struct bus1_peer *peer, unsigned long arg)
 		 * We treat this OOM as if the actual message transaction OOMed
 		 * and simply drop the message.
 		 */
-		struct bus1_user_quota *quota;
-
-		quota = &peer_info->quotas[entry->user->id];
 
 		vec.iov_base = fds;
 		vec.iov_len = n_fds * sizeof(*fds);
 
-		r = bus1_pool_write_kvec(&peer_info->pool, entry->slice,
-					 entry->slice->size - vec.iov_len,
+		r = bus1_pool_write_kvec(&peer_info->pool, message->slice,
+					 message->slice->size - vec.iov_len,
 					 &vec, 1, vec.iov_len);
 
 		mutex_lock(&peer_info->lock);
-		bus1_pool_release_kernel(&peer_info->pool, entry->slice, quota);
+		bus1_message_deallocate_locked(message, peer_info);
 		mutex_unlock(&peer_info->lock);
 
 		/* on success, install FDs; on error, see fput() in `exit:' */
 		if (r >= 0) {
 			for ( ; n_fds > 0; --n_fds)
 				fd_install(fds[n_fds - 1],
-					   get_file(entry->files[n_fds - 1]));
+					   get_file(message->files[n_fds - 1]));
 		} else {
 			/* XXX: convey error, just like in transactions */
 		}
@@ -1319,8 +1333,7 @@ static int bus1_peer_ioctl_recv(struct bus1_peer *peer, unsigned long arg)
 		r = 0;
 	}
 
-	entry->slice = NULL;
-	bus1_queue_entry_free(entry);
+	bus1_message_free(message);
 
 exit:
 	if (r >= 0) {

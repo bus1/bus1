@@ -52,8 +52,6 @@
 #define BUS1_POOL_SLICE_SIZE_BITS (28)
 #define BUS1_POOL_SLICE_SIZE_MAX ((1 << BUS1_POOL_SLICE_SIZE_BITS) - 1)
 
-struct bus1_user_quota;
-
 /**
  * struct bus1_pool_slice - pool slice
  * @offset:		relative offset in parent pool
@@ -100,12 +98,9 @@ struct bus1_pool {
 int bus1_pool_create_internal(struct bus1_pool *pool, size_t size);
 void bus1_pool_destroy(struct bus1_pool *pool);
 
+struct bus1_pool_slice *bus1_pool_alloc(struct bus1_pool *pool, size_t size);
 struct bus1_pool_slice *
-bus1_pool_alloc(struct bus1_pool *pool, size_t size,
-		struct bus1_user_quota *quota);
-struct bus1_pool_slice *
-bus1_pool_release_kernel(struct bus1_pool *pool, struct bus1_pool_slice *slice,
-			 struct bus1_user_quota *quota);
+bus1_pool_release_kernel(struct bus1_pool *pool, struct bus1_pool_slice *slice);
 void bus1_pool_publish(struct bus1_pool *pool,
 		       struct bus1_pool_slice *slice,
 		       u64 *out_offset,

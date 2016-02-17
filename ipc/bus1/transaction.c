@@ -18,6 +18,7 @@
 #include <linux/uio.h>
 #include <uapi/linux/bus1.h>
 #include "domain.h"
+#include "message.h"
 #include "peer.h"
 #include "pool.h"
 #include "queue.h"
@@ -41,12 +42,13 @@ struct bus1_transaction_header {
 
 struct bus1_transaction {
 	/* sender context */
+	struct bus1_peer_info *peer_info;
 	struct bus1_domain *domain;
-	struct bus1_domain_info *domain_info;
 
 	/* transaction state */
 	size_t length_vecs;
 	struct bus1_transaction_header header;
+	u64 timestamp;
 
 	/* payload */
 	size_t n_vecs;
@@ -103,65 +105,6 @@ bus1_transaction_new(size_t n_vecs, size_t n_files, void *buf, size_t buf_len)
 	return transaction;
 }
 
-/**
- * bus1_transaction_free() - free transaction
- * @transaction:	transaction to free, or NULL
- *
- * This releases a transaction and all associated memory. If the transaction
- * failed, any in-flight messages are dropped and pinned peers are released. If
- * the transaction was successfull, this just releases the temporary data that
- * was used for the transmission.
- *
- * If NULL is passed, this is a no-op.
- *
- * Return: NULL is returned.
- */
-struct bus1_transaction *
-bus1_transaction_free(struct bus1_transaction *transaction, bool do_free)
-{
-	struct bus1_queue_entry *entry;
-	struct bus1_peer *peer;
-	struct bus1_peer_info *peer_info;
-	struct rb_node *node, *t;
-	size_t i;
-
-	if (!transaction)
-		return NULL;
-
-	/* release all in-flight queue entries and their pinned peers */
-	for (node = rb_first_postorder(&transaction->entries);
-	     node && ((t = rb_next_postorder(node)), true);
-	     node = t) {
-		entry = container_of(node, struct bus1_queue_entry, transaction.rb);
-		peer = entry->transaction.peer;
-		entry->transaction.peer = NULL;
-	        RB_CLEAR_NODE(&entry->transaction.rb);
-
-		peer_info = bus1_peer_dereference(peer);
-
-		mutex_lock(&peer_info->lock);
-		entry->slice = bus1_pool_release_kernel(&peer_info->pool,
-					entry->slice,
-					&peer_info->quotas[entry->user->id]);
-		mutex_unlock(&peer_info->lock);
-
-		bus1_peer_release_raw(peer);
-		bus1_queue_entry_free(entry); /* fput()s entry->files[] */
-	}
-
-	transaction->entries = RB_ROOT;
-
-	/* release message payload */
-	for (i = 0; i < transaction->n_files; ++i)
-		if (transaction->files[i])
-			fput(transaction->files[i]);
-
-	if (do_free)
-		kfree(transaction);
-
-	return NULL;
-}
-
 static int
 bus1_transaction_import_vecs(struct bus1_transaction *transaction,
 			     struct bus1_cmd_send *param,
@@ -207,8 +150,7 @@ bus1_transaction_import_files(struct bus1_transaction *transaction,
 }
 
 static int
-bus1_transaction_import_message(struct bus1_transaction *transaction,
-				u64 sender_id)
+bus1_transaction_import_message(struct bus1_transaction *transaction)
 {
 	struct iov_iter iter;
 	size_t l;
@@ -265,8 +207,7 @@ bus1_transaction_import_message(struct bus1_transaction *transaction,
 	transaction->vecs->iov_len = sizeof(transaction->header);
 	transaction->length_vecs += sizeof(transaction->header);
 
-	/* fill in header */
-	transaction->header.sender = sender_id;
+	/* XXX: fill in header */
 
 	return 0;
 }
@@ -275,9 +216,8 @@ bus1_transaction_import_message(struct bus1_transaction *transaction,
  * bus1_transaction_new_from_user() - XXX
  */
 struct bus1_transaction *
-bus1_transaction_new_from_user(struct bus1_domain *domain,
-			       struct bus1_domain_info *domain_info,
-			       u64 sender_id,
+bus1_transaction_new_from_user(struct bus1_peer_info *peer_info,
+			       struct bus1_domain *domain,
 			       struct bus1_cmd_send *param,
 			       void *buf,
 			       size_t buf_len,
@@ -291,8 +231,8 @@ bus1_transaction_new_from_user(struct bus1_domain *domain,
 	if (IS_ERR(transaction))
 		return ERR_CAST(transaction);
 
+	transaction->peer_info = peer_info;
 	transaction->domain = domain;
-	transaction->domain_info = domain_info;
 
 	r = bus1_transaction_import_vecs(transaction, param, is_compat);
 	if (r < 0)
@@ -309,7 +249,7 @@ bus1_transaction_new_from_user(struct bus1_domain *domain,
 		goto error;
 	}
 
-	r = bus1_transaction_import_message(transaction, sender_id);
+	r = bus1_transaction_import_message(transaction);
 	if (r < 0)
 		goto error;
 
@@ -320,72 +260,80 @@ error:
 	return ERR_PTR(r);
 }
 
-/*
- * There is no atomic_add_unless_greater(), so we implement it here, similarly
- * to their inc and dec counterparts.
+/**
+ * bus1_transaction_free() - free transaction
+ * @transaction:	transaction to free, or NULL
+ *
+ * This releases a transaction and all associated memory. If the transaction
+ * failed, any in-flight messages are dropped and pinned peers are released. If
+ * the transaction was successfull, this just releases the temporary data that
+ * was used for the transmission.
+ *
+ * If NULL is passed, this is a no-op.
+ *
+ * Return: NULL is returned.
  */
-static int bus1_atomic_add_unless_greater(atomic_t *p, int add, int limit)
+struct bus1_transaction *
+bus1_transaction_free(struct bus1_transaction *transaction, bool do_free)
 {
-	int v, v1;
+	struct bus1_message *message, *t;
+	struct bus1_peer_info *peer_info;
+	struct bus1_peer *peer;
+	size_t i;
 
-	if (!add)
-		return 1;
+	if (!transaction)
+		return NULL;
 
-	for (v = atomic_read(p); v + add <= v && v + add <= limit; v = v1) {
-		v1 = atomic_cmpxchg(p, v, v + add);
-		if (likely(v1 == v))
-			return 1;
+	/* release all in-flight queue entries and their pinned peers */
+	rbtree_postorder_for_each_entry_safe(message, t,
+					     &transaction->entries, dd.rb) {
+		peer = message->transaction.peer;
+		peer_info = bus1_peer_dereference(peer);
+
+		message->transaction.peer = NULL;
+
+		mutex_lock(&peer_info->lock);
+		WARN_ON(bus1_queue_node_is_queued(&message->qnode));
+		bus1_message_deallocate_locked(message, peer_info);
+		mutex_unlock(&peer_info->lock);
+
+		bus1_message_free(message);
+		bus1_peer_release_raw(peer);
 	}
 
-	return 0;
+	/* release message payload */
+	for (i = 0; i < transaction->n_files; ++i)
+		if (transaction->files[i])
+			fput(transaction->files[i]);
+
+	if (do_free)
+		kfree(transaction);
+
+	return NULL;
 }
 
-static struct bus1_queue_entry *
-bus1_transaction_instantiate(struct bus1_transaction *transaction,
-			     struct bus1_user *user,
-			     struct bus1_peer_info *peer_info,
-			     u64 peer_id)
+static int bus1_transaction_instantiate(struct bus1_transaction *transaction,
+					struct bus1_message *message,
+					struct bus1_peer_info *peer_info,
+					struct bus1_user *user)
 {
-	struct bus1_queue_entry *entry;
-	struct bus1_pool_slice *slice = NULL;
 	size_t i, slice_size;
 	int r;
 
-	entry = bus1_queue_entry_new(user, transaction->n_files);
-	if (IS_ERR(entry))
-		return ERR_CAST(entry);
+	slice_size = ALIGN(transaction->length_vecs, 8) +
+		     ALIGN(transaction->n_files * sizeof(int), 8);
 
-	slice_size = transaction->length_vecs +
-			transaction->n_files * sizeof(int);
+	/* files must be set *before* allocating the slice */
+	for (i = 0; i < transaction->n_files; ++i)
+		message->files[i] = get_file(transaction->files[i]);
+	message->n_files = transaction->n_files;
 
-	/*
-	 * Allocate unlinked pool slice. We need enough space to store the
-	 * message *and* the trailing FD array. Overflows are already checked
-	 * by the importer.
-	 */
+	/* allocate the slice */
 	mutex_lock(&peer_info->lock);
-	r = bus1_user_quota_check(user->id < peer_info->n_quotas ?
-				  &peer_info->quotas[user->id] : NULL,
-				  slice_size, &peer_info->pool,
-				  &peer_info->queue);
-	if (r < 0)
-		goto unlock;
-
-	r = bus1_user_quotas_ensure_allocated(&peer_info->quotas,
-					     &peer_info->n_quotas,
-					     user->id);
-	if (r < 0)
-		goto unlock;
-
-	slice = bus1_pool_alloc(&peer_info->pool, slice_size,
-				&peer_info->quotas[user->id]);
+	r = bus1_message_allocate_locked(message, peer_info, user, slice_size);
 	mutex_unlock(&peer_info->lock);
-
-	if (IS_ERR(slice)) {
-		r = PTR_ERR(slice);
-		slice = NULL;
-		goto error;
-	}
+	if (r < 0)
+		return r;
 
 	/*
 	 * Copy data into @slice. Only the real message (@length_vecs) is
@@ -393,69 +341,17 @@ bus1_transaction_instantiate(struct bus1_transaction *transaction,
 	 * in when the message is received.
 	 */
 	r = bus1_pool_write_iovec(&peer_info->pool,	/* pool to write */
-				  slice,		/* slice to write to */
+				  message->slice,	/* slice to write to */
 				  0,			/* offset into slice */
 				  transaction->vecs,	/* vectors */
 				  transaction->n_vecs,	/* #n vectors */
 				  transaction->length_vecs); /* total length */
-	if (r < 0)
-		goto error;
-
-	/* account the inflight fds */
-	if (!bus1_atomic_add_unless_greater(&user->fds_inflight,
-					    transaction->n_files,
-					    rlimit(RLIMIT_NOFILE))) {
-		r = -ETOOMANYREFS;
-		goto error;
-	}
-
-	/* link files into @entry */
-	for (i = 0; i < transaction->n_files; ++i)
-		entry->files[i] = get_file(transaction->files[i]);
-
-	/* message was fully instantiated, store data and return */
-	entry->slice = slice;
-	entry->destination_id = peer_id;
-
-	return entry;
-
-unlock:
-	mutex_unlock(&peer_info->lock);
-error:
-	if (slice) {
+	if (r < 0) {
 		mutex_lock(&peer_info->lock);
-		bus1_pool_release_kernel(&peer_info->pool, slice,
-					 &peer_info->quotas[entry->user->id]);
+		bus1_message_deallocate_locked(message, peer_info);
 		mutex_unlock(&peer_info->lock);
+		return r;
 	}
-	bus1_queue_entry_free(entry); /* fput()s entry->files[] */
-	return ERR_PTR(r);
-}
-
-static int bus1_transaction_link(struct bus1_transaction *transaction,
-				  struct bus1_queue_entry *entry)
-{
-	struct bus1_queue_entry *iter;
-	struct rb_node *prev, **slot;
-
-	WARN_ON(!RB_EMPTY_NODE(&entry->transaction.rb));
-
-	slot = &transaction->entries.rb_node;
-	prev = NULL;
-	while (*slot) {
-		prev = *slot;
-		iter = container_of(prev, struct bus1_queue_entry, transaction.rb);
-		if (entry->destination_id < iter->destination_id) {
-			slot = &prev->rb_left;
-		} else if (entry->destination_id > iter->destination_id) {
-			slot = &prev->rb_right;
-		} else /* if (entry->destination_id == iter->destination_id) */ {
-			return -ENOTUNIQ;
-		}
-	}
-
-	rb_link_node(&entry->transaction.rb, prev, slot);
-	rb_insert_color(&entry->transaction.rb, &transaction->entries);
 
 	return 0;
 }
@@ -463,7 +359,7 @@ static int bus1_transaction_link(struct bus1_transaction *transaction,
 /**
  * bus1_transaction_instantiate_for_id() - instantiate a message
  * @transaction:	transaction to work with
- * @peer_id:		destination
+ * @destination:	destination
  * @flags:		BUS1_SEND_FLAG_* to affect behavior
  *
  * Instantiate the message from the given transaction for the peer given as
@@ -476,58 +372,60 @@ static int bus1_transaction_link(struct bus1_transaction *transaction,
  */
 int bus1_transaction_instantiate_for_id(struct bus1_transaction *transaction,
 					struct bus1_user *user,
-					u64 peer_id,
+					u64 destination,
 					u64 flags)
 {
-	struct bus1_queue_entry *entry;
+	struct bus1_message *message = NULL, *iter;
+	struct rb_node *n, **slot;
 	struct bus1_peer *peer;
 	int r;
 
 	/* unknown peers are only ignored, if explicitly told so */
-	peer = bus1_peer_acquire_raw_by_id(transaction->domain, peer_id);
+	peer = bus1_peer_acquire_raw_by_id(transaction->domain, destination);
 	if (!peer)
 		return (flags & BUS1_SEND_FLAG_IGNORE_UNKNOWN) ? 0 : -ENXIO;
 
-	entry = bus1_transaction_instantiate(transaction,
-					     user,
-					     bus1_peer_dereference(peer),
-					     peer_id);
-	if (IS_ERR(entry)) {
-		r = PTR_ERR(entry);
-		entry = NULL;
+	message = bus1_message_new(transaction->n_files, 0);
+	if (IS_ERR(message)) {
+		r = PTR_ERR(message);
+		message = NULL;
 		goto error;
 	}
 
-	/* link message into transaction */
-	entry->transaction.peer = peer;
-	r = bus1_transaction_link(transaction, entry);
+	/* duplicate detection */
+	slot = &transaction->entries.rb_node;
+	n = NULL;
+	while (*slot) {
+		n = *slot;
+		iter = container_of(n, struct bus1_message, qnode.rb);
+		if (destination < iter->dd.destination) {
+			slot = &n->rb_left;
+		} else if (destination > iter->dd.destination) {
+			slot = &n->rb_right;
+		} else /* if (destination == iter->dd.destination) */ {
+			r = -ENOTUNIQ;
+			goto error;
+		}
+	}
+
+	r = bus1_transaction_instantiate(transaction, message,
+					 bus1_peer_dereference(peer), user);
 	if (r < 0)
 		goto error;
 
+	/* link into duplicate detection tree */
+	rb_link_node(&message->dd.rb, n, slot);
+	rb_insert_color(&message->dd.rb, &transaction->entries);
+	message->dd.destination = destination;
+	message->transaction.peer = peer;
 	return 0;
 
 error:
-	if (flags & BUS1_SEND_FLAG_CONVEY_ERRORS) {
+	bus1_message_free(message);
+	if (r < 0 && (flags & BUS1_SEND_FLAG_CONVEY_ERRORS)) {
 		/* XXX: convey error to @peer */
 		r = 0;
 	}
-
-	if (entry && entry->slice) {
-		struct bus1_peer_info *peer_info;
-
-		peer_info = bus1_peer_dereference(peer);
-
-		mutex_lock(&peer_info->lock);
-		bus1_pool_release_kernel(&peer_info->pool, entry->slice,
-					 &peer_info->quotas[user->id]);
-		mutex_unlock(&peer_info->lock);
-
-		entry->slice = NULL;
-		entry->transaction.peer = NULL;
-
-		bus1_queue_entry_free(entry);
-	}
-
 	bus1_peer_release_raw(peer);
 	return r;
 }
@@ -554,94 +452,118 @@ error:
  */
 void bus1_transaction_commit(struct bus1_transaction *transaction)
 {
-	struct rb_node *node, *first, *second, *t;
-	struct bus1_queue_entry *e;
-	struct bus1_peer *peer;
 	struct bus1_peer_info *peer_info;
-	struct bus1_user_quota *quota;
+	struct bus1_message *message, *t, *list;
+	struct bus1_peer *peer;
+	u64 timestamp;
 	bool wake;
-	u64 seq = 0;
 
 	/* nothing to do for empty destination sets */
 	if (RB_EMPTY_ROOT(&transaction->entries))
 		return;
 
-	/* second destination; in the unicast case, we should be using
-	 * bus1_transaction_commit_for_id() instead */
-	first = rb_first_postorder(&transaction->entries);
-	second = rb_next_postorder(first);
-	WARN_ON(!second);
+	list = NULL;
+	timestamp = transaction->timestamp;
 
 	/*
-	 * Stamp all entries with a staging sequence number, and link them into
-	 * their queues. They're marked as in-flight and cannot be unlinked by
-	 * anyone but us. We just have to make sure we keep the peer pinned.
+	 * We now have to queue all message on their respective destination
+	 * queues. This requires us to drop them from the dd-tree and rather
+	 * keep them in a single linked list (dd.rb nodes are shared with the
+	 * qnode memory). Duplicate detection is already done, so we are fine
+	 * with a single linked list.
 	 *
-	 * Note that the first entry can be skipped. It is the first entry that
-	 * is committed in the following loop, hence, there is no reason to
-	 * mark it as staging. The only requirement we have is once we commit
-	 * the first entry, all others have to be staged. This allows us to
-	 * skip the first entry, and immediately start staging with the second
-	 * entry.
+	 * Before queueing a message as staging entry in the destination queue,
+	 * we sync the remote clock with our timestamp, and possible update our
+	 * own timestamp in case we're behind. This guarantees that no peer
+	 * will see events "from the future", and also that we keep the range
+	 * we block as small as possible.
 	 *
-	 * We pick a temporary sequence number greater than all messages
-	 * (including unicast ones) delivered before the next
-	 * multicast message and smaller than the next multicast
-	 * message */
-	seq = atomic64_read(&transaction->domain_info->seq_ids) + 3;
-	WARN_ON(!(seq & 1)); /* must be odd */
-
-	for (node = second; node; node = rb_next_postorder(node)) {
-		e = container_of(node, struct bus1_queue_entry, transaction.rb);
-		peer_info = bus1_peer_dereference(e->transaction.peer);
-
-		mutex_lock(&peer_info->lock);
-		quota = &peer_info->quotas[e->user->id];
-		wake = bus1_queue_link(&peer_info->queue, e, quota, seq);
-		mutex_unlock(&peer_info->lock);
-
-		WARN_ON(wake); /* in-flight; cannot cause a wake-up */
-	}
-
-	/*
-	 * Now that all entries (but the first) are linked as in-flight, we
-	 * allocate the final sequence number for our transaction. Then  we
-	 * stamp all entries again and commit them into their respective queues.
-	 * Once we drop the peer-lock, each entry is owned by the peer and we
-	 * must not dereference it, anymore. It might get dequeued at any time.
+	 * As last step, we perform a clock tick on the remote clock, to make
+	 * sure it actually treated the message as a real unique event. And
+	 * eventually queue the message as staging entry.
 	 */
-	for (node = first;
-	     node && ((t = rb_next_postorder(node)), true);
-	     node = t) {
-		e = container_of(node, struct bus1_queue_entry, transaction.rb);
-		peer = e->transaction.peer;
-		peer_info = bus1_peer_dereference(peer);
+	rbtree_postorder_for_each_entry_safe(message, t,
+					     &transaction->entries, dd.rb) {
+		peer_info = bus1_peer_dereference(message->transaction.peer);
 
-		RB_CLEAR_NODE(&e->transaction.rb);
-		e->transaction.peer = NULL;
+		/* rb-tree is gone now, so remember all entries in a list */
+		message->transaction.next = list;
+		list = message;
 
+		/* prepare qnode for queue insertion */
+		bus1_queue_node_init(&message->qnode, true);
+
+		/* sync clocks and queue message as staging entry */
 		mutex_lock(&peer_info->lock);
-		quota = &peer_info->quotas[e->user->id];
-		if (node == first) {
-			seq = atomic64_add_return(4,
-					&transaction->domain_info->seq_ids);
-			WARN_ON(seq & 1); /* must be even */
-			wake = bus1_queue_link(&peer_info->queue,
-					       e, quota, seq);
-		} else {
-			WARN_ON(seq == 0); /* must be assigned */
-			wake = bus1_queue_relink(&peer_info->queue,
-						 e, quota, seq);
-		}
+		timestamp = bus1_queue_sync(&peer_info->queue, timestamp);
+		timestamp = bus1_queue_tick(&peer_info->queue);
+		wake = bus1_queue_stage(&peer_info->queue, &message->qnode,
+					timestamp - 1);
 		mutex_unlock(&peer_info->lock);
 
-		if (wake)
-			/* XXX: wake up peer */ ;
-
-		bus1_peer_release_raw(peer);
+		WARN_ON(wake); /* initial queueing cannot wake anything */
 	}
 
 	transaction->entries = RB_ROOT;
+	transaction->timestamp = timestamp;
+
+	/*
+	 * We now queued our message on all destinations, and we're guaranteed
+	 * that any racing message is now blocked by our staging entries.
+	 * However, to support side-channel synchronization, we must first sync
+	 * all clocks to the final commit-timestamp, before actually performing
+	 * the final commit. If we didn't do that, then between the first
+	 * commit and the last commit, we're have a short timespan that might
+	 * cause side-channel messages with lower timestamps than our own
+	 * commit. Hence, sync the clocks to at least the commit-timestamp,
+	 * *before* doing the first commit. Any side-channel message generated,
+	 * can only cause messages with a higher commit afterwards.
+	 *
+	 * This step can be skipped if side-channels should not be synced. But
+	 * we actually want to give that guarantee, so here we go..
+	 */
+	for (message = list; message; message = message->transaction.next) {
+		peer_info = bus1_peer_dereference(message->transaction.peer);
+
+		mutex_lock(&peer_info->lock);
+		bus1_queue_sync(&peer_info->queue, timestamp);
+		mutex_unlock(&peer_info->lock);
+	}
+
+	/*
+	 * Our message is queued with the *same* timestamp on all destinations.
+	 * Now do the final commit and release each message.
+	 *
+	 * _Iff_ the target queue was reset in between, then our message might
+	 * have been unlinked. In that case, we still own the message, but
+	 * should silently drop the instance. We must not treat it as failure,
+	 * but rather as an explicit drop of the receiver.
+	 */
+	while ((message = list)) {
+		list = message->transaction.next;
+		peer = message->transaction.peer;
+		peer_info = bus1_peer_dereference(peer);
+
+		message->transaction.next = NULL;
+		message->transaction.peer = NULL;
+
+		mutex_lock(&peer_info->lock);
+		if (bus1_queue_node_is_queued(&message->qnode)) {
+			/* this transfers ownerhip of @message to the queue */
+			wake = bus1_queue_stage(&peer_info->queue,
+						&message->qnode, timestamp);
+			message = NULL;
+		} else {
+			wake = false;
+			bus1_message_deallocate_locked(message, peer_info);
+		}
+		mutex_unlock(&peer_info->lock);
+
+		/* XXX: handle @wake */
+
+		bus1_message_free(message);
+		bus1_peer_release_raw(peer);
+	}
 }
 
 /**
@@ -660,12 +582,11 @@ int bus1_transaction_commit_for_id(struct bus1_transaction *transaction,
 				   u64 peer_id,
 				   u64 flags)
 {
-	struct bus1_peer *peer;
-	struct bus1_queue_entry *e;
 	struct bus1_peer_info *peer_info;
-	struct bus1_user_quota *quota;
+	struct bus1_message *message;
+	struct bus1_peer *peer;
+	u64 timestamp;
 	bool wake;
-	u64 seq;
 	int r;
 
 	/* unknown peers are only ignored, if explicitly told so */
@@ -674,31 +595,33 @@ int bus1_transaction_commit_for_id(struct bus1_transaction *transaction,
 		return (flags & BUS1_SEND_FLAG_IGNORE_UNKNOWN) ? 0 : -ENXIO;
 
 	peer_info = bus1_peer_dereference(peer);
+	timestamp = transaction->timestamp;
 
-	e = bus1_transaction_instantiate(transaction, user, peer_info, peer_id);
-	if (IS_ERR(e)) {
-		r = PTR_ERR(e);
-		e = NULL;
-		goto exit;
+	message = bus1_message_new(transaction->n_files, 0);
+	if (IS_ERR(message)) {
+		r = PTR_ERR(message);
+		message = NULL;
+		goto error;
 	}
 
-	/*
-	 * Unicast messages get a shared sequence number, strictly between the
-	 * previous and the next multicast message.
-	 */
+	r = bus1_transaction_instantiate(transaction, message, peer_info, user);
+	if (r < 0)
+		goto error;
+
 	mutex_lock(&peer_info->lock);
-	quota = &peer_info->quotas[user->id];
-	seq = atomic64_read(&transaction->domain_info->seq_ids) + 2;
-	WARN_ON(seq & 1); /* must be even */
-	wake = bus1_queue_link(&peer_info->queue, e, quota, seq);
+	timestamp = bus1_queue_sync(&peer_info->queue, timestamp);
+	timestamp = bus1_queue_tick(&peer_info->queue);
+	/* transfers message ownership to the queue */
+	wake = bus1_queue_stage(&peer_info->queue, &message->qnode, timestamp);
 	mutex_unlock(&peer_info->lock);
 
-	if (wake)
-		/* XXX: wake up peer */ ;
+	/* XXX: handle @wake */
 
-	r = 0;
+	bus1_peer_release_raw(peer);
+	return 0;
 
-exit:
+error:
+	bus1_message_free(message);
 	if (r < 0 && (flags & BUS1_SEND_FLAG_CONVEY_ERRORS)) {
 		/* XXX: convey error to @peer */
 		r = 0;

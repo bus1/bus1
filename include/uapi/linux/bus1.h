@@ -41,6 +41,7 @@
  *   EALREADY:          operation already in progress
  *   ESTALE:            referenced node has no local handles
  *   EINPROGRESS:       handle destruction already in progress
+ *   EDQUOT:            quota exceeded
  */
 
 #include <linux/ioctl.h>
