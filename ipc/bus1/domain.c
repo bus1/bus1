@@ -8,7 +8,6 @@
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
-#include <linux/atomic.h>
 #include <linux/err.h>
 #include <linux/kernel.h>
 #include <linux/mutex.h>
@@ -34,7 +33,6 @@ bus1_domain_info_new(struct user_namespace *user_ns)
 
 	mutex_init(&domain_info->lock);
 	domain_info->peer_ids = 0;
-	atomic64_set(&domain_info->seq_ids, 0);
 	idr_init(&domain_info->user_idr);
 	ida_init(&domain_info->user_ida);
 	domain_info->user_ns = get_user_ns(user_ns);

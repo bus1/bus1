@@ -16,7 +16,6 @@
  * XXX
  */
 
-#include <linux/atomic.h>
 #include <linux/idr.h>
 #include <linux/kernel.h>
 #include <linux/mutex.h>
@@ -30,7 +29,6 @@
  * struct bus1_domain_info - domain specific runtime information
  * @lock:		data lock
  * @peer_ids:		counter for peer ID allocations
- * @seq_ids:		counter for transaction ID allocations
  * @user_idr:		mapping from uids to bus1_user objects
  * @user_ida:		set of all users to compute small ids
  * @user_ns:		owning user namespace of this domain
@@ -43,7 +41,6 @@
 struct bus1_domain_info {
 	struct mutex lock;
 	u64 peer_ids;
-	atomic64_t seq_ids;
 	struct idr user_idr;
 	struct ida user_ida;
 	struct user_namespace *user_ns;
