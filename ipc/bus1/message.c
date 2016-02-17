@@ -72,7 +72,7 @@ struct bus1_message *bus1_message_free(struct bus1_message *message)
 
 	WARN_ON(message->slice);
 	WARN_ON(message->user);
-	WARN_ON(message->transaction.peer);
+	WARN_ON(message->transaction.raw_peer);
 	WARN_ON(!message->transaction.next);
 
 	for (i = 0; i < message->n_files; ++i)

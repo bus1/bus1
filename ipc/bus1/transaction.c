@@ -287,10 +287,11 @@ bus1_transaction_free(struct bus1_transaction *transaction, bool do_free)
 	/* release all in-flight queue entries and their pinned peers */
 	rbtree_postorder_for_each_entry_safe(message, t,
 					     &transaction->entries, dd.rb) {
-		peer = message->transaction.peer;
+		peer = message->transaction.raw_peer;
+		bus1_active_lockdep_acquired(&peer->active);
 		peer_info = bus1_peer_dereference(peer);
 
-		message->transaction.peer = NULL;
+		message->transaction.raw_peer = NULL;
 
 		mutex_lock(&peer_info->lock);
 		WARN_ON(bus1_queue_node_is_queued(&message->qnode));
@@ -298,7 +299,7 @@ bus1_transaction_free(struct bus1_transaction *transaction, bool do_free)
 		mutex_unlock(&peer_info->lock);
 
 		bus1_message_free(message);
-		bus1_peer_release_raw(peer);
+		bus1_peer_release(peer);
 	}
 
 	/* release message payload */
@@ -381,7 +382,7 @@ int bus1_transaction_instantiate_for_id(struct bus1_transaction *transaction,
 	int r;
 
 	/* unknown peers are only ignored, if explicitly told so */
-	peer = bus1_peer_acquire_raw_by_id(transaction->domain, destination);
+	peer = bus1_peer_acquire_by_id(transaction->domain, destination);
 	if (!peer)
 		return (flags & BUS1_SEND_FLAG_IGNORE_UNKNOWN) ? 0 : -ENXIO;
 
@@ -417,7 +418,9 @@ int bus1_transaction_instantiate_for_id(struct bus1_transaction *transaction,
 	rb_link_node(&message->dd.rb, n, slot);
 	rb_insert_color(&message->dd.rb, &transaction->entries);
 	message->dd.destination = destination;
-	message->transaction.peer = peer;
+
+	bus1_active_lockdep_released(&peer->active);
+	message->transaction.raw_peer = peer;
 	return 0;
 
 error:
@@ -426,7 +429,7 @@ error:
 		/* XXX: convey error to @peer */
 		r = 0;
 	}
-	bus1_peer_release_raw(peer);
+	bus1_peer_release(peer);
 	return r;
 }
 
@@ -484,7 +487,9 @@ void bus1_transaction_commit(struct bus1_transaction *transaction)
 	 */
 	rbtree_postorder_for_each_entry_safe(message, t,
 					     &transaction->entries, dd.rb) {
-		peer_info = bus1_peer_dereference(message->transaction.peer);
+		peer = message->transaction.raw_peer;
+		bus1_active_lockdep_acquired(&peer->active);
+		peer_info = bus1_peer_dereference(peer);
 
 		/* rb-tree is gone now, so remember all entries in a list */
 		message->transaction.next = list;
@@ -501,7 +506,8 @@ void bus1_transaction_commit(struct bus1_transaction *transaction)
 					timestamp - 1);
 		mutex_unlock(&peer_info->lock);
 
-		WARN_ON(wake); /* initial queueing cannot wake anything */
+		WARN_ON(wake); /* XXX: initial queueing cannot wake anything */
+		bus1_active_lockdep_released(&peer->active);
 	}
 
 	transaction->entries = RB_ROOT;
@@ -523,11 +529,15 @@ void bus1_transaction_commit(struct bus1_transaction *transaction)
 	 * we actually want to give that guarantee, so here we go..
 	 */
 	for (message = list; message; message = message->transaction.next) {
-		peer_info = bus1_peer_dereference(message->transaction.peer);
+		peer = message->transaction.raw_peer;
+		bus1_active_lockdep_acquired(&peer->active);
+		peer_info = bus1_peer_dereference(peer);
 
 		mutex_lock(&peer_info->lock);
 		bus1_queue_sync(&peer_info->queue, timestamp);
 		mutex_unlock(&peer_info->lock);
+
+		bus1_active_lockdep_released(&peer->active);
 	}
 
 	/*
@@ -541,11 +551,12 @@ void bus1_transaction_commit(struct bus1_transaction *transaction)
 	 */
 	while ((message = list)) {
 		list = message->transaction.next;
-		peer = message->transaction.peer;
+		peer = message->transaction.raw_peer;
+		bus1_active_lockdep_acquired(&peer->active);
 		peer_info = bus1_peer_dereference(peer);
 
 		message->transaction.next = NULL;
-		message->transaction.peer = NULL;
+		message->transaction.raw_peer = NULL;
 
 		mutex_lock(&peer_info->lock);
 		if (bus1_queue_node_is_queued(&message->qnode)) {
@@ -562,7 +573,7 @@ void bus1_transaction_commit(struct bus1_transaction *transaction)
 		/* XXX: handle @wake */
 
 		bus1_message_free(message);
-		bus1_peer_release_raw(peer);
+		bus1_peer_release(peer);
 	}
 }
 
@@ -590,7 +601,7 @@ int bus1_transaction_commit_for_id(struct bus1_transaction *transaction,
 	int r;
 
 	/* unknown peers are only ignored, if explicitly told so */
-	peer = bus1_peer_acquire_raw_by_id(transaction->domain, peer_id);
+	peer = bus1_peer_acquire_by_id(transaction->domain, peer_id);
 	if (!peer)
 		return (flags & BUS1_SEND_FLAG_IGNORE_UNKNOWN) ? 0 : -ENXIO;
 
@@ -617,7 +628,7 @@ int bus1_transaction_commit_for_id(struct bus1_transaction *transaction,
 
 	/* XXX: handle @wake */
 
-	bus1_peer_release_raw(peer);
+	bus1_peer_release(peer);
 	return 0;
 
 error:
@@ -626,6 +637,6 @@ error:
 		/* XXX: convey error to @peer */
 		r = 0;
 	}
-	bus1_peer_release_raw(peer);
+	bus1_peer_release(peer);
 	return r;
 }

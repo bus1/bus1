@@ -28,16 +28,16 @@ struct bus1_user;
 
 /**
  * struct bus1_message - message
- * @qnode:		embedded queue node
- * @dd.rb:		link into multicast tree (duplicate detection)
- * @dd.destination:	destination ID (duplicate detection)
- * @transaction.next:	message list (during transactions)
- * @transaction.peer:	pinned destination (during transactions)
- * @user:		sending user
- * @slice:		actual message data
- * @files:		passed file descriptors
- * @n_files:		number of passed file descriptors
- * @handles:		passed handles
+ * @qnode:			embedded queue node
+ * @dd.rb:			link into multicast tree (duplicate detection)
+ * @dd.destination:		destination ID (duplicate detection)
+ * @transaction.next:		message list (during transactions)
+ * @transaction.raw_peer:	pinned destination (during transactions)
+ * @user:			sending user
+ * @slice:			actual message data
+ * @files:			passed file descriptors
+ * @n_files:			number of passed file descriptors
+ * @handles:			passed handles
  */
 struct bus1_message {
 	union {
@@ -50,7 +50,7 @@ struct bus1_message {
 
 	struct {
 		struct bus1_message *next;
-		struct bus1_peer *peer;
+		struct bus1_peer *raw_peer;
 	} transaction;
 
 	struct bus1_user *user;

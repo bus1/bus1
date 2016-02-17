@@ -378,33 +378,12 @@ bool bus1_active_cleanup(struct bus1_active *active,
  */
 struct bus1_active *bus1_active_acquire(struct bus1_active *active)
 {
-	active = bus1_active_acquire_raw(active);
-#ifdef CONFIG_DEBUG_LOCK_ALLOC
-	if (active)
-		lock_acquire_shared(&active->dep_map,	/* lock */
-				    0,			/* subclass */
-				    1,			/* try-lock */
-				    NULL,		/* nest underneath */
-				    _RET_IP_);		/* IP */
-#endif
-	return active;
-}
+	if (active && atomic_inc_unless_negative(&active->count))
+		bus1_active_lockdep_acquired(active);
+	else
+		active = NULL;
 
-/**
- * bus1_active_acquire_raw() - acquire active reference
- * @active:	object to acquire active reference to, or NULL
- *
- * See bus1_active_acquire() for details. This function has the exact same
- * semantics, but has no lockdep annotations.
- *
- * Any raw acquisition must be matched with a raw release, obviously.
- *
- * Return: @active if reference was acquired, NULL if not.
- */
-struct bus1_active *bus1_active_acquire_raw(struct bus1_active *active)
-{
-	return (active && atomic_inc_unless_negative(&active->count))
-	       ? active : NULL;
+	return active;
 }
 
 /**
@@ -424,37 +403,77 @@ struct bus1_active *bus1_active_acquire_raw(struct bus1_active *active)
 struct bus1_active *bus1_active_release(struct bus1_active *active,
 					wait_queue_head_t *waitq)
 {
-#ifdef CONFIG_DEBUG_LOCK_ALLOC
-	if (active)
-		lock_release(&active->dep_map,	/* lock */
-			     1,			/* nested (no-op) */
-			     _RET_IP_);		/* instruction pointer */
-#endif
-
-	return bus1_active_release_raw(active, waitq);
-}
-
-/**
- * bus1_active_release_raw() - release active reference
- * @active:	object to release active reference of, or NULL
- * @waitq:	wait-queue linked to @active, or NULL
- *
- * See bus1_active_release() for details. This function has the exact same
- * semantics, but has no lockdep annotations.
- *
- * Any raw acquisition must be matched with a raw release, obviously.
- *
- * Return: NULL is returned.
- */
-struct bus1_active *bus1_active_release_raw(struct bus1_active *active,
-					    wait_queue_head_t *waitq)
-{
 	if (active) {
 		/* XXX: rcu_read_lock() ? */
+		bus1_active_lockdep_released(active);
 		if (atomic_dec_return(&active->count) == BUS1_ACTIVE_BIAS)
 			if (waitq)
 				wake_up(waitq);
 	}
-
 	return NULL;
 }
+
+/**
+ * bus1_active_lockdep_acquired() - acquire lockdep reader
+ * @active:	object to acquire lockdep reader of, or NULL
+ *
+ * Whenever you acquire an active reference via bus1_active_acquire(), this
+ * function is implicitly called afterwards. It enables lockdep annotations and
+ * tells lockdep that you acquired the active reference.
+ *
+ * However, lockdep cannot support arbitrary depths, hence, we allow
+ * temporarily dropping the lockdep-annotation via
+ * bus1_active_lockdep_release(), and acquiring them later again via
+ * bus1_active_lockdep_acquire().
+ *
+ * Example: If you need to pin a huge amount of objects, you would acquire each
+ *          of them individually via bus1_active_acquireq(). Then you would
+ *          perform state tracking, etc. on that object. Before you continue
+ *          with the next, you call bus1_active_lockdep_released(), to pretend
+ *          you released the lock (but you still retain your active reference).
+ *          Now you continue with pinning the next object, etc. until you
+ *          pinned all objects you need.
+ *
+ *          If you now need to access one of your pinned objects (or want to
+ *          release them eventually), you call bus1_active_lockdep_acquired()
+ *          before accessing the object. This enables the lockdep annotations
+ *          again. This cannot fail, ever. You still own the active reference
+ *          at all times.
+ *          Once you're done with the single object, you either release your
+ *          entire active reference via bus1_active_release(), or you
+ *          temporarily disable lockdep via bus1_active_lockdep_released()
+ *          again, in case you need the pinned object again later.
+ *
+ * Note that you can acquired multiple active references just fine. The only
+ * reason those lockdep helpers are provided, is if you need to acquire a
+ * *huge* amount at the same time. Lockdep is usually limited to a depths of 64
+ * so you cannot hold more locks at the same time.
+ */
+#ifdef CONFIG_DEBUG_LOCK_ALLOC
+void bus1_active_lockdep_acquired(struct bus1_active *active)
+{
+	if (active)
+		lock_acquire_shared(&active->dep_map,	/* lock */
+				    0,			/* subclass */
+				    1,			/* try-lock */
+				    NULL,		/* nest underneath */
+				    _RET_IP_);		/* IP */
+}
+#endif
+
+/**
+ * bus1_active_lockdep_released() - release lockdep reader
+ * @active:	object to release lockdep reader of, or NULL
+ *
+ * This is the counterpart of bus1_active_lockdep_acquired(). See its
+ * documentation for details.
+ */
+#ifdef CONFIG_DEBUG_LOCK_ALLOC
+void bus1_active_lockdep_released(struct bus1_active *active)
+{
+	if (active)
+		lock_release(&active->dep_map,	/* lock */
+			     1,			/* nested (no-op) */
+			     _RET_IP_);		/* instruction pointer */
+}
+#endif

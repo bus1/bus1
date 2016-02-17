@@ -80,11 +80,8 @@ bool bus1_active_cleanup(struct bus1_active *active,
 		                         void *userdata),
 			 void *userdata);
 struct bus1_active *bus1_active_acquire(struct bus1_active *active);
-struct bus1_active *bus1_active_acquire_raw(struct bus1_active *active);
 struct bus1_active *bus1_active_release(struct bus1_active *active,
 					wait_queue_head_t *waitq);
-struct bus1_active *bus1_active_release_raw(struct bus1_active *active,
-					    wait_queue_head_t *waitq);
 
 #ifdef CONFIG_DEBUG_LOCK_ALLOC
 #  define bus1_active_init(_active) 					\
@@ -94,8 +91,12 @@ struct bus1_active *bus1_active_release_raw(struct bus1_active *active,
 				 &bus1_active_lock_key, 0);		\
 		bus1_active_init_private(_active);			\
 	})
+void bus1_active_lockdep_acquired(struct bus1_active *active);
+void bus1_active_lockdep_released(struct bus1_active *active);
 #else
 #  define bus1_active_init(_active) bus1_active_init_private(_active)
+static inline void bus1_active_lockdep_acquired(struct bus1_active *active) { }
+static inline void bus1_active_lockdep_released(struct bus1_active *active) { }
 #endif
 
 #endif /* __BUS1_ACTIVE_H */
