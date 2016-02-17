@@ -278,6 +278,7 @@ bus1_transaction_free(struct bus1_transaction *transaction, bool do_free)
 {
 	struct bus1_message *message, *t;
 	struct bus1_peer_info *peer_info;
+	struct bus1_handle *handle;
 	struct bus1_peer *peer;
 	size_t i;
 
@@ -287,10 +288,12 @@ bus1_transaction_free(struct bus1_transaction *transaction, bool do_free)
 	/* release all in-flight queue entries and their pinned peers */
 	rbtree_postorder_for_each_entry_safe(message, t,
 					     &transaction->entries, dd.rb) {
+		handle = message->transaction.handle;
 		peer = message->transaction.raw_peer;
 		bus1_active_lockdep_acquired(&peer->active);
 		peer_info = bus1_peer_dereference(peer);
 
+		message->transaction.handle = NULL;
 		message->transaction.raw_peer = NULL;
 
 		mutex_lock(&peer_info->lock);
@@ -299,6 +302,8 @@ bus1_transaction_free(struct bus1_transaction *transaction, bool do_free)
 		mutex_unlock(&peer_info->lock);
 
 		bus1_message_free(message);
+		bus1_handle_release_pinned(handle, peer_info);
+		bus1_handle_unref(handle);
 		bus1_peer_release(peer);
 	}
 
@@ -377,14 +382,23 @@ int bus1_transaction_instantiate_for_id(struct bus1_transaction *transaction,
 					u64 flags)
 {
 	struct bus1_message *message = NULL, *iter;
+	struct bus1_peer_info *peer_info;
 	struct rb_node *n, **slot;
+	struct bus1_handle *handle;
 	struct bus1_peer *peer;
 	int r;
 
-	/* unknown peers are only ignored, if explicitly told so */
-	peer = bus1_peer_acquire_by_id(transaction->domain, destination);
-	if (!peer)
+	/* unknown handles are only ignored, if explicitly told so */
+	handle = bus1_handle_find_by_id(transaction->peer_info, destination);
+	if (handle) {
+		peer = bus1_handle_pin(handle);
+		if (!peer)
+			handle = bus1_handle_unref(handle);
+	}
+	if (!handle)
 		return (flags & BUS1_SEND_FLAG_IGNORE_UNKNOWN) ? 0 : -ENXIO;
+
+	peer_info = bus1_peer_dereference(peer);
 
 	message = bus1_message_new(transaction->n_files, 0);
 	if (IS_ERR(message)) {
@@ -419,8 +433,10 @@ int bus1_transaction_instantiate_for_id(struct bus1_transaction *transaction,
 	rb_insert_color(&message->dd.rb, &transaction->entries);
 	message->dd.destination = destination;
 
-	bus1_active_lockdep_released(&peer->active);
+	message->transaction.handle = handle;
 	message->transaction.raw_peer = peer;
+	bus1_active_lockdep_released(&peer->active);
+
 	return 0;
 
 error:
@@ -429,6 +445,8 @@ error:
 		/* XXX: convey error to @peer */
 		r = 0;
 	}
+	bus1_handle_release_pinned(handle, peer_info);
+	bus1_handle_unref(handle);
 	bus1_peer_release(peer);
 	return r;
 }
@@ -457,6 +475,7 @@ void bus1_transaction_commit(struct bus1_transaction *transaction)
 {
 	struct bus1_peer_info *peer_info;
 	struct bus1_message *message, *t, *list;
+	struct bus1_handle *handle;
 	struct bus1_peer *peer;
 	u64 timestamp;
 	bool wake;
@@ -551,11 +570,13 @@ void bus1_transaction_commit(struct bus1_transaction *transaction)
 	 */
 	while ((message = list)) {
 		list = message->transaction.next;
+		handle = message->transaction.handle;
 		peer = message->transaction.raw_peer;
 		bus1_active_lockdep_acquired(&peer->active);
 		peer_info = bus1_peer_dereference(peer);
 
 		message->transaction.next = NULL;
+		message->transaction.handle = NULL;
 		message->transaction.raw_peer = NULL;
 
 		mutex_lock(&peer_info->lock);
@@ -573,6 +594,8 @@ void bus1_transaction_commit(struct bus1_transaction *transaction)
 		/* XXX: handle @wake */
 
 		bus1_message_free(message);
+		bus1_handle_release_pinned(handle, peer_info);
+		bus1_handle_unref(handle);
 		bus1_peer_release(peer);
 	}
 }
@@ -580,7 +603,7 @@ void bus1_transaction_commit(struct bus1_transaction *transaction)
 /**
  * bus1_transaction_commit_for_id() - instantiate and commit unicast
  * @transaction:	transaction to use
- * @peer_id:		destination ID
+ * @destination:	destination ID
  * @flags:		BUS1_CMD_SEND_* flags
  *
  * This is a fast-path for unicast messages. It is equivalent to calling
@@ -590,19 +613,25 @@ void bus1_transaction_commit(struct bus1_transaction *transaction)
  */
 int bus1_transaction_commit_for_id(struct bus1_transaction *transaction,
 				   struct bus1_user *user,
-				   u64 peer_id,
+				   u64 destination,
 				   u64 flags)
 {
 	struct bus1_peer_info *peer_info;
 	struct bus1_message *message;
+	struct bus1_handle *handle;
 	struct bus1_peer *peer;
 	u64 timestamp;
 	bool wake;
 	int r;
 
-	/* unknown peers are only ignored, if explicitly told so */
-	peer = bus1_peer_acquire_by_id(transaction->domain, peer_id);
-	if (!peer)
+	/* unknown handles are only ignored, if explicitly told so */
+	handle = bus1_handle_find_by_id(transaction->peer_info, destination);
+	if (handle) {
+		peer = bus1_handle_pin(handle);
+		if (!peer)
+			handle = bus1_handle_unref(handle);
+	}
+	if (!handle)
 		return (flags & BUS1_SEND_FLAG_IGNORE_UNKNOWN) ? 0 : -ENXIO;
 
 	peer_info = bus1_peer_dereference(peer);
@@ -612,12 +641,12 @@ int bus1_transaction_commit_for_id(struct bus1_transaction *transaction,
 	if (IS_ERR(message)) {
 		r = PTR_ERR(message);
 		message = NULL;
-		goto error;
+		goto exit;
 	}
 
 	r = bus1_transaction_instantiate(transaction, message, peer_info, user);
 	if (r < 0)
-		goto error;
+		goto exit;
 
 	mutex_lock(&peer_info->lock);
 	timestamp = bus1_queue_sync(&peer_info->queue, timestamp);
@@ -628,15 +657,17 @@ int bus1_transaction_commit_for_id(struct bus1_transaction *transaction,
 
 	/* XXX: handle @wake */
 
-	bus1_peer_release(peer);
-	return 0;
+	message = 0;
+	r = 0;
 
-error:
+exit:
 	bus1_message_free(message);
 	if (r < 0 && (flags & BUS1_SEND_FLAG_CONVEY_ERRORS)) {
 		/* XXX: convey error to @peer */
 		r = 0;
 	}
+	bus1_handle_release_pinned(handle, peer_info);
+	bus1_handle_unref(handle);
 	bus1_peer_release(peer);
 	return r;
 }

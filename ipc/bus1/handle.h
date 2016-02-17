@@ -192,6 +192,7 @@ struct bus1_handle *bus1_handle_acquire(struct bus1_handle *handle);
 struct bus1_handle *bus1_handle_release(struct bus1_handle *handle);
 struct bus1_handle *bus1_handle_release_pinned(struct bus1_handle *handle,
 					struct bus1_peer_info *peer_info);
+struct bus1_peer *bus1_handle_pin(struct bus1_handle *handle);
 bool bus1_handle_attach(struct bus1_handle *handle, struct bus1_peer *holder);
 bool bus1_handle_attach_unlocked(struct bus1_handle *handle,
 				 struct bus1_peer *holder);

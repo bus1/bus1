@@ -21,8 +21,10 @@
 #include "handle.h"
 #include "queue.h"
 
+struct bus1_handle;
 struct bus1_message;
 struct bus1_peer;
+struct bus1_peer_info;
 struct bus1_pool_slice;
 struct bus1_user;
 
@@ -32,6 +34,7 @@ struct bus1_user;
  * @dd.rb:			link into multicast tree (duplicate detection)
  * @dd.destination:		destination ID (duplicate detection)
  * @transaction.next:		message list (during transactions)
+ * @transaction.handle:		pinned handle (during transactions)
  * @transaction.raw_peer:	pinned destination (during transactions)
  * @user:			sending user
  * @slice:			actual message data
@@ -50,6 +53,7 @@ struct bus1_message {
 
 	struct {
 		struct bus1_message *next;
+		struct bus1_handle *handle;
 		struct bus1_peer *raw_peer;
 	} transaction;
 
