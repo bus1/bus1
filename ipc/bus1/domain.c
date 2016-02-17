@@ -157,7 +157,6 @@ static void bus1_domain_cleanup(struct bus1_active *active, void *userdata)
 void bus1_domain_teardown(struct bus1_domain *domain)
 {
 	struct bus1_peer *peer;
-	struct rb_node *n;
 
 	/*
 	 * This tears down a whole domain, in a synchronous fashion. This is

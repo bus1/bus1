@@ -434,7 +434,7 @@ bus1_handle_unlock_peer(struct bus1_peer *peer,
 static void bus1_handle_unlink_rb(struct bus1_handle *handle,
 				  struct bus1_peer_info *peer_info)
 {
-	lockdep_assert_held(peer_info->lock);
+	lockdep_assert_held(&peer_info->lock);
 
 	/*
 	 * @rb_node *and* @rb_id are unlinked, in case we were never installed.

@@ -942,7 +942,7 @@ static int bus1_peer_ioctl_send(struct bus1_peer *peer,
 	size_t i;
 	int r;
 
-	lockdep_assert_held(peer->active);
+	lockdep_assert_held(&peer->active);
 
 	r = bus1_import_fixed_ioctl(&param, arg, sizeof(param));
 	if (r < 0)
