@@ -18,6 +18,7 @@
 
 #include <linux/idr.h>
 #include <linux/kernel.h>
+#include <linux/list.h>
 #include <linux/mutex.h>
 #include <linux/rbtree.h>
 #include <linux/seqlock.h>
@@ -55,7 +56,7 @@ struct bus1_domain_info {
  * @info:		underlying domain information
  * @n_peers:		number of linked peers
  * @n_names:		number of linked names
- * @map_peers:		linked peers
+ * @list_peers:		linked peers
  * @map_names:		linked names
  *
  * This object represents a handle to a domain. The handle always outlives the
@@ -76,7 +77,7 @@ struct bus1_domain {
 	struct bus1_domain_info *info;
 	size_t n_peers;
 	size_t n_names;
-	struct rb_root map_peers;
+	struct list_head list_peers;
 	struct rb_root map_names;
 };
 

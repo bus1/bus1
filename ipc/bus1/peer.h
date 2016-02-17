@@ -71,8 +71,7 @@ struct bus1_peer_info {
  * @active:		active references
  * @info:		underlying peer information
  * @names:		owned names
- * @rb:			link into domain
- * @id:			peer ID
+ * @link_domain:	link into domain
  */
 struct bus1_peer {
 	union {
@@ -83,8 +82,7 @@ struct bus1_peer {
 	struct bus1_active active;
 	struct bus1_peer_info __rcu *info;
 	struct bus1_peer_name *names;
-	struct rb_node rb;
-	u64 id;
+	struct list_head link_domain;
 };
 
 struct bus1_peer *bus1_peer_new(void);
@@ -93,7 +91,6 @@ int bus1_peer_teardown(struct bus1_peer *peer, struct bus1_domain *domain);
 void bus1_peer_teardown_domain(struct bus1_peer *peer,
 			       struct bus1_domain *domain);
 struct bus1_peer *bus1_peer_acquire(struct bus1_peer *peer);
-struct bus1_peer *bus1_peer_acquire_by_id(struct bus1_domain *domain, u64 id);
 struct bus1_peer *bus1_peer_release(struct bus1_peer *peer);
 struct bus1_peer_info *bus1_peer_dereference(struct bus1_peer *peer);
 void bus1_peer_wake(struct bus1_peer *peer);

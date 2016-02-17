@@ -10,6 +10,7 @@
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 #include <linux/err.h>
 #include <linux/kernel.h>
+#include <linux/list.h>
 #include <linux/mutex.h>
 #include <linux/rbtree.h>
 #include <linux/rcupdate.h>
@@ -84,7 +85,7 @@ struct bus1_domain *bus1_domain_new(struct user_namespace *user_ns)
 	domain->info = NULL;
 	domain->n_peers = 0;
 	domain->n_names = 0;
-	domain->map_peers = RB_ROOT;
+	INIT_LIST_HEAD(&domain->list_peers);
 	domain->map_names = RB_ROOT;
 
 	/* domains are implicitly activated during allocation */
@@ -122,7 +123,7 @@ struct bus1_domain *bus1_domain_free(struct bus1_domain *domain)
 		return NULL;
 
 	WARN_ON(!RB_EMPTY_ROOT(&domain->map_names));
-	WARN_ON(!RB_EMPTY_ROOT(&domain->map_peers));
+	WARN_ON(!list_empty(&domain->list_peers));
 	WARN_ON(domain->n_names > 0);
 	WARN_ON(domain->n_peers > 0);
 	WARN_ON(domain->info);
@@ -178,21 +179,20 @@ void bus1_domain_teardown(struct bus1_domain *domain)
 
 	mutex_lock(&domain->lock);
 
-	for (n = rb_first(&domain->map_peers); n; n = rb_next(n)) {
-		peer = container_of(n, struct bus1_peer, rb);
+	list_for_each_entry(peer, &domain->list_peers, link_domain) {
 		bus1_active_deactivate(&peer->active);
 		bus1_active_drain(&peer->active, &peer->waitq);
 	}
 
 	write_seqcount_begin(&domain->seqcount);
-	for (n = rb_first(&domain->map_peers); n; n = rb_next(n)) {
-		peer = container_of(n, struct bus1_peer, rb);
+	while ((peer = list_first_entry_or_null(&domain->list_peers,
+						struct bus1_peer,
+						link_domain)))
 		bus1_peer_teardown_domain(peer, domain);
-	}
+
 	WARN_ON(!RB_EMPTY_ROOT(&domain->map_names));
 	WARN_ON(domain->n_names > 0);
 	WARN_ON(domain->n_peers > 0);
-	domain->map_peers = RB_ROOT;
 	write_seqcount_end(&domain->seqcount);
 
 	mutex_unlock(&domain->lock);
