@@ -1253,7 +1253,7 @@ static int bus1_handle_batch_create(struct bus1_handle_batch *batch,
 	while (n_entries > 0) {
 		if (n_entries < BUS1_HANDLE_BATCH_SIZE) {
 			e = kmalloc(sizeof(*e) * n_entries, GFP_KERNEL);
-			if (e)
+			if (!e)
 				return -ENOMEM;
 
 			slot->next = e;
