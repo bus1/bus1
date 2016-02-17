@@ -525,7 +525,9 @@ void bus1_transaction_commit(struct bus1_transaction *transaction)
 					timestamp - 1);
 		mutex_unlock(&peer_info->lock);
 
-		WARN_ON(wake); /* XXX: initial queueing cannot wake anything */
+		if (wake)
+			bus1_peer_wake(peer);
+
 		bus1_active_lockdep_released(&peer->active);
 	}
 
@@ -591,7 +593,8 @@ void bus1_transaction_commit(struct bus1_transaction *transaction)
 		}
 		mutex_unlock(&peer_info->lock);
 
-		/* XXX: handle @wake */
+		if (wake)
+			bus1_peer_wake(peer);
 
 		bus1_message_free(message);
 		bus1_handle_release_pinned(handle, peer_info);
@@ -655,7 +658,8 @@ int bus1_transaction_commit_for_id(struct bus1_transaction *transaction,
 	wake = bus1_queue_stage(&peer_info->queue, &message->qnode, timestamp);
 	mutex_unlock(&peer_info->lock);
 
-	/* XXX: handle @wake */
+	if (wake)
+		bus1_peer_wake(peer);
 
 	message = 0;
 	r = 0;

@@ -573,6 +573,17 @@ struct bus1_peer_info *bus1_peer_dereference(struct bus1_peer *peer)
 					 lockdep_is_held(&peer->active));
 }
 
+/**
+ * bus1_peer_wake() - wake up peer
+ * @peer:		peer to wake up
+ *
+ * This wakes up a peer and notifies user-space about poll() events.
+ */
+void bus1_peer_wake(struct bus1_peer *peer)
+{
+	wake_up_interruptible(&peer->waitq);
+}
+
 /*
  * Check if the string is a name of the peer.
  *
