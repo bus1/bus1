@@ -17,7 +17,6 @@
 #include <linux/slab.h>
 #include <linux/uaccess.h>
 #include <net/sock.h>
-#include "filesystem.h"
 #include "main.h"
 #include "util.h"
 
@@ -231,7 +230,7 @@ struct file *bus1_import_fd(const u32 __user *user_fd)
 
 	if (f->f_mode & FMODE_PATH)
 		ret = f; /* O_PATH is always allowed */
-	else if (f->f_op == &bus1_fs_bus_fops)
+	else if (f->f_op == &bus1_fops)
 		ret = ERR_PTR(-EOPNOTSUPP); /* disallow bus1 recursion */
 	else if (sock && sock->sk && sock->ops && sock->ops->family == PF_UNIX)
 		ret = ERR_PTR(-EOPNOTSUPP); /* disallow UDS recursion */

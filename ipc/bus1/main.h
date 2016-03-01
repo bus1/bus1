@@ -42,4 +42,6 @@
 #define BUS1_IOCTL_MAX_SIZE (4096)
 #define BUS1_MESSAGES_MAX (1024)
 
+extern const struct file_operations bus1_fops;
+
 #endif /* __BUS1_MAIN_H */

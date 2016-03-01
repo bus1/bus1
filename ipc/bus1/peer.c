@@ -273,7 +273,6 @@ static int bus1_peer_connect_new(struct bus1_peer *peer,
 				 struct bus1_cmd_connect *param)
 {
 	struct bus1_peer_info *peer_info;
-	int r;
 
 	lockdep_assert_held(&peer->rwlock);
 
