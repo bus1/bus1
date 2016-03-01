@@ -24,7 +24,6 @@
 #include <linux/sched.h>
 #include <linux/slab.h>
 #include "active.h"
-#include "domain.h"
 #include "filesystem.h"
 #include "peer.h"
 #include "queue.h"
@@ -46,25 +45,14 @@ static struct inode *bus1_fs_inode_get(struct super_block *sb,
 
 static int bus1_fs_bus_fop_open(struct inode *inode, struct file *file)
 {
-	struct bus1_domain *domain = inode->i_sb->s_fs_info;
 	struct bus1_peer *peer;
-	int r;
-
-	if (!bus1_domain_acquire(domain))
-		return -ESHUTDOWN;
 
 	peer = bus1_peer_new();
-	if (IS_ERR(peer)) {
-		r = PTR_ERR(peer);
-		goto exit;
-	}
+	if (IS_ERR(peer))
+		return PTR_ERR(peer);
 
 	file->private_data = peer;
-	r = 0;
-
-exit:
-	bus1_domain_release(domain);
-	return r;
+	return 0;
 }
 
 static int bus1_fs_bus_fop_release(struct inode *inode, struct file *file)
@@ -90,12 +78,12 @@ static unsigned int bus1_fs_bus_fop_poll(struct file *file,
 	 * If the peer is still in state NEW, then CONNECT hasn't been called
 	 * and the peer is unused. Return no event at all.
 	 * If the peer is not NEW, then CONNECT *was* called. We then check
-	 * whether it was deactivated, yet. In that case, the peer is dead
-	 * (either via DISCONNECT or domain teardown). Lastly, we dereference
-	 * the peer object (which is rcu-protected). It might be NULL during a
-	 * racing DISCONNECT (_very_ unlikely, but lets be safe). If it is not
-	 * NULL, the peer is live and active, so it is at least writable. Check
-	 * if the queue is non-empty, and then also mark it as readable.
+	 * whether it was deactivated, yet. In that case, the peer is dead.
+	 * Lastly, we dereference the peer object (which is rcu-protected). It
+	 * might be NULL during a racing DISCONNECT (_very_ unlikely, but lets
+	 * be safe). If it is not NULL, the peer is live and active, so it is
+	 * at least writable. Check if the queue is non-empty, and then also
+	 * mark it as readable.
 	 */
 	rcu_read_lock();
 	if (!bus1_active_is_new(&peer->active)) {
@@ -182,11 +170,6 @@ static const struct inode_operations bus1_fs_bus_iops = {
 
 static int bus1_fs_dir_fop_iterate(struct file *file, struct dir_context *ctx)
 {
-	struct bus1_domain *domain = file_inode(file)->i_sb->s_fs_info;
-
-	if (!bus1_domain_acquire(domain))
-		return -ESHUTDOWN;
-
 	/*
 	 * There is only a single directory per mount, hence, it must be the
 	 * root directory. Inside of the root directory, we have 3 entries:
@@ -196,17 +179,14 @@ static int bus1_fs_dir_fop_iterate(struct file *file, struct dir_context *ctx)
 	WARN_ON(file->f_path.dentry != file->f_path.dentry->d_sb->s_root);
 
 	if (!dir_emit_dots(file, ctx))
-		goto exit;
+		return 0;
 	if (ctx->pos == 2) {
 		if (!dir_emit(ctx, "bus", 3, BUS1_FS_INO_BUS, DT_REG))
-			goto exit;
+			return 0;
 		ctx->pos = 3;
 	}
 
 	ctx->pos = INT_MAX;
-
-exit:
-	bus1_domain_release(domain);
 	return 0;
 }
 
@@ -235,12 +215,8 @@ static struct dentry *bus1_fs_dir_iop_lookup(struct inode *dir,
 					     struct dentry *dentry,
 					     unsigned int flags)
 {
-	struct bus1_domain *domain = dir->i_sb->s_fs_info;
 	struct dentry *old = NULL;
 	struct inode *inode;
-
-	if (!bus1_domain_acquire(domain))
-		return ERR_PTR(-ESHUTDOWN);
 
 	if (!strcmp(dentry->d_name.name, "bus")) {
 		inode = bus1_fs_inode_get(dir->i_sb, BUS1_FS_INO_BUS);
@@ -250,38 +226,12 @@ static struct dentry *bus1_fs_dir_iop_lookup(struct inode *dir,
 			old = d_splice_alias(inode, dentry);
 	}
 
-	bus1_domain_release(domain);
 	return old;
-}
-
-static int bus1_fs_dir_iop_unlink(struct inode *dir, struct dentry *dentry)
-{
-	struct bus1_domain *domain = dir->i_sb->s_fs_info;
-
-	/*
-	 * An unlink() on the `bus' file causes a full, synchronous teardown of
-	 * the domain. We only provide this for debug builds, so we can test
-	 * the teardown properly. On production builds, it is always rejected
-	 * with EPERM (as if .unlink was NULL).
-	 */
-
-	if (!strcmp(KBUILD_MODNAME, "bus1"))
-		return -EPERM;
-	if (strcmp(dentry->d_name.name, "bus"))
-		return -EPERM;
-	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
-
-	bus1_domain_teardown(domain);
-	clear_nlink(d_inode(dentry));
-
-	return 0;
 }
 
 static const struct inode_operations bus1_fs_dir_iops = {
 	.permission	= generic_permission,
 	.lookup		= bus1_fs_dir_iop_lookup,
-	.unlink		= bus1_fs_dir_iop_unlink,
 };
 
 /*
@@ -329,23 +279,7 @@ static struct inode *bus1_fs_inode_get(struct super_block *sb,
  * Superblocks
  */
 
-static int bus1_fs_super_dop_revalidate(struct dentry *dentry,
-					unsigned int flags)
-{
-	struct bus1_domain *domain = dentry->d_sb->s_fs_info;
-
-	/*
-	 * Revalidation of cached entries is simple. Since all mounts are
-	 * static, the only invalidation that can happen is if the whole mount
-	 * is deactivated. In that case *anything* is invalid and will never
-	 * become valid again.
-	 */
-
-	return bus1_active_is_active(&domain->active);
-}
-
 static const struct dentry_operations bus1_fs_super_dops = {
-	.d_revalidate	= bus1_fs_super_dop_revalidate,
 };
 
 static const struct super_operations bus1_fs_super_sops = {
@@ -379,48 +313,19 @@ static int bus1_fs_super_fill(struct super_block *sb)
 	return 0;
 }
 
-static void bus1_fs_super_kill(struct super_block *sb)
-{
-	struct bus1_domain *domain = sb->s_fs_info;
-
-	if (domain)
-		bus1_domain_teardown(domain);
-	kill_anon_super(sb);
-	bus1_domain_free(domain);
-}
-
-static int bus1_fs_super_set(struct super_block *sb, void *data)
-{
-	int ret;
-
-	ret = set_anon_super(sb, data);
-	if (!ret)
-		sb->s_fs_info = data;
-
-	return ret;
-}
-
 static struct dentry *bus1_fs_super_mount(struct file_system_type *fs_type,
 					  int flags,
 					  const char *dev_name,
 					  void *data)
 {
-	struct bus1_domain *domain;
 	struct super_block *sb;
 	int ret;
 
-	domain = bus1_domain_new();
-	if (IS_ERR(domain))
-		return ERR_CAST(domain);
-
-	sb = sget(&bus1_fs_type, NULL, bus1_fs_super_set, flags, domain);
-	if (IS_ERR(sb)) {
-		bus1_domain_teardown(domain);
-		bus1_domain_free(domain);
+	sb = sget(&bus1_fs_type, NULL, set_anon_super, flags, NULL);
+	if (IS_ERR(sb))
 		return ERR_CAST(sb);
-	}
 
-	WARN_ON(sb->s_fs_info != domain);
+	WARN_ON(sb->s_fs_info);
 	WARN_ON(sb->s_root);
 
 	ret = bus1_fs_super_fill(sb);
@@ -437,7 +342,7 @@ static struct file_system_type bus1_fs_type = {
 	.name		= KBUILD_MODNAME "fs",
 	.owner		= THIS_MODULE,
 	.mount		= bus1_fs_super_mount,
-	.kill_sb	= bus1_fs_super_kill,
+	.kill_sb	= kill_anon_super,
 	.fs_flags	= FS_USERNS_MOUNT,
 };
 
