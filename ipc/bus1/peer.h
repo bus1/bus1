@@ -30,7 +30,6 @@
 #include "user.h"
 
 struct bus1_domain;
-struct bus1_peer_name;
 
 /**
  * struct bus1_peer_info - peer specific runtime information
@@ -70,7 +69,6 @@ struct bus1_peer_info {
  * @waitq:		peer wide wait queue
  * @active:		active references
  * @info:		underlying peer information
- * @names:		owned names
  * @link_domain:	link into domain
  */
 struct bus1_peer {
@@ -81,7 +79,6 @@ struct bus1_peer {
 	wait_queue_head_t waitq;
 	struct bus1_active active;
 	struct bus1_peer_info __rcu *info;
-	struct bus1_peer_name *names;
 	struct list_head link_domain;
 };
 

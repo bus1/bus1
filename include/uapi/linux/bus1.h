@@ -70,13 +70,6 @@ struct bus1_cmd_connect {
 	char names[];
 } __attribute__((__aligned__(8)));
 
-struct bus1_cmd_resolve {
-	__u64 size;
-	__u64 flags;
-	__u64 id;
-	char name[];
-} __attribute__((__aligned__(8)));
-
 enum {
 	BUS1_SEND_FLAG_IGNORE_UNKNOWN	= 1ULL <<  0,
 	BUS1_SEND_FLAG_CONVEY_ERRORS	= 1ULL <<  1,
@@ -113,8 +106,6 @@ enum {
 						__u64),
 	BUS1_CMD_SLICE_RELEASE		= _IOWR(BUS1_IOCTL_MAGIC, 0x02,
 						__u64),
-	BUS1_CMD_RESOLVE		= _IOWR(BUS1_IOCTL_MAGIC, 0x03,
-						struct bus1_cmd_resolve),
 	BUS1_CMD_SEND			= _IOWR(BUS1_IOCTL_MAGIC, 0x06,
 						struct bus1_cmd_send),
 	BUS1_CMD_RECV			= _IOWR(BUS1_IOCTL_MAGIC, 0x07,

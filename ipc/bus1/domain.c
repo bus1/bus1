@@ -16,15 +16,13 @@
 #include <linux/rcupdate.h>
 #include <linux/seqlock.h>
 #include <linux/slab.h>
-#include <linux/user_namespace.h>
 #include <linux/wait.h>
 #include "active.h"
 #include "domain.h"
 #include "peer.h"
 #include "user.h"
 
-static struct bus1_domain_info *
-bus1_domain_info_new(struct user_namespace *user_ns)
+static struct bus1_domain_info *bus1_domain_info_new(void)
 {
 	struct bus1_domain_info *domain_info;
 
@@ -36,7 +34,6 @@ bus1_domain_info_new(struct user_namespace *user_ns)
 	domain_info->peer_ids = 0;
 	idr_init(&domain_info->user_idr);
 	ida_init(&domain_info->user_ida);
-	domain_info->user_ns = get_user_ns(user_ns);
 
 	return domain_info;
 }
@@ -51,7 +48,6 @@ bus1_domain_info_free(struct bus1_domain_info *domain_info)
 
 	idr_destroy(&domain_info->user_idr);
 	ida_destroy(&domain_info->user_ida);
-	put_user_ns(domain_info->user_ns);
 	kfree(domain_info);
 
 	return NULL;
@@ -59,7 +55,6 @@ bus1_domain_info_free(struct bus1_domain_info *domain_info)
 
 /**
  * bus1_domain_new() - allocate new domain
- * @user_ns:	user namespace to create domain in
  *
  * Allocate a new, unused domain. On return, the caller will be the only
  * context that can access the domain, and as such has exclusive ownership.
@@ -69,7 +64,7 @@ bus1_domain_info_free(struct bus1_domain_info *domain_info)
  *
  * Return: Pointer to object, ERR_PTR on failure.
  */
-struct bus1_domain *bus1_domain_new(struct user_namespace *user_ns)
+struct bus1_domain *bus1_domain_new(void)
 {
 	struct bus1_domain *domain;
 	int r;
@@ -84,12 +79,10 @@ struct bus1_domain *bus1_domain_new(struct user_namespace *user_ns)
 	init_waitqueue_head(&domain->waitq);
 	domain->info = NULL;
 	domain->n_peers = 0;
-	domain->n_names = 0;
 	INIT_LIST_HEAD(&domain->list_peers);
-	domain->map_names = RB_ROOT;
 
 	/* domains are implicitly activated during allocation */
-	domain->info = bus1_domain_info_new(user_ns);
+	domain->info = bus1_domain_info_new();
 	if (IS_ERR(domain->info)) {
 		r = PTR_ERR(domain->info);
 		domain->info = NULL;
@@ -122,9 +115,7 @@ struct bus1_domain *bus1_domain_free(struct bus1_domain *domain)
 	if (!domain)
 		return NULL;
 
-	WARN_ON(!RB_EMPTY_ROOT(&domain->map_names));
 	WARN_ON(!list_empty(&domain->list_peers));
-	WARN_ON(domain->n_names > 0);
 	WARN_ON(domain->n_peers > 0);
 	WARN_ON(domain->info);
 	bus1_active_destroy(&domain->active);
@@ -189,8 +180,6 @@ void bus1_domain_teardown(struct bus1_domain *domain)
 						link_domain)))
 		bus1_peer_teardown_domain(peer, domain);
 
-	WARN_ON(!RB_EMPTY_ROOT(&domain->map_names));
-	WARN_ON(domain->n_names > 0);
 	WARN_ON(domain->n_peers > 0);
 	write_seqcount_end(&domain->seqcount);
 

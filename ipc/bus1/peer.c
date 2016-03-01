@@ -32,16 +32,6 @@
 #include "user.h"
 #include "util.h"
 
-struct bus1_peer_name {
-	union {
-		struct rcu_head rcu;
-		struct bus1_peer_name *next;
-	};
-	struct bus1_peer *peer;
-	struct rb_node rb;
-	char name[];
-};
-
 static void bus1_peer_info_reset(struct bus1_peer_info *peer_info)
 {
 	struct bus1_queue_node *node, *t;
@@ -129,94 +119,6 @@ error:
 	return ERR_PTR(r);
 }
 
-static struct bus1_peer_name *
-bus1_peer_name_new(const char *name, struct bus1_peer *peer)
-{
-	struct bus1_peer_name *peer_name;
-	size_t namelen;
-
-	if (WARN_ON(!peer))
-		return ERR_PTR(-EINVAL);
-
-	namelen = strlen(name) + 1;
-	if (namelen < 2 || namelen > BUS1_NAME_MAX_SIZE)
-		return ERR_PTR(-EMSGSIZE);
-
-	peer_name = kmalloc(sizeof(*peer_name) + namelen, GFP_KERNEL);
-	if (!peer_name)
-		return ERR_PTR(-ENOMEM);
-
-	peer_name->next = NULL;
-	peer_name->peer = peer;
-	RB_CLEAR_NODE(&peer_name->rb);
-	memcpy(peer_name->name, name, namelen);
-
-	return peer_name;
-}
-
-static struct bus1_peer_name *
-bus1_peer_name_free(struct bus1_peer_name *peer_name)
-{
-	if (!peer_name)
-		return NULL;
-
-	WARN_ON(!RB_EMPTY_NODE(&peer_name->rb));
-	kfree_rcu(peer_name, rcu);
-
-	return NULL;
-}
-
-static int bus1_peer_name_add(struct bus1_peer_name *peer_name,
-			      struct bus1_domain *domain)
-{
-	struct rb_node *prev, **slot;
-	struct bus1_peer_name *iter;
-	int v;
-
-	lockdep_assert_held(&domain->lock);
-	lockdep_assert_held(&domain->seqcount);
-
-	if (WARN_ON(!RB_EMPTY_NODE(&peer_name->rb)))
-		return -EINVAL;
-
-	/* find rb-tree entry and check for possible duplicates first */
-	slot = &domain->map_names.rb_node;
-	prev = NULL;
-	while (*slot) {
-		prev = *slot;
-		iter = container_of(prev, struct bus1_peer_name, rb);
-		v = strcmp(peer_name->name, iter->name);
-		if (!v)
-			return -EISNAM;
-		else if (v < 0)
-			slot = &prev->rb_left;
-		else /* if (v > 0) */
-			slot = &prev->rb_right;
-	}
-
-	/* insert into tree */
-	rb_link_node_rcu(&peer_name->rb, prev, slot);
-	rb_insert_color(&peer_name->rb, &domain->map_names);
-
-	++domain->n_names;
-	return 0;
-}
-
-static void bus1_peer_name_remove(struct bus1_peer_name *peer_name,
-				  struct bus1_domain *domain)
-{
-	lockdep_assert_held(&domain->lock);
-	lockdep_assert_held(&domain->seqcount);
-
-	if (RB_EMPTY_NODE(&peer_name->rb))
-		return;
-
-	rb_erase(&peer_name->rb, &domain->map_names);
-	RB_CLEAR_NODE(&peer_name->rb);
-
-	--domain->n_names;
-}
-
 /**
  * bus1_peer_new() - allocate new peer
  *
@@ -237,7 +139,6 @@ struct bus1_peer *bus1_peer_new(void)
 	init_waitqueue_head(&peer->waitq);
 	bus1_active_init(&peer->active);
 	rcu_assign_pointer(peer->info, NULL);
-	peer->names = NULL;
 	INIT_LIST_HEAD(&peer->link_domain);
 
 	return peer;
@@ -261,7 +162,6 @@ struct bus1_peer *bus1_peer_free(struct bus1_peer *peer)
 		return NULL;
 
 	WARN_ON(!list_empty(&peer->link_domain));
-	WARN_ON(peer->names);
 	WARN_ON(rcu_access_pointer(peer->info));
 	bus1_active_destroy(&peer->active);
 	kfree_rcu(peer, rcu);
@@ -275,7 +175,6 @@ static void bus1_peer_cleanup(struct bus1_active *active,
 	struct bus1_peer *peer = container_of(active, struct bus1_peer,
 					      active);
 	struct bus1_domain *domain = userdata;
-	struct bus1_peer_name *peer_name;
 	struct bus1_peer_info *peer_info;
 
 	/*
@@ -295,12 +194,6 @@ static void bus1_peer_cleanup(struct bus1_active *active,
 					      lockdep_is_held(&domain->lock));
 	if (!peer_info)
 		return;
-
-	while ((peer_name = peer->names)) {
-		peer->names = peer->names->next;
-		bus1_peer_name_remove(peer_name, domain);
-		bus1_peer_name_free(peer_name);
-	}
 
 	/* users reference the domain, so release with the domain locked */
 	peer_info->user = bus1_user_release(peer_info->user);
@@ -475,81 +368,12 @@ void bus1_peer_wake(struct bus1_peer *peer)
 	wake_up_interruptible(&peer->waitq);
 }
 
-/*
- * Check if the string is a name of the peer.
- *
- * Return: -EREMCHG if it is not, 0 if it is but is not the last name, and the
- * number of names the peer has otherwise.
- */
-static ssize_t bus1_peer_name_check(struct bus1_peer *peer, const char *name)
-{
-	struct bus1_peer_name *peer_name;
-	size_t n_names = 0;
-
-	lockdep_assert_held(&peer->rwlock);
-
-	for (peer_name = peer->names; peer_name; peer_name = peer_name->next) {
-		++n_names;
-
-		if (strcmp(name, peer_name->name) == 0) {
-			if (peer_name->next)
-				return 0;
-			else
-				return n_names;
-		}
-	}
-
-	return -EREMCHG;
-}
-
-/*
- * Check if a nulstr contains exactly the names of the peer.
- *
- * Return: 0 if it does, -EREMCHG if it does not or -EMSGSIZE if it is
- * malformed.
- */
-static int bus1_peer_names_check(struct bus1_peer *peer, const char *names,
-				 size_t names_len)
-{
-	size_t n, n_names = 0, n_names_old = 0;
-	ssize_t r;
-
-	lockdep_assert_held(&peer->rwlock);
-
-	if (names_len == 0 && peer->names)
-		return -EREMCHG;
-
-	while (names_len > 0) {
-		n = strnlen(names, names_len);
-		if (n == 0 || n == names_len)
-			return -EMSGSIZE;
-
-		r = bus1_peer_name_check(peer, names);
-		if (r < 0)
-			return r;
-		if (r > 0)
-			n_names_old = r;
-
-		names += n + 1;
-		names_len -= n + 1;
-		++n_names;
-	}
-
-	if (n_names != n_names_old)
-		return -EREMCHG;
-
-	return 0;
-}
-
 static int bus1_peer_connect_new(struct bus1_peer *peer,
 				 struct bus1_domain *domain,
 				 kuid_t uid,
 				 struct bus1_cmd_connect *param)
 {
-	struct bus1_peer_name *peer_name, *names = NULL;
 	struct bus1_peer_info *peer_info;
-	size_t n, remaining;
-	const char *name;
 	int r;
 
 	/*
@@ -563,37 +387,8 @@ static int bus1_peer_connect_new(struct bus1_peer *peer,
 	lockdep_assert_held(&peer->rwlock);
 
 	/* cannot connect a peer that is already connected */
-	if (!bus1_active_is_new(&peer->active)) {
-		struct bus1_peer_info *peer_info;
-
-		/*
-		 * If the peer is already connected, we return -EISCONN if the
-		 * passed in parameters match, or -EREMCHG if they do not (but
-		 * are otherwise valid).
-		 */
-
-		/*
-		 * We hold a domain-reference and peer-lock, the caller already
-		 * verified we're not disconnected. Barriers guarantee that the
-		 * peer is accessible, and both the domain teardown and
-		 * peer-disconnect have to wait for us to finish. However, to
-		 * be safe, check for NULL anyway.
-		 */
-		peer_info = rcu_dereference_protected(peer->info,
-					lockdep_is_held(&domain->active) &&
-					lockdep_is_held(&peer->rwlock));
-		if (WARN_ON(!peer_info))
-			return -ESHUTDOWN;
-
-		if (param->pool_size != peer_info->pool.size)
-			return -EREMCHG;
-
-		r = bus1_peer_names_check(peer, param->names, param->size - sizeof(*param));
-		if (r < 0)
-			return r;
-
+	if (!bus1_active_is_new(&peer->active))
 		return -EISCONN;
-	}
 
 	/*
 	 * The domain-reference and peer-lock guarantee that no other
@@ -619,41 +414,9 @@ static int bus1_peer_connect_new(struct bus1_peer *peer,
 		goto error;
 	}
 
-	/* allocate names */
-	name = param->names;
-	remaining = param->size - sizeof(*param);
-	while (remaining > 0) {
-		n = strnlen(name, remaining);
-		if (n == 0 || n == remaining) {
-			r = -EMSGSIZE;
-			goto error;
-		}
-
-		peer_name = bus1_peer_name_new(name, peer);
-		if (IS_ERR(peer_name)) {
-			r = PTR_ERR(peer_name);
-			goto error;
-		}
-
-		/* insert into names list */
-		peer_name->next = names;
-		names = peer_name;
-
-		name += n + 1;
-		remaining -= n + 1;
-	}
-
 	mutex_lock(&domain->lock);
 	write_seqcount_begin(&domain->seqcount);
 
-	/* link into names rbtree */
-	for (peer_name = names; peer_name; peer_name = peer_name->next) {
-		r = bus1_peer_name_add(peer_name, domain);
-		if (r < 0)
-			goto error_unlock;
-	}
-
-	peer->names = names;
 	list_add(&peer->link_domain, &domain->list_peers);
 	++domain->n_peers;
 	rcu_assign_pointer(peer->info, peer_info);
@@ -664,16 +427,7 @@ static int bus1_peer_connect_new(struct bus1_peer *peer,
 
 	return 0;
 
-error_unlock:
-	for (peer_name = names; peer_name; peer_name = peer_name->next)
-		bus1_peer_name_remove(peer_name, domain);
-	write_seqcount_end(&domain->seqcount);
-	mutex_unlock(&domain->lock);
 error:
-	while ((peer_name = names)) {
-		names = names->next;
-		bus1_peer_name_free(peer_name);
-	}
 	peer_info->user = bus1_user_release(peer_info->user);
 	bus1_peer_info_free(peer_info);
 	return r;
@@ -790,9 +544,6 @@ static int bus1_peer_ioctl_connect(struct bus1_peer *peer,
 	    !!(param->flags & BUS1_CONNECT_FLAG_MONITOR) +
 	    !!(param->flags & BUS1_CONNECT_FLAG_RESET) > 1)
 		return -EINVAL;
-	/* only root can claim names */
-	if (!file_ns_capable(file, domain->info->user_ns, CAP_SYS_ADMIN))
-		return -EPERM;
 
 	/* lock against parallel CONNECT/DISCONNECT */
 	down_write(&peer->rwlock);
@@ -828,84 +579,6 @@ static int bus1_peer_ioctl_connect(struct bus1_peer *peer,
 			r = -EFAULT; /* Don't care.. keep what we did so far */
 	}
 
-	kfree(param);
-	return r;
-}
-
-static int bus1_peer_ioctl_resolve(struct bus1_peer *peer,
-				   struct bus1_domain *domain,
-				   unsigned long arg)
-{
-	struct bus1_cmd_resolve __user *uparam = (void __user *)arg;
-	struct bus1_cmd_resolve *param;
-	struct bus1_peer_name *peer_name;
-	struct rb_node *n;
-	size_t namelen;
-	unsigned seq;
-	int r, v;
-
-	lockdep_assert_held(&domain->active);
-
-	param = bus1_import_dynamic_ioctl(arg, sizeof(*param));
-	if (IS_ERR(param))
-		return PTR_ERR(param);
-
-	/* no flags are known at this time */
-	if (param->flags) {
-		r = -EINVAL;
-		goto exit;
-	}
-
-	/* result must be cleared by caller */
-	if (param->id != 0) {
-		r = -EINVAL;
-		goto exit;
-	}
-
-	/* reject overlong/short names early */
-	namelen = param->size - sizeof(*param);
-	if (namelen < 2 || namelen > BUS1_NAME_MAX_SIZE) {
-		r = -ENXIO;
-		goto exit;
-	}
-
-	/* name must be zero-terminated */
-	if (param->name[namelen - 1] != 0) {
-		r = -EINVAL;
-		goto exit;
-	}
-
-	/* find unique-id of named peer */
-	seq = raw_seqcount_begin(&domain->seqcount);
-	do {
-		rcu_read_lock();
-		n = rcu_dereference(domain->map_names.rb_node);
-		while (n) {
-			peer_name = container_of(n, struct bus1_peer_name, rb);
-			v = strcmp(param->name, peer_name->name);
-			if (v == 0) {
-				if (bus1_active_is_active(&peer_name->peer->active))
-					param->id = 0; /* XXX: handle id */
-				break;
-			} else if (v < 0) {
-				n = rcu_dereference(n->rb_left);
-			} else /* if (v > 0) */ {
-				n = rcu_dereference(n->rb_right);
-			}
-		}
-		rcu_read_unlock();
-	} while (!n &&
-		 read_seqcount_retry(&domain->seqcount, seq) &&
-		 ((seq = read_seqcount_begin(&domain->seqcount)), true));
-
-	if (!n)
-		r = -ENXIO; /* not found, or deactivated */
-	else if (put_user(param->id, &uparam->id))
-		r = -EFAULT;
-	else
-		r = 0;
-
-exit:
 	kfree(param);
 	return r;
 }
@@ -1222,16 +895,11 @@ int bus1_peer_ioctl(struct bus1_peer *peer,
 
 	switch (cmd) {
 	case BUS1_CMD_CONNECT:
-	case BUS1_CMD_RESOLVE:
 		/* lock against domain shutdown */
 		if (!bus1_domain_acquire(domain))
 			return -ESHUTDOWN;
 
-		if (cmd == BUS1_CMD_CONNECT)
-			r = bus1_peer_ioctl_connect(peer, domain, file, arg);
-		else if (cmd == BUS1_CMD_RESOLVE)
-			r = bus1_peer_ioctl_resolve(peer, domain, arg);
-
+		r = bus1_peer_ioctl_connect(peer, domain, file, arg);
 		bus1_domain_release(domain);
 		break;
 

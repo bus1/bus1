@@ -22,7 +22,6 @@
 #include <linux/mutex.h>
 #include <linux/rbtree.h>
 #include <linux/seqlock.h>
-#include <linux/user_namespace.h>
 #include <linux/wait.h>
 #include "active.h"
 
@@ -32,7 +31,6 @@
  * @peer_ids:		counter for peer ID allocations
  * @user_idr:		mapping from uids to bus1_user objects
  * @user_ida:		set of all users to compute small ids
- * @user_ns:		owning user namespace of this domain
  *
  * This object contains all runtime data of a domain, which is not required in
  * the handle object. That is, any data stored in this object will be
@@ -44,7 +42,6 @@ struct bus1_domain_info {
 	u64 peer_ids;
 	struct idr user_idr;
 	struct ida user_ida;
-	struct user_namespace *user_ns;
 };
 
 /**
@@ -55,9 +52,7 @@ struct bus1_domain_info {
  * @waitq:		domain-wide wait queue
  * @info:		underlying domain information
  * @n_peers:		number of linked peers
- * @n_names:		number of linked names
  * @list_peers:		linked peers
- * @map_names:		linked names
  *
  * This object represents a handle to a domain. The handle always outlives the
  * underlying domain and is used to gate access to the domain. The handle
@@ -76,12 +71,10 @@ struct bus1_domain {
 	wait_queue_head_t waitq;
 	struct bus1_domain_info *info;
 	size_t n_peers;
-	size_t n_names;
 	struct list_head list_peers;
-	struct rb_root map_names;
 };
 
-struct bus1_domain *bus1_domain_new(struct user_namespace *user_ns);
+struct bus1_domain *bus1_domain_new(void);
 struct bus1_domain *bus1_domain_free(struct bus1_domain *domain);
 void bus1_domain_teardown(struct bus1_domain *domain);
 struct bus1_domain *bus1_domain_acquire(struct bus1_domain *domain);

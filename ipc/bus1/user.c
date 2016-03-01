@@ -13,6 +13,7 @@
 #include <linux/kref.h>
 #include <linux/mutex.h>
 #include <linux/rcupdate.h>
+#include <linux/sched.h>
 #include <linux/slab.h>
 #include <linux/uidgid.h>
 #include "domain.h"
