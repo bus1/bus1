@@ -234,8 +234,19 @@ struct bus1_peer *bus1_peer_acquire(struct bus1_peer *peer)
  */
 struct bus1_peer *bus1_peer_release(struct bus1_peer *peer)
 {
-	if (peer)
+	if (peer) {
+		/*
+		 * An active reference is sufficient to keep a peer alive. As
+		 * such, releasing the active-reference might wake up a pending
+		 * peer destruction. But bus1_active_release() has to first
+		 * drop the ref, then wake up the wake-queue. Taking an rcu
+		 * read lock guarantees the wake-queue (i.e., its underlying
+		 * peer) is still around for the wake-up operation.
+		 */
+		rcu_read_lock();
 		bus1_active_release(&peer->active, &peer->waitq);
+		rcu_read_unlock();
+	}
 	return NULL;
 }
 

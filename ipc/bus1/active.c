@@ -404,7 +404,6 @@ struct bus1_active *bus1_active_release(struct bus1_active *active,
 					wait_queue_head_t *waitq)
 {
 	if (active) {
-		/* XXX: rcu_read_lock() ? */
 		bus1_active_lockdep_released(active);
 		if (atomic_dec_return(&active->count) == BUS1_ACTIVE_BIAS)
 			if (waitq)
