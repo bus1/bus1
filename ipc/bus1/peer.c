@@ -263,7 +263,7 @@ static int bus1_peer_connect_reset(struct bus1_peer *peer,
 
 	if (bus1_active_is_new(&peer->active))
 		return -ENOTCONN;
-	if (param->pool_size != 0 || param->size > sizeof(*param))
+	if (param->pool_size != 0)
 		return -EINVAL;
 
 	if (!bus1_peer_acquire(peer))
@@ -285,6 +285,8 @@ static int bus1_peer_connect_query(struct bus1_peer *peer,
 
 	if (bus1_active_is_new(&peer->active))
 		return -ENOTCONN;
+	if (param->pool_size != 0)
+		return -EINVAL;
 
 	rcu_read_lock();
 	peer_info = rcu_dereference(peer->info);
@@ -302,38 +304,40 @@ static int bus1_peer_ioctl_connect(struct bus1_peer *peer,
 				   unsigned long arg)
 {
 	struct bus1_cmd_connect __user *uparam = (void __user *)arg;
-	struct bus1_cmd_connect *param;
+	struct bus1_cmd_connect param;
 	int r;
 
-	param = bus1_import_dynamic_ioctl(arg, sizeof(*param));
-	if (IS_ERR(param))
-		return PTR_ERR(param);
+	r = bus1_import_fixed_ioctl(&param, arg, sizeof(param));
+	if (r < 0)
+		return r;
 
 	/* check for validity of all flags */
-	if (param->flags & ~(BUS1_CONNECT_FLAG_CLIENT |
-		     /* XXX: BUS1_CONNECT_FLAG_MONITOR | */
-			     BUS1_CONNECT_FLAG_QUERY |
-			     BUS1_CONNECT_FLAG_RESET))
+	if (param.flags & ~(BUS1_CONNECT_FLAG_CLIENT |
+		    /* XXX: BUS1_CONNECT_FLAG_MONITOR | */
+			    BUS1_CONNECT_FLAG_QUERY |
+			    BUS1_CONNECT_FLAG_RESET))
 		return -EINVAL;
 	/* only one mode can be specified */
-	if (!!(param->flags & BUS1_CONNECT_FLAG_CLIENT) +
-	    !!(param->flags & BUS1_CONNECT_FLAG_MONITOR) +
-	    !!(param->flags & BUS1_CONNECT_FLAG_RESET) > 1)
+	if (!!(param.flags & BUS1_CONNECT_FLAG_CLIENT) +
+	    !!(param.flags & BUS1_CONNECT_FLAG_MONITOR) +
+	    !!(param.flags & BUS1_CONNECT_FLAG_RESET) > 1)
 		return -EINVAL;
 
-	if (param->flags & (BUS1_CONNECT_FLAG_CLIENT |
-			    BUS1_CONNECT_FLAG_MONITOR)) {
+	if (param.flags & (BUS1_CONNECT_FLAG_CLIENT |
+			   BUS1_CONNECT_FLAG_MONITOR))
 		/* fresh connect of a new peer */
-		r = bus1_peer_connect_new(peer, file->f_cred->uid, param);
-	} else if (param->flags & BUS1_CONNECT_FLAG_RESET) {
+		r = bus1_peer_connect_new(peer, file->f_cred->uid, &param);
+	else if (param.flags & BUS1_CONNECT_FLAG_RESET)
 		/* reset of the peer requested */
-		r = bus1_peer_connect_reset(peer, param);
-	} else if (param->flags & BUS1_CONNECT_FLAG_QUERY) {
+		r = bus1_peer_connect_reset(peer, &param);
+	else if (param.flags & BUS1_CONNECT_FLAG_QUERY)
 		/* fallback: no special operation specified, just query */
-		r = bus1_peer_connect_query(peer, param);
-	} else {
+		r = bus1_peer_connect_query(peer, &param);
+	else
 		r = -EINVAL; /* no mode specified */
-	}
+
+	if (r < 0)
+		return r;
 
 	/*
 	 * QUERY can be combined with any CONNECT operation. On success, it
@@ -341,13 +345,11 @@ static int bus1_peer_ioctl_connect(struct bus1_peer *peer,
 	 * All handlers above must provide that information in @param for this
 	 * to copy it back.
 	 */
-	if (r >= 0 && (param->flags & BUS1_CONNECT_FLAG_QUERY)) {
-		if (put_user(param->pool_size, &uparam->pool_size))
-			r = -EFAULT; /* Don't care.. keep what we did so far */
-	}
+	if ((param.flags & BUS1_CONNECT_FLAG_QUERY) &&
+	    put_user(param.pool_size, &uparam->pool_size))
+		return -EFAULT; /* Don't care.. keep what we have */
 
-	kfree(param);
-	return r;
+	return 0;
 }
 
 static int bus1_peer_ioctl_slice_release(struct bus1_peer *peer,
@@ -386,8 +388,9 @@ static int bus1_peer_ioctl_send(struct bus1_peer *peer, unsigned long arg)
 	if (r < 0)
 		return r;
 
-	if (unlikely(param.flags & ~(BUS1_SEND_FLAG_IGNORE_UNKNOWN |
-				     BUS1_SEND_FLAG_CONVEY_ERRORS)))
+	if (unlikely(param.flags & ~(BUS1_SEND_FLAG_CONTINUE |
+				     BUS1_SEND_FLAG_SILENT |
+				     BUS1_SEND_FLAG_RELEASE)))
 		return -EINVAL;
 
 	/* check basic limits; avoids integer-overflows later on */
@@ -400,8 +403,8 @@ static int bus1_peer_ioctl_send(struct bus1_peer *peer, unsigned long arg)
 		     (u64)(unsigned long)param.ptr_destinations) ||
 	    unlikely(param.ptr_vecs !=
 		     (u64)(unsigned long)param.ptr_vecs) ||
-	    unlikely(param.ptr_ids !=
-		     (u64)(unsigned long)param.ptr_ids) ||
+	    unlikely(param.ptr_handles !=
+		     (u64)(unsigned long)param.ptr_handles) ||
 	    unlikely(param.ptr_fds !=
 		     (u64)(unsigned long)param.ptr_fds))
 		return -EFAULT;
@@ -468,9 +471,10 @@ static int bus1_peer_ioctl_recv(struct bus1_peer *peer, unsigned long arg)
 	if (unlikely(param.flags & ~(BUS1_RECV_FLAG_PEEK)))
 		return -EINVAL;
 
-	if (unlikely(param.msg_offset != BUS1_OFFSET_INVALID) ||
+	if (unlikely(param.msg_dropped != 0) ||
+	    unlikely(param.msg_offset != BUS1_OFFSET_INVALID) ||
 	    unlikely(param.msg_size != 0) ||
-	    unlikely(param.msg_ids != 0) ||
+	    unlikely(param.msg_handles != 0) ||
 	    unlikely(param.msg_fds != 0))
 		return -EINVAL;
 
@@ -623,7 +627,7 @@ exit:
 	if (r >= 0) {
 		if (put_user(param.msg_offset, &uparam->msg_offset) ||
 		    put_user(param.msg_size, &uparam->msg_size) ||
-		    put_user(param.msg_ids, &uparam->msg_ids) ||
+		    put_user(param.msg_handles, &uparam->msg_handles) ||
 		    put_user(param.msg_fds, &uparam->msg_fds))
 			r = -EFAULT; /* Don't care.. keep what we did so far */
 	}
@@ -664,9 +668,14 @@ int bus1_peer_ioctl(struct bus1_peer *peer,
 			return -EINVAL;
 		return bus1_peer_teardown(peer);
 
+	case BUS1_CMD_HANDLE_CREATE:
+	case BUS1_CMD_HANDLE_DESTROY:
+	case BUS1_CMD_HANDLE_RELEASE:
 	case BUS1_CMD_SLICE_RELEASE:
 	case BUS1_CMD_SEND:
 	case BUS1_CMD_RECV:
+		if (bus1_active_is_new(&peer->active))
+			return -ENOTCONN;
 		if (!bus1_peer_acquire(peer))
 			return -ESHUTDOWN;
 		if (cmd == BUS1_CMD_SLICE_RELEASE)

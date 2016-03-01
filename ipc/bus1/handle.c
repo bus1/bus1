@@ -129,7 +129,7 @@ static void bus1_handle_init(struct bus1_handle *handle,
 	RB_CLEAR_NODE(&handle->rb_id);
 	RB_CLEAR_NODE(&handle->rb_node);
 	handle->node = node;
-	handle->id = BUS1_ID_INVALID;
+	handle->id = BUS1_HANDLE_INVALID;
 	rcu_assign_pointer(handle->holder, NULL);
 	INIT_LIST_HEAD(&handle->link_node);
 	kref_init(&handle->ref);
@@ -196,7 +196,7 @@ struct bus1_handle *bus1_handle_new(void)
 
 	kref_init(&node->ref);
 	INIT_LIST_HEAD(&node->list_handles);
-	node->transaction_id = BUS1_ID_INVALID;
+	node->transaction_id = BUS1_HANDLE_INVALID;
 	bus1_handle_init(&node->owner, node);
 
 	/* node->owner owns a reference to the node, drop the initial one */
@@ -467,13 +467,13 @@ bus1_handle_commit_destruction(struct bus1_handle *handle,
 
 	lockdep_assert_held(&peer_info->lock);
 	WARN_ON(!bus1_handle_is_owner(handle));
-	WARN_ON(handle->node->transaction_id != BUS1_ID_INVALID);
+	WARN_ON(handle->node->transaction_id != BUS1_HANDLE_INVALID);
 
 	/*
 	 * Set the transaction_id to 0 to prevent multiple contexts destroying
 	 * the handle in parallel.
-	 * No need to lock seqcount since 0 is treated as BUS_ID_INVALID by all
-	 * async readers.
+	 * No need to lock seqcount since 0 is treated as BUS_HANDLE_INVALID by
+	 * all async readers.
 	 */
 	handle->node->transaction_id = 0;
 
@@ -553,7 +553,7 @@ static void bus1_handle_release_owner(struct bus1_handle *handle,
 
 	WARN_ON(atomic_read(&handle->n_user) > 0);
 
-	if (handle->node->transaction_id == BUS1_ID_INVALID) {
+	if (handle->node->transaction_id == BUS1_HANDLE_INVALID) {
 		/* just unlink, don't unref; destruction unrefs the owner */
 		list_del_init(&handle->link_node);
 		if (list_empty(&handle->node->list_handles)) {
@@ -600,7 +600,7 @@ static void bus1_handle_release_holder(struct bus1_handle *handle,
 		return;
 
 	remote = bus1_handle_lock_owner(handle, &remote_info);
-	if (remote && handle->node->transaction_id == BUS1_ID_INVALID) {
+	if (remote && handle->node->transaction_id == BUS1_HANDLE_INVALID) {
 		list_del_init(&handle->link_node);
 		bus1_handle_unref(handle);
 		if (list_empty(&handle->node->list_handles)) {
@@ -643,7 +643,7 @@ bool bus1_handle_is_public(struct bus1_handle *handle)
 static bool bus1_handle_has_id(struct bus1_handle *handle)
 {
 	/* true _iff_ the handle has been installed before */
-	return handle && handle->id != BUS1_ID_INVALID;
+	return handle && handle->id != BUS1_HANDLE_INVALID;
 }
 
 /**
@@ -911,7 +911,7 @@ struct bus1_handle *bus1_handle_install_unlocked(struct bus1_handle *handle)
 
 	if (WARN_ON(!bus1_handle_is_public(handle)))
 		return NULL;
-	if (WARN_ON(handle->id != BUS1_ID_INVALID))
+	if (WARN_ON(handle->id != BUS1_HANDLE_INVALID))
 		return handle;
 
 	/*
@@ -952,7 +952,7 @@ struct bus1_handle *bus1_handle_install_unlocked(struct bus1_handle *handle)
 			 * and switch over to the other one.
 			 */
 			WARN_ON(iter->holder != handle->holder);
-			WARN_ON(iter->id == BUS1_ID_INVALID);
+			WARN_ON(iter->id == BUS1_HANDLE_INVALID);
 
 			old = handle;
 			handle = bus1_handle_ref(iter);
@@ -996,7 +996,8 @@ struct bus1_handle *bus1_handle_install_unlocked(struct bus1_handle *handle)
  * number as @msg_seq. It is used to order against node destruction.
  *
  * In case the handle references was committed successfully, the handle ID is
- * returned. If the handle was already destroyed, BUS1_ID_INVALID is returned.
+ * returned. If the handle was already destroyed, BUS1_HANDLE_INVALID is
+ * returned.
  *
  * Return: The handle ID to store in the message is returned.
  */
@@ -1035,7 +1036,7 @@ u64 bus1_handle_commit(struct bus1_handle *handle, u64 msg_seq)
 			WARN_ON(atomic_inc_return(&handle->n_inflight) < 2);
 		v = handle->id;
 	} else {
-		v = BUS1_ID_INVALID;
+		v = BUS1_HANDLE_INVALID;
 	}
 
 	return v;
@@ -1099,7 +1100,7 @@ int bus1_handle_destroy_by_id(struct bus1_peer_info *peer_info, u64 id)
 	mutex_lock(&peer_info->lock);
 	if (!bus1_handle_is_owner(handle)) {
 		r = -EPERM;
-	} else if (handle->node->transaction_id != BUS1_ID_INVALID) {
+	} else if (handle->node->transaction_id != BUS1_HANDLE_INVALID) {
 		r = -EINPROGRESS;
 	} else {
 		bus1_handle_commit_destruction(handle, peer_info,
@@ -1207,7 +1208,7 @@ void bus1_handle_finish_all(struct bus1_peer_info *peer_info,
 		if (bus1_handle_is_owner(handle)) {
 			INIT_LIST_HEAD(&list_handles);
 			mutex_lock(&peer_info->lock);
-			if (handle->node->transaction_id == BUS1_ID_INVALID)
+			if (handle->node->transaction_id == BUS1_HANDLE_INVALID)
 				bus1_handle_commit_destruction(handle,
 							       peer_info,
 							       &list_handles);
@@ -1399,7 +1400,7 @@ int bus1_handle_transfer_instantiate(struct bus1_handle_transfer *transfer,
 	peer_info = bus1_peer_dereference(transfer->peer);
 
 	BUS1_HANDLE_BATCH_FOREACH_ALLOCATED(entry, pos, &transfer->batch) {
-		if (entry->id == BUS1_ID_INVALID) {
+		if (entry->id == BUS1_HANDLE_INVALID) {
 			handle = bus1_handle_new();
 			if (IS_ERR(handle))
 				return PTR_ERR(handle);
@@ -1599,7 +1600,7 @@ void bus1_handle_inflight_commit(struct bus1_handle_inflight *inflight,
 			e->id = bus1_handle_commit(h, seq);
 			bus1_handle_unref(h);
 		} else {
-			e->id = BUS1_ID_INVALID;
+			e->id = BUS1_HANDLE_INVALID;
 		}
 	}
 

@@ -384,7 +384,6 @@ int bus1_transaction_instantiate_for_id(struct bus1_transaction *transaction,
 	struct bus1_peer *peer;
 	int r;
 
-	/* unknown handles are only ignored, if explicitly told so */
 	handle = bus1_handle_find_by_id(transaction->peer_info, destination);
 	if (handle) {
 		peer = bus1_handle_pin(handle);
@@ -392,7 +391,7 @@ int bus1_transaction_instantiate_for_id(struct bus1_transaction *transaction,
 			handle = bus1_handle_unref(handle);
 	}
 	if (!handle)
-		return (flags & BUS1_SEND_FLAG_IGNORE_UNKNOWN) ? 0 : -ENXIO;
+		return (flags & BUS1_SEND_FLAG_CONTINUE) ? 0 : -ENXIO;
 
 	peer_info = bus1_peer_dereference(peer);
 
@@ -437,7 +436,7 @@ int bus1_transaction_instantiate_for_id(struct bus1_transaction *transaction,
 
 error:
 	bus1_message_free(message);
-	if (r < 0 && (flags & BUS1_SEND_FLAG_CONVEY_ERRORS)) {
+	if (r < 0 && (flags & BUS1_SEND_FLAG_CONTINUE)) {
 		/* XXX: convey error to @peer */
 		r = 0;
 	}
@@ -623,7 +622,6 @@ int bus1_transaction_commit_for_id(struct bus1_transaction *transaction,
 	bool wake;
 	int r;
 
-	/* unknown handles are only ignored, if explicitly told so */
 	handle = bus1_handle_find_by_id(transaction->peer_info, destination);
 	if (handle) {
 		peer = bus1_handle_pin(handle);
@@ -631,7 +629,7 @@ int bus1_transaction_commit_for_id(struct bus1_transaction *transaction,
 			handle = bus1_handle_unref(handle);
 	}
 	if (!handle)
-		return (flags & BUS1_SEND_FLAG_IGNORE_UNKNOWN) ? 0 : -ENXIO;
+		return (flags & BUS1_SEND_FLAG_CONTINUE) ? 0 : -ENXIO;
 
 	peer_info = bus1_peer_dereference(peer);
 	timestamp = transaction->timestamp;
@@ -662,7 +660,7 @@ int bus1_transaction_commit_for_id(struct bus1_transaction *transaction,
 
 exit:
 	bus1_message_free(message);
-	if (r < 0 && (flags & BUS1_SEND_FLAG_CONVEY_ERRORS)) {
+	if (r < 0 && (flags & BUS1_SEND_FLAG_CONTINUE)) {
 		/* XXX: convey error to @peer */
 		r = 0;
 	}

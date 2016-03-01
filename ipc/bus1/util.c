@@ -41,48 +41,6 @@ int bus1_import_fixed_ioctl(void *dst, unsigned long src, size_t size)
 }
 
 /**
- * bus1_import_dynamic_ioctl() - copy dynamic-size ioctl payload from user
- * @arg:	user-provided ioctl argument
- * @min_size:	minimum size of the ioctl payload
- *
- * Copy ioctl payload from user-space into kernel-space. The first 8 bytes of
- * the ioctl payload must contain the actual size of the payload. Data is thus
- * copied in two steps: First the size is copied into kernel-space, then the
- * whole payload is copied into an allocated buffer.
- *
- * Alignment restrictions are checked.
- *
- * Return: Pointer to dynamically allocated payload, ERR_PTR on failure.
- */
-void *bus1_import_dynamic_ioctl(unsigned long arg, size_t min_size)
-{
-	void *param;
-	u64 size;
-	int r;
-
-	if (WARN_ON(min_size < sizeof(u64)))
-		return ERR_PTR(-EFAULT);
-	if ((arg & 0x7) || get_user(size, (u64 __user *)arg))
-		return ERR_PTR(-EFAULT);
-	if (size < min_size || size > BUS1_IOCTL_MAX_SIZE)
-		return ERR_PTR(-EMSGSIZE);
-
-	param = kmalloc(size, GFP_TEMPORARY);
-	if (!param)
-		return ERR_PTR(-ENOMEM);
-
-	r = bus1_import_fixed_ioctl(param, arg, size);
-	if (r < 0) {
-		kfree(param);
-		return ERR_PTR(r);
-	}
-
-	/* size might have changed, fix it up if it did */
-	*(u64 *)param = size;
-	return param;
-}
-
-/**
  * bus1_import_vecs() - import vectors from user
  * @out_vecs:		kernel memory to store vecs, preallocated
  * @out_length:		output storage for sum of all vectors lengths
