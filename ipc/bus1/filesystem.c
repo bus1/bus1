@@ -69,10 +69,9 @@ exit:
 
 static int bus1_fs_bus_fop_release(struct inode *inode, struct file *file)
 {
-	struct bus1_domain *domain = inode->i_sb->s_fs_info;
 	struct bus1_peer *peer = file->private_data;
 
-	bus1_peer_teardown(peer, domain);
+	bus1_peer_teardown(peer);
 	bus1_peer_free(peer);
 
 	return 0;
@@ -157,9 +156,7 @@ static long bus1_fs_bus_fop_ioctl(struct file *file,
 				  unsigned int cmd,
 				 unsigned long arg)
 {
-	struct bus1_domain *domain = file_inode(file)->i_sb->s_fs_info;
-
-	return bus1_peer_ioctl(file->private_data, domain, file, cmd, arg);
+	return bus1_peer_ioctl(file->private_data, file, cmd, arg);
 }
 
 const struct file_operations bus1_fs_bus_fops = {

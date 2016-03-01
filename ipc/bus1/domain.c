@@ -124,14 +124,6 @@ struct bus1_domain *bus1_domain_free(struct bus1_domain *domain)
 	return NULL;
 }
 
-static void bus1_domain_cleanup(struct bus1_active *active, void *userdata)
-{
-	struct bus1_domain *domain = container_of(active, struct bus1_domain,
-						  active);
-
-	domain->info = bus1_domain_info_free(domain->info);
-}
-
 /**
  * bus1_domain_teardown() - deactivate and tear down a domain
  * @domain:	domain to tear down
@@ -147,46 +139,11 @@ static void bus1_domain_cleanup(struct bus1_active *active, void *userdata)
  */
 void bus1_domain_teardown(struct bus1_domain *domain)
 {
-	struct bus1_peer *peer;
-
-	/*
-	 * This tears down a whole domain, in a synchronous fashion. This is
-	 * non-trivial, as it requires to synchronously drain all peers. So we
-	 * first deactivate the domain, which prevents new peers from being
-	 * linked to the domain. We also drain the domain to guarantee any
-	 * racing connect/reset calls are done. Then we deactivate all peers,
-	 * which prevents any new operation to be entered. We also drain all
-	 * peers so we're guaranteed all their operations are done.
-	 *
-	 * At this point, we know that all our objects are drained. However,
-	 * they might not have been cleaned up, yet. Therefore, we now take
-	 * the domain write seqcount and release every peer, lastly followed
-	 * by a release of the domain.
-	 */
-
 	bus1_active_deactivate(&domain->active);
 	bus1_active_drain(&domain->active, &domain->waitq);
 
-	mutex_lock(&domain->lock);
-
-	list_for_each_entry(peer, &domain->list_peers, link_domain) {
-		bus1_active_deactivate(&peer->active);
-		bus1_active_drain(&peer->active, &peer->waitq);
-	}
-
-	write_seqcount_begin(&domain->seqcount);
-	while ((peer = list_first_entry_or_null(&domain->list_peers,
-						struct bus1_peer,
-						link_domain)))
-		bus1_peer_teardown_domain(peer, domain);
-
-	WARN_ON(domain->n_peers > 0);
-	write_seqcount_end(&domain->seqcount);
-
-	mutex_unlock(&domain->lock);
-
-	bus1_active_cleanup(&domain->active, &domain->waitq,
-			    bus1_domain_cleanup, NULL);
+	if (bus1_active_cleanup(&domain->active, &domain->waitq, NULL, NULL))
+		domain->info = bus1_domain_info_free(domain->info);
 }
 
 /**

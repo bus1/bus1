@@ -17,7 +17,6 @@
  */
 
 #include <linux/kernel.h>
-#include <linux/list.h>
 #include <linux/mutex.h>
 #include <linux/rcupdate.h>
 #include <linux/rbtree.h>
@@ -28,8 +27,6 @@
 #include "pool.h"
 #include "queue.h"
 #include "user.h"
-
-struct bus1_domain;
 
 /**
  * struct bus1_peer_info - peer specific runtime information
@@ -69,7 +66,6 @@ struct bus1_peer_info {
  * @waitq:		peer wide wait queue
  * @active:		active references
  * @info:		underlying peer information
- * @link_domain:	link into domain
  */
 struct bus1_peer {
 	union {
@@ -79,20 +75,16 @@ struct bus1_peer {
 	wait_queue_head_t waitq;
 	struct bus1_active active;
 	struct bus1_peer_info __rcu *info;
-	struct list_head link_domain;
 };
 
 struct bus1_peer *bus1_peer_new(void);
 struct bus1_peer *bus1_peer_free(struct bus1_peer *peer);
-int bus1_peer_teardown(struct bus1_peer *peer, struct bus1_domain *domain);
-void bus1_peer_teardown_domain(struct bus1_peer *peer,
-			       struct bus1_domain *domain);
+int bus1_peer_teardown(struct bus1_peer *peer);
 struct bus1_peer *bus1_peer_acquire(struct bus1_peer *peer);
 struct bus1_peer *bus1_peer_release(struct bus1_peer *peer);
 struct bus1_peer_info *bus1_peer_dereference(struct bus1_peer *peer);
 void bus1_peer_wake(struct bus1_peer *peer);
 int bus1_peer_ioctl(struct bus1_peer *peer,
-		    struct bus1_domain *domain,
 		    const struct file *file,
 		    unsigned int cmd,
 		    unsigned long arg);
