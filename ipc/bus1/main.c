@@ -169,4 +169,3 @@ module_init(bus1_init);
 module_exit(bus1_exit);
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("Bus based interprocess communication");
-MODULE_ALIAS("devname:" KBUILD_MODNAME);
