@@ -36,7 +36,6 @@
  * Some archs implement atomic_sub(v) with atomic_add(-v), so reserve INT_MIN
  * to avoid overflows if multiplied by -1.
  */
-#define BUS1_ACTIVE_BIAS		(INT_MIN + 5)
 #define BUS1_ACTIVE_RELEASE_DIRECT	(BUS1_ACTIVE_BIAS - 1)
 #define BUS1_ACTIVE_RELEASE		(BUS1_ACTIVE_BIAS - 2)
 #define BUS1_ACTIVE_DONE		(BUS1_ACTIVE_BIAS - 3)
@@ -358,58 +357,6 @@ bool bus1_active_cleanup(struct bus1_active *active,
 
 	/* true if we released it */
 	return v == BUS1_ACTIVE_BIAS || v == BUS1_ACTIVE_RELEASE_DIRECT;
-}
-
-/**
- * bus1_active_acquire() - acquire active reference
- * @active:	object to acquire active reference to, or NULL
- *
- * This acquires an active reference to the passed object. If the object was
- * not activated, yet, or if it was already deactivated, this will fail and
- * return NULL. If a reference was successfully acquired, this will return
- * @active.
- *
- * If NULL is passed, this is a no-op and always returns NULL.
- *
- * This behaves as a down_read_trylock(). Use bus1_active_release() to release
- * the reference again and get the matching up_read().
- *
- * Return: @active if reference was acquired, NULL if not.
- */
-struct bus1_active *bus1_active_acquire(struct bus1_active *active)
-{
-	if (active && atomic_inc_unless_negative(&active->count))
-		bus1_active_lockdep_acquired(active);
-	else
-		active = NULL;
-
-	return active;
-}
-
-/**
- * bus1_active_release() - release active reference
- * @active:	object to release active reference of, or NULL
- * @waitq:	wait-queue linked to @active, or NULL
- *
- * This releases an active reference that was previously acquired via
- * bus1_active_acquire().
- *
- * This is a no-op if NULL is passed.
- *
- * This behaves like an up_read().
- *
- * Return: NULL is returned.
- */
-struct bus1_active *bus1_active_release(struct bus1_active *active,
-					wait_queue_head_t *waitq)
-{
-	if (active) {
-		bus1_active_lockdep_released(active);
-		if (atomic_dec_return(&active->count) == BUS1_ACTIVE_BIAS)
-			if (waitq)
-				wake_up(waitq);
-	}
-	return NULL;
 }
 
 /**

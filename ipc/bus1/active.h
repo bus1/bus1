@@ -46,6 +46,9 @@
 #include <linux/lockdep.h>
 #include <linux/wait.h>
 
+/* base value for counter-bias, see BUS1_ACTIVE_* constants for details */
+#define BUS1_ACTIVE_BIAS		(INT_MIN + 5)
+
 /**
  * struct bus1_active - active references
  * @count:	active reference counter
@@ -79,9 +82,6 @@ bool bus1_active_cleanup(struct bus1_active *active,
 			 void (*cleanup) (struct bus1_active *active,
 		                         void *userdata),
 			 void *userdata);
-struct bus1_active *bus1_active_acquire(struct bus1_active *active);
-struct bus1_active *bus1_active_release(struct bus1_active *active,
-					wait_queue_head_t *waitq);
 
 #ifdef CONFIG_DEBUG_LOCK_ALLOC
 #  define bus1_active_init(_active) 					\
@@ -98,5 +98,57 @@ void bus1_active_lockdep_released(struct bus1_active *active);
 static inline void bus1_active_lockdep_acquired(struct bus1_active *active) { }
 static inline void bus1_active_lockdep_released(struct bus1_active *active) { }
 #endif
+
+/**
+ * bus1_active_acquire() - acquire active reference
+ * @active:	object to acquire active reference to, or NULL
+ *
+ * This acquires an active reference to the passed object. If the object was
+ * not activated, yet, or if it was already deactivated, this will fail and
+ * return NULL. If a reference was successfully acquired, this will return
+ * @active.
+ *
+ * If NULL is passed, this is a no-op and always returns NULL.
+ *
+ * This behaves as a down_read_trylock(). Use bus1_active_release() to release
+ * the reference again and get the matching up_read().
+ *
+ * Return: @active if reference was acquired, NULL if not.
+ */
+static inline struct bus1_active *
+bus1_active_acquire(struct bus1_active *active)
+{
+	if (active && atomic_inc_unless_negative(&active->count))
+		bus1_active_lockdep_acquired(active);
+	else
+		active = NULL;
+	return active;
+}
+
+/**
+ * bus1_active_release() - release active reference
+ * @active:	object to release active reference of, or NULL
+ * @waitq:	wait-queue linked to @active, or NULL
+ *
+ * This releases an active reference that was previously acquired via
+ * bus1_active_acquire().
+ *
+ * This is a no-op if NULL is passed.
+ *
+ * This behaves like an up_read().
+ *
+ * Return: NULL is returned.
+ */
+static inline struct bus1_active *
+bus1_active_release(struct bus1_active *active, wait_queue_head_t *waitq)
+{
+	if (active) {
+		bus1_active_lockdep_released(active);
+		if (atomic_dec_return(&active->count) == BUS1_ACTIVE_BIAS)
+			if (waitq)
+				wake_up(waitq);
+	}
+	return NULL;
+}
 
 #endif /* __BUS1_ACTIVE_H */
