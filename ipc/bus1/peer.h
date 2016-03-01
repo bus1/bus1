@@ -58,9 +58,6 @@ struct bus1_peer_info {
 	u64 handle_ids;
 };
 
-#define bus1_peer_info_from_pool(_pool) \
-	container_of((_pool), struct bus1_peer_info, pool)
-
 /**
  * struct bus1_peer - peer handle
  * @rwlock:		runtime lock

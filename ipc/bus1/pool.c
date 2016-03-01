@@ -29,7 +29,8 @@
 
 /* lockdep assertion to verify the parent peer is locked */
 #define bus1_pool_assert_held(_pool) \
-	lockdep_assert_held(&bus1_peer_info_from_pool(_pool)->lock)
+	lockdep_assert_held(&container_of((_pool),		\
+					  struct bus1_peer_info, pool)->lock)
 
 static struct bus1_pool_slice *bus1_pool_slice_new(size_t offset, size_t size)
 {
@@ -161,9 +162,9 @@ bus1_pool_slice_find_by_offset(struct bus1_pool *pool, size_t offset)
  *
  * NOTE: All pools must be embedded into a parent bus1_peer_info object. The
  *       code works fine, if you don't, but the lockdep-annotations will fail
- *       horribly. They rely on bus1_peer_info_from_pool() to be valid on every
- *       pool. Use the bus1_pool_create_for_peer() macro to make sure you
- *       never violate this rule.
+ *       horribly. They rely on container_of() to be valid on every poo. Use
+ *       the bus1_pool_create_for_peer() macro to make sure you never violate
+ *       this rule.
  *
  * Return: 0 on success, negative error code on failure.
  */
