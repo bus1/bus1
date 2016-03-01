@@ -16,14 +16,16 @@
 #include <linux/sched.h>
 #include <linux/slab.h>
 #include <linux/uidgid.h>
-#include "domain.h"
 #include "main.h"
 #include "user.h"
 
 #define BUS1_INTERNAL_UID_INVALID ((unsigned int) -1)
 
-static struct bus1_user *
-bus1_user_new(struct bus1_domain_info *domain_info)
+static DEFINE_MUTEX(bus1_user_lock);
+static DEFINE_IDR(bus1_user_idr);
+static DEFINE_IDA(bus1_user_ida);
+
+static struct bus1_user *bus1_user_new(void)
 {
 	struct bus1_user *u;
 
@@ -31,15 +33,9 @@ bus1_user_new(struct bus1_domain_info *domain_info)
 	if (!u)
 		return ERR_PTR(-ENOMEM);
 
-	/*
-	 * User objects must be released *entirely* before the parent domain
-	 * is. As such, the domain pointer here is always valid and can be
-	 * dereferenced without any protection.
-	 */
 	kref_init(&u->ref);
 	u->uid = INVALID_UID;
 	u->id = BUS1_INTERNAL_UID_INVALID;
-	u->domain_info = domain_info;
 	atomic_set(&u->fds_inflight, 0);
 
 	return u;
@@ -53,43 +49,38 @@ static void bus1_user_free(struct kref *ref)
 
 	/* if already dropped, it's set to invalid */
 	if (uid_valid(user->uid)) {
-		mutex_lock(&user->domain_info->lock);
+		mutex_lock(&bus1_user_lock);
 		if (uid_valid(user->uid)) /* check again underneath lock */
-			idr_remove(&user->domain_info->user_idr,
-				   __kuid_val(user->uid));
-		mutex_unlock(&user->domain_info->lock);
+			idr_remove(&bus1_user_idr, __kuid_val(user->uid));
+		mutex_unlock(&bus1_user_lock);
 	}
 
 	/* drop the id from the ida if it was initialized */
 	if (user->id != BUS1_INTERNAL_UID_INVALID)
-		ida_simple_remove(&user->domain_info->user_ida, user->id);
+		ida_simple_remove(&bus1_user_ida, user->id);
 
 	kfree_rcu(user, rcu);
 }
 
 /**
- * bus1_user_acquire_by_uid() - get a user object for a uid in the given domain
- * @domain:		domain of the user
+ * bus1_user_ref_by_uid() - get a user object for a uid
  * @uid:		uid of the user
  *
- * Find and return the user object for the uid if it exists, otherwise create it
- * first. The caller is responsible to release their reference (and all derived
- * references) before the parent domain is deactivated!
+ * Find and return the user object for the uid if it exists, otherwise create
+ * it first.
  *
  * Return: A user object for the given uid, ERR_PTR on failure.
  */
-struct bus1_user *
-bus1_user_acquire_by_uid(struct bus1_domain *domain, kuid_t uid)
+struct bus1_user *bus1_user_ref_by_uid(kuid_t uid)
 {
 	struct bus1_user *user, *old_user;
 	int r;
 
 	WARN_ON(!uid_valid(uid));
-	lockdep_assert_held(&domain->active);
 
 	/* try to get the user without taking a lock */
 	rcu_read_lock();
-	user = idr_find(&domain->info->user_idr, __kuid_val(uid));
+	user = idr_find(&bus1_user_idr, __kuid_val(uid));
 	if (user && !kref_get_unless_zero(&user->ref))
 		user = NULL;
 	rcu_read_unlock();
@@ -97,7 +88,7 @@ bus1_user_acquire_by_uid(struct bus1_domain *domain, kuid_t uid)
 		return user;
 
 	/* didn't exist, allocate a new one */
-	user = bus1_user_new(domain->info);
+	user = bus1_user_new();
 	if (IS_ERR(user))
 		return ERR_CAST(user);
 
@@ -105,7 +96,7 @@ bus1_user_acquire_by_uid(struct bus1_domain *domain, kuid_t uid)
 	 * Allocate the smallest possible internal id for this user; used in
 	 * arrays for accounting user quota in receiver pools.
 	 */
-	r = ida_simple_get(&domain->info->user_ida, 0, 0, GFP_KERNEL);
+	r = ida_simple_get(&bus1_user_ida, 0, 0, GFP_KERNEL);
 	if (r < 0)
 		goto error;
 	user->id = r;
@@ -115,58 +106,57 @@ bus1_user_acquire_by_uid(struct bus1_domain *domain, kuid_t uid)
 	 * someone might have raced us, in which case we need to switch over
 	 * and drop our object. However, if the racing entry itself is already
 	 * about to be destroyed again (ref-count is 0, cleanup handler is
-	 * blocking on the domain-lock to drop the object), we rather replace
+	 * blocking on the user-lock to drop the object), we rather replace
 	 * the entry in the IDR with our own and mark the old one as removed.
 	 *
 	 * Note that we must set user->uid *before* the idr insertion, to make
 	 * sure any rcu-lookup can properly read it, even before we drop the
 	 * lock.
 	 */
-	mutex_lock(&domain->info->lock);
+	mutex_lock(&bus1_user_lock);
 	user->uid = uid;
-	old_user = idr_find(&domain->info->user_idr, __kuid_val(uid));
+	old_user = idr_find(&bus1_user_idr, __kuid_val(uid));
 	if (likely(!old_user)) {
-		r = idr_alloc(&domain->info->user_idr, user, __kuid_val(uid),
+		r = idr_alloc(&bus1_user_idr, user, __kuid_val(uid),
 			      __kuid_val(uid) + 1, GFP_KERNEL);
 		if (r < 0) {
-			mutex_unlock(&domain->info->lock);
+			mutex_unlock(&bus1_user_lock);
 			user->uid = INVALID_UID; /* couldn't insert */
 			goto error;
 		}
 	} else if (unlikely(!kref_get_unless_zero(&old_user->ref))) {
-		idr_replace(&domain->info->user_idr, user, __kuid_val(uid));
+		idr_replace(&bus1_user_idr, user, __kuid_val(uid));
 		old_user->uid = INVALID_UID; /* mark old as removed */
 		old_user = NULL;
 	} else {
 		user->uid = INVALID_UID; /* didn't insert, drop the marker */
 	}
-	mutex_unlock(&domain->info->lock);
+	mutex_unlock(&bus1_user_lock);
 
 	if (old_user) {
-		bus1_user_release(user);
+		bus1_user_unref(user);
 		user = old_user;
 	}
 
 	return user;
 
 error:
-	bus1_user_release(user);
+	bus1_user_unref(user);
 	return ERR_PTR(r);
 }
 
 /**
- * bus1_user_acquire() - acquire reference
+ * bus1_user_ref() - acquire reference
  * @user:	user to acquire, or NULL
  *
  * Acquire an additional reference to a user-object. The caller must already
- * own a reference. Furthermore, any acquired reference must be dropped before
- * the parent domain is dropped.
+ * own a reference.
  *
  * If NULL is passed, this is a no-op.
  *
  * Return: @user is returned.
  */
-struct bus1_user *bus1_user_acquire(struct bus1_user *user)
+struct bus1_user *bus1_user_ref(struct bus1_user *user)
 {
 	if (user)
 		kref_get(&user->ref);
@@ -174,19 +164,16 @@ struct bus1_user *bus1_user_acquire(struct bus1_user *user)
 }
 
 /**
- * bus1_user_release() - release reference
+ * bus1_user_unref() - release reference
  * @user:	user to release, or NULL
  *
- * Release a reference to a user-object. The caller must make sure to release
- * all their references before the parent domain is dropped.
- *
- * This function *might* lock the parent domain!
+ * Release a reference to a user-object.
  *
  * If NULL is passed, this is a no-op.
  *
  * Return: NULL is returned.
  */
-struct bus1_user *bus1_user_release(struct bus1_user *user)
+struct bus1_user *bus1_user_unref(struct bus1_user *user)
 {
 	if (user)
 		kref_put(&user->ref, bus1_user_free);

@@ -196,7 +196,7 @@ static void bus1_peer_cleanup(struct bus1_active *active,
 		return;
 
 	/* users reference the domain, so release with the domain locked */
-	peer_info->user = bus1_user_release(peer_info->user);
+	peer_info->user = bus1_user_unref(peer_info->user);
 
 	list_del_init(&peer->link_domain);
 	--domain->n_peers;
@@ -407,7 +407,7 @@ static int bus1_peer_connect_new(struct bus1_peer *peer,
 		return PTR_ERR(peer_info);
 
 	/* pin a user object */
-	peer_info->user = bus1_user_acquire_by_uid(domain, uid);
+	peer_info->user = bus1_user_ref_by_uid(uid);
 	if (IS_ERR(peer_info->user)) {
 		r = PTR_ERR(peer_info->user);
 		peer_info->user = NULL;
@@ -428,7 +428,7 @@ static int bus1_peer_connect_new(struct bus1_peer *peer,
 	return 0;
 
 error:
-	peer_info->user = bus1_user_release(peer_info->user);
+	peer_info->user = bus1_user_unref(peer_info->user);
 	bus1_peer_info_free(peer_info);
 	return r;
 }

@@ -118,7 +118,7 @@ int bus1_message_allocate_locked(struct bus1_message *message,
 	/* make sure the allocator didn't pad it */
 	WARN_ON(slice_size != slice->size);
 
-	message->user = bus1_user_acquire(user);
+	message->user = bus1_user_ref(user);
 	message->slice = slice;
 	return 0;
 }
@@ -139,5 +139,5 @@ void bus1_message_deallocate_locked(struct bus1_message *message,
 							  message->slice);
 	}
 
-	message->user = bus1_user_release(message->user);
+	message->user = bus1_user_unref(message->user);
 }
