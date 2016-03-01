@@ -642,7 +642,7 @@ static int bus1_peer_ioctl_send(struct bus1_peer *peer,
 		return -EFAULT;
 
 	/* peer is pinned, hence domain_info and ID can be accessed freely */
-	transaction = bus1_transaction_new_from_user(peer_info, domain, &param,
+	transaction = bus1_transaction_new_from_user(peer_info, &param,
 						     buf, sizeof(buf),
 						     bus1_in_compat_syscall());
 	if (IS_ERR(transaction))

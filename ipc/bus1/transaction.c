@@ -17,7 +17,6 @@
 #include <linux/uaccess.h>
 #include <linux/uio.h>
 #include <uapi/linux/bus1.h>
-#include "domain.h"
 #include "message.h"
 #include "peer.h"
 #include "pool.h"
@@ -43,7 +42,6 @@ struct bus1_transaction_header {
 struct bus1_transaction {
 	/* sender context */
 	struct bus1_peer_info *peer_info;
-	struct bus1_domain *domain;
 
 	/* transaction state */
 	size_t length_vecs;
@@ -217,7 +215,6 @@ bus1_transaction_import_message(struct bus1_transaction *transaction)
  */
 struct bus1_transaction *
 bus1_transaction_new_from_user(struct bus1_peer_info *peer_info,
-			       struct bus1_domain *domain,
 			       struct bus1_cmd_send *param,
 			       void *buf,
 			       size_t buf_len,
@@ -232,7 +229,6 @@ bus1_transaction_new_from_user(struct bus1_peer_info *peer_info,
 		return ERR_CAST(transaction);
 
 	transaction->peer_info = peer_info;
-	transaction->domain = domain;
 
 	r = bus1_transaction_import_vecs(transaction, param, is_compat);
 	if (r < 0)

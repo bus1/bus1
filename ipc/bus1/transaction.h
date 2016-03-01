@@ -19,13 +19,10 @@
 #include <linux/kernel.h>
 #include <uapi/linux/bus1.h>
 
-struct bus1_domain;
-struct bus1_domain_info;
 struct bus1_transaction;
 
 struct bus1_transaction *
 bus1_transaction_new_from_user(struct bus1_peer_info *peer_info,
-			       struct bus1_domain *domain,
 			       struct bus1_cmd_send *param,
 			       void *buf,
 			       size_t buf_len,
