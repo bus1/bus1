@@ -12,14 +12,12 @@
 #include <linux/file.h>
 #include <linux/fs.h>
 #include <linux/kernel.h>
-#include <linux/kref.h>
-#include <linux/list.h>
 #include <linux/mutex.h>
 #include <linux/rbtree.h>
 #include <linux/rcupdate.h>
-#include <linux/rwsem.h>
 #include <linux/seqlock.h>
 #include <linux/slab.h>
+#include <linux/spinlock.h>
 #include <linux/uaccess.h>
 #include <linux/wait.h>
 #include <uapi/linux/bus1.h>
@@ -141,7 +139,6 @@ struct bus1_peer *bus1_peer_new(void)
 	if (!peer)
 		return ERR_PTR(-ENOMEM);
 
-	init_rwsem(&peer->rwlock);
 	init_waitqueue_head(&peer->waitq);
 	bus1_active_init(&peer->active);
 	rcu_assign_pointer(peer->info, NULL);
@@ -173,34 +170,48 @@ struct bus1_peer *bus1_peer_free(struct bus1_peer *peer)
 	return NULL;
 }
 
+static void bus1_peer_cleanup(struct bus1_active *active, void *userdata)
+{
+	struct bus1_peer *peer = container_of(active, struct bus1_peer, active);
+	struct bus1_peer_info *peer_info;
+	unsigned long flags;
+
+	/* see bus1_peer_connect_new(); we borrow the waitq-lock here */
+	spin_lock_irqsave(&peer->waitq.lock, flags);
+	peer_info = rcu_dereference_protected(peer->info,
+					lockdep_is_held(&peer->waitq.lock));
+	rcu_assign_pointer(peer->info, NULL);
+	spin_unlock_irqrestore(&peer->waitq.lock, flags);
+
+	if (peer_info) /* might be NULL if never activated */
+		bus1_peer_info_free(peer_info);
+}
+
 /**
- * bus1_peer_teardown() - XXX
+ * bus1_peer_teardown() - tear peer down
+ * @peer:		peer to operate on
+ *
+ * This tears down a peer synchronously. It first marks the peer as
+ * deactivated, waits for all outstanding operations to finish, and eventually
+ * releases the linked peer_info object.
+ *
+ * It is perfectly safe to call this function multiple times, even in parallel.
+ * It is guaranteed to block *until* the peer is fully torn down, regardless
+ * whether this was the call to tear it down, or not.
+ *
+ * Return: 0 on success, negative error code if already torn down.
  */
 int bus1_peer_teardown(struct bus1_peer *peer)
 {
-	struct bus1_peer_info *peer_info;
-	int r = 0;
-
-	/* lock against parallel CONNECT/DISCONNECT */
-	down_write(&peer->rwlock);
-
 	/* deactivate and wait for any outstanding operations */
 	bus1_active_deactivate(&peer->active);
 	bus1_active_drain(&peer->active, &peer->waitq);
 
-	if (bus1_active_cleanup(&peer->active, NULL, NULL, NULL)) {
-		peer_info = rcu_dereference_protected(peer->info,
-					bus1_active_is_drained(&peer->active));
-		rcu_assign_pointer(peer->info, NULL);
-		if (peer_info)
-			bus1_peer_info_free(peer_info);
-	} else {
-		r = -ESHUTDOWN;
-	}
+	if (!bus1_active_cleanup(&peer->active, &peer->waitq,
+				 bus1_peer_cleanup, NULL))
+		return -ESHUTDOWN;
 
-	up_write(&peer->rwlock);
-
-	return r;
+	return 0;
 }
 
 static int bus1_peer_connect_new(struct bus1_peer *peer,
@@ -208,24 +219,41 @@ static int bus1_peer_connect_new(struct bus1_peer *peer,
 				 struct bus1_cmd_connect *param)
 {
 	struct bus1_peer_info *peer_info;
-
-	lockdep_assert_held(&peer->rwlock);
-
-	if (!bus1_active_is_new(&peer->active))
-		return -EISCONN;
-	if (WARN_ON(rcu_access_pointer(peer->info)))
-		return -EISCONN;
-	if (param->flags & BUS1_CONNECT_FLAG_MONITOR)
-		return -ENOTSUPP; /* XXX: not yet implemented */
+	unsigned long flags;
+	int r;
 
 	peer_info = bus1_peer_info_new(param, uid);
 	if (IS_ERR(peer_info))
 		return PTR_ERR(peer_info);
 
-	rcu_assign_pointer(peer->info, peer_info);
-	bus1_active_activate(&peer->active);
+	/*
+	 * To connect the peer, we have to set @peer_info on @peer->info *and*
+	 * mark the active counter as active. Since this call is fully unlocked
+	 * we borrow @peer->waitq.lock to synchronize against parallel
+	 * connects *and* disconnects. The critical section just swaps the
+	 * pointer and performs a *single* attempt of an atomic cmpxchg (see
+	 * bus1_active_activate() for details). Hence, borrowing the waitq-lock
+	 * is perfectly fine.
+	 */
+	spin_lock_irqsave(&peer->waitq.lock, flags);
+	if (bus1_active_is_deactivated(&peer->active)) {
+		r = -ESHUTDOWN;
+	} else if (rcu_access_pointer(peer->info)) {
+		r = -EISCONN;
+	} else {
+		rcu_assign_pointer(peer->info, peer_info);
+		if (bus1_active_activate(&peer->active)) {
+			peer_info = NULL; /* mark as consumed */
+			r = 0;
+		} else {
+			rcu_assign_pointer(peer->info, NULL);
+			r = -ESHUTDOWN;
+		}
+	}
+	spin_unlock_irqrestore(&peer->waitq.lock, flags);
 
-	return 0;
+	bus1_peer_info_free(peer_info);
+	return r;
 }
 
 static int bus1_peer_connect_reset(struct bus1_peer *peer,
@@ -233,27 +261,19 @@ static int bus1_peer_connect_reset(struct bus1_peer *peer,
 {
 	struct bus1_peer_info *peer_info;
 
-	/*
-	 * XXX: reset?
-	 */
-
-	lockdep_assert_held(&peer->rwlock);
-
 	if (bus1_active_is_new(&peer->active))
 		return -ENOTCONN;
 	if (param->pool_size != 0 || param->size > sizeof(*param))
 		return -EINVAL;
 
-	peer_info = rcu_dereference_protected(peer->info,
-					lockdep_is_held(&peer->rwlock));
-	if (WARN_ON(!peer_info))
+	if (!bus1_peer_acquire(peer))
 		return -ESHUTDOWN;
 
-	/* provide information for caller */
+	peer_info = bus1_peer_dereference(peer);
 	param->pool_size = peer_info->pool.size;
-
 	bus1_peer_info_reset(peer_info);
 
+	bus1_peer_release(peer);
 	return 0;
 }
 
@@ -261,20 +281,20 @@ static int bus1_peer_connect_query(struct bus1_peer *peer,
 				   struct bus1_cmd_connect *param)
 {
 	struct bus1_peer_info *peer_info;
-
-	lockdep_assert_held(&peer->rwlock);
+	int r = 0;
 
 	if (bus1_active_is_new(&peer->active))
 		return -ENOTCONN;
 
-	peer_info = rcu_dereference_protected(peer->info,
-					lockdep_is_held(&peer->rwlock));
-	if (WARN_ON(!peer_info))
-		return -ESHUTDOWN;
+	rcu_read_lock();
+	peer_info = rcu_dereference(peer->info);
+	if (peer_info)
+		param->pool_size = peer_info->pool.size;
+	else
+		r = -ESHUTDOWN;
+	rcu_read_unlock();
 
-	param->pool_size = peer_info->pool.size;
-
-	return 0;
+	return r;
 }
 
 static int bus1_peer_ioctl_connect(struct bus1_peer *peer,
@@ -291,7 +311,7 @@ static int bus1_peer_ioctl_connect(struct bus1_peer *peer,
 
 	/* check for validity of all flags */
 	if (param->flags & ~(BUS1_CONNECT_FLAG_CLIENT |
-			     BUS1_CONNECT_FLAG_MONITOR |
+		     /* XXX: BUS1_CONNECT_FLAG_MONITOR | */
 			     BUS1_CONNECT_FLAG_QUERY |
 			     BUS1_CONNECT_FLAG_RESET))
 		return -EINVAL;
@@ -301,14 +321,8 @@ static int bus1_peer_ioctl_connect(struct bus1_peer *peer,
 	    !!(param->flags & BUS1_CONNECT_FLAG_RESET) > 1)
 		return -EINVAL;
 
-	/* lock against parallel CONNECT/DISCONNECT */
-	down_write(&peer->rwlock);
-
-	if (bus1_active_is_deactivated(&peer->active)) {
-		/* all fails, if the peer was already disconnected */
-		r = -ESHUTDOWN;
-	} else if (param->flags & (BUS1_CONNECT_FLAG_CLIENT |
-				   BUS1_CONNECT_FLAG_MONITOR)) {
+	if (param->flags & (BUS1_CONNECT_FLAG_CLIENT |
+			    BUS1_CONNECT_FLAG_MONITOR)) {
 		/* fresh connect of a new peer */
 		r = bus1_peer_connect_new(peer, file->f_cred->uid, param);
 	} else if (param->flags & BUS1_CONNECT_FLAG_RESET) {
@@ -320,8 +334,6 @@ static int bus1_peer_ioctl_connect(struct bus1_peer *peer,
 	} else {
 		r = -EINVAL; /* no mode specified */
 	}
-
-	up_write(&peer->rwlock);
 
 	/*
 	 * QUERY can be combined with any CONNECT operation. On success, it
@@ -640,38 +652,34 @@ int bus1_peer_ioctl(struct bus1_peer *peer,
 		    unsigned int cmd,
 		    unsigned long arg)
 {
-	int r = -ENOTTY;
+	int r;
 
 	switch (cmd) {
 	case BUS1_CMD_CONNECT:
-		r = bus1_peer_ioctl_connect(peer, file, arg);
-		break;
+		return bus1_peer_ioctl_connect(peer, file, arg);
 
 	case BUS1_CMD_DISCONNECT:
 		/* no arguments allowed, it behaves like the last close() */
 		if (arg != 0)
 			return -EINVAL;
-
 		return bus1_peer_teardown(peer);
 
 	case BUS1_CMD_SLICE_RELEASE:
 	case BUS1_CMD_SEND:
 	case BUS1_CMD_RECV:
-		down_read(&peer->rwlock);
-		if (!bus1_peer_acquire(peer)) {
-			r = -ESHUTDOWN;
-		} else {
-			if (cmd == BUS1_CMD_SLICE_RELEASE)
-				r = bus1_peer_ioctl_slice_release(peer, arg);
-			else if (cmd == BUS1_CMD_SEND)
-				r = bus1_peer_ioctl_send(peer, arg);
-			else if (cmd == BUS1_CMD_RECV)
-				r = bus1_peer_ioctl_recv(peer, arg);
-			bus1_peer_release(peer);
-		}
-		up_read(&peer->rwlock);
-		break;
+		if (!bus1_peer_acquire(peer))
+			return -ESHUTDOWN;
+		if (cmd == BUS1_CMD_SLICE_RELEASE)
+			r = bus1_peer_ioctl_slice_release(peer, arg);
+		else if (cmd == BUS1_CMD_SEND)
+			r = bus1_peer_ioctl_send(peer, arg);
+		else if (cmd == BUS1_CMD_RECV)
+			r = bus1_peer_ioctl_recv(peer, arg);
+		else
+			r = -ENOTTY;
+		bus1_peer_release(peer);
+		return r;
 	}
 
-	return r;
+	return -ENOTTY;
 }

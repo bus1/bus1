@@ -21,7 +21,6 @@
 #include <linux/mutex.h>
 #include <linux/rcupdate.h>
 #include <linux/rbtree.h>
-#include <linux/rwsem.h>
 #include <linux/sched.h>
 #include <linux/seqlock.h>
 #include <linux/wait.h>
@@ -60,17 +59,13 @@ struct bus1_peer_info {
 
 /**
  * struct bus1_peer - peer handle
- * @rwlock:		runtime lock
  * @rcu:		rcu
  * @waitq:		peer wide wait queue
  * @active:		active references
  * @info:		underlying peer information
  */
 struct bus1_peer {
-	union {
-		struct rw_semaphore rwlock;
-		struct rcu_head rcu;
-	};
+	struct rcu_head rcu;
 	wait_queue_head_t waitq;
 	struct bus1_active active;
 	struct bus1_peer_info __rcu *info;
