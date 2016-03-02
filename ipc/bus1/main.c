@@ -25,6 +25,7 @@
 #include "main.h"
 #include "peer.h"
 #include "queue.h"
+#include "tests.h"
 
 static int bus1_fop_open(struct inode *inode, struct file *file)
 {
@@ -169,6 +170,8 @@ static struct miscdevice bus1_misc = {
 static int __init bus1_init(void)
 {
 	int r;
+
+	bus1_tests_run();
 
 	r = misc_register(&bus1_misc);
 	if (r < 0)

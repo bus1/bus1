@@ -20,4 +20,6 @@ bus$(BUS1_EXT)-y :=	\
 	util.o		\
 	user.o
 
+bus$(BUS1_EXT)-$(CONFIG_BUS1_TESTS) += tests.o
+
 obj-$(CONFIG_BUS1) += bus$(BUS1_EXT).o
