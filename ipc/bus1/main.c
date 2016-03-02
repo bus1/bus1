@@ -124,8 +124,7 @@ static long bus1_fop_ioctl(struct file *file,
 	int r;
 
 	switch (cmd) {
-	case BUS1_CMD_CONNECT:
-	{
+	case BUS1_CMD_CONNECT: {
 		struct bus1_cmd_connect __user *uparam = (void __user *)arg;
 		struct bus1_cmd_connect param;
 
@@ -146,6 +145,8 @@ static long bus1_fop_ioctl(struct file *file,
 		if ((param.flags & BUS1_CONNECT_FLAG_QUERY) &&
 		    put_user(param.pool_size, &uparam->pool_size))
 			return -EFAULT; /* Don't care.. keep what we have */
+
+		return 0;
 	}
 	case BUS1_CMD_DISCONNECT:
 		/* no arguments allowed, it behaves like the last close() */

@@ -24,6 +24,7 @@
 #include <linux/sched.h>
 #include <linux/seqlock.h>
 #include <linux/wait.h>
+#include <uapi/linux/bus1.h>
 #include "active.h"
 #include "pool.h"
 #include "queue.h"
