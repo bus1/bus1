@@ -162,7 +162,7 @@ bus1_pool_slice_find_by_offset(struct bus1_pool *pool, size_t offset)
  *
  * NOTE: All pools must be embedded into a parent bus1_peer_info object. The
  *       code works fine, if you don't, but the lockdep-annotations will fail
- *       horribly. They rely on container_of() to be valid on every poo. Use
+ *       horribly. They rely on container_of() to be valid on every pool. Use
  *       the bus1_pool_create_for_peer() macro to make sure you never violate
  *       this rule.
  *
