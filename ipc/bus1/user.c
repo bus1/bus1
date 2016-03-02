@@ -76,7 +76,8 @@ struct bus1_user *bus1_user_ref_by_uid(kuid_t uid)
 	struct bus1_user *user, *old_user;
 	int r;
 
-	WARN_ON(!uid_valid(uid));
+	if (WARN_ON(!uid_valid(uid)))
+		return ERR_PTR(-EINVAL);
 
 	/* try to get the user without taking a lock */
 	rcu_read_lock();
