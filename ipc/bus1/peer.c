@@ -188,7 +188,7 @@ static void bus1_peer_cleanup(struct bus1_active *active, void *userdata)
 }
 
 /**
- * bus1_peer_teardown() - tear peer down
+ * bus1_peer_disconnect() - disconnect peer
  * @peer:		peer to operate on
  *
  * This tears down a peer synchronously. It first marks the peer as
@@ -201,7 +201,7 @@ static void bus1_peer_cleanup(struct bus1_active *active, void *userdata)
  *
  * Return: 0 on success, negative error code if already torn down.
  */
-int bus1_peer_teardown(struct bus1_peer *peer)
+int bus1_peer_disconnect(struct bus1_peer *peer)
 {
 	/* deactivate and wait for any outstanding operations */
 	bus1_active_deactivate(&peer->active);

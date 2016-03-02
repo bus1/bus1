@@ -42,7 +42,7 @@ static int bus1_fop_release(struct inode *inode, struct file *file)
 {
 	struct bus1_peer *peer = file->private_data;
 
-	bus1_peer_teardown(peer);
+	bus1_peer_disconnect(peer);
 	bus1_peer_free(peer);
 
 	return 0;
@@ -128,7 +128,7 @@ static long bus1_fop_ioctl(struct file *file,
 		/* no arguments allowed, it behaves like the last close() */
 		if (arg != 0)
 			return -EINVAL;
-		return bus1_peer_teardown(peer);
+		return bus1_peer_disconnect(peer);
 	case BUS1_CMD_HANDLE_CREATE:
 	case BUS1_CMD_HANDLE_DESTROY:
 	case BUS1_CMD_HANDLE_RELEASE:
