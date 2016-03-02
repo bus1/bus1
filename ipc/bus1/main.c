@@ -100,12 +100,6 @@ static int bus1_fop_mmap(struct file *file, struct vm_area_struct *vma)
 	struct bus1_pool *pool;
 	int r;
 
-	/*
-	 * We don't lock peer->rwlock, as it is not needed, and we really
-	 * don't want to order it below mmap_sem. Pinning the peer is
-	 * sufficient to guarantee the pool is accessible and will not go away.
-	 */
-
 	if (!bus1_peer_acquire(peer))
 		return -ESHUTDOWN;
 
