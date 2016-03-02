@@ -73,9 +73,11 @@ struct bus1_peer {
 
 struct bus1_peer *bus1_peer_new(void);
 struct bus1_peer *bus1_peer_free(struct bus1_peer *peer);
+int bus1_peer_connect(struct bus1_peer *peer,
+		      struct file *file,
+		      unsigned long arg);
 int bus1_peer_teardown(struct bus1_peer *peer);
 int bus1_peer_ioctl(struct bus1_peer *peer,
-		    const struct file *file,
 		    unsigned int cmd,
 		    unsigned long arg);
 

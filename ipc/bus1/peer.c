@@ -299,9 +299,22 @@ static int bus1_peer_connect_query(struct bus1_peer *peer,
 	return r;
 }
 
-static int bus1_peer_ioctl_connect(struct bus1_peer *peer,
-				   const struct file *file,
-				   unsigned long arg)
+/**
+ * bus1_peer_connect() - establish new peer
+ * @peer:		peer to operate on
+ * @file:		underlying file of @peer
+ * @arg:		ioctl arguments
+ *
+ * This performs a peer-connect. Depending on the parameter flags in @arg, the
+ * peer is either setup, queried, or reset.
+ *
+ * The caller must not hold any active reference to the peer.
+ *
+ * Return: 0 on success, negative error code on failure.
+ */
+int bus1_peer_connect(struct bus1_peer *peer,
+		      struct file *file,
+		      unsigned long arg)
 {
 	struct bus1_cmd_connect __user *uparam = (void __user *)arg;
 	struct bus1_cmd_connect param;
@@ -325,13 +338,10 @@ static int bus1_peer_ioctl_connect(struct bus1_peer *peer,
 
 	if (param.flags & (BUS1_CONNECT_FLAG_CLIENT |
 			   BUS1_CONNECT_FLAG_MONITOR))
-		/* fresh connect of a new peer */
 		r = bus1_peer_connect_new(peer, file->f_cred->uid, &param);
 	else if (param.flags & BUS1_CONNECT_FLAG_RESET)
-		/* reset of the peer requested */
 		r = bus1_peer_connect_reset(peer, &param);
 	else if (param.flags & BUS1_CONNECT_FLAG_QUERY)
-		/* fallback: no special operation specified, just query */
 		r = bus1_peer_connect_query(peer, &param);
 	else
 		r = -EINVAL; /* no mode specified */
@@ -640,54 +650,36 @@ exit:
 /**
  * bus1_peer_ioctl() - handle peer ioctl
  * @peer:		peer to work on
- * @file:		file this ioctl is called on
  * @cmd:		ioctl command
  * @arg:		ioctl argument
  *
  * This handles the given ioctl (cmd+arg) on the passed peer. The caller must
- * not hold an active reference to the peer.
+ * hold an active reference to @peer.
+ *
+ * This only handles the runtime ioctls. Setup and teardown must be called
+ * directly.
  *
  * Multiple ioctls can be called in parallel just fine. No locking is needed.
  *
  * Return: 0 on success, negative error code on failure.
  */
 int bus1_peer_ioctl(struct bus1_peer *peer,
-		    const struct file *file,
 		    unsigned int cmd,
 		    unsigned long arg)
 {
-	int r;
+	lockdep_assert_held(&peer->active);
 
 	switch (cmd) {
-	case BUS1_CMD_CONNECT:
-		return bus1_peer_ioctl_connect(peer, file, arg);
-
-	case BUS1_CMD_DISCONNECT:
-		/* no arguments allowed, it behaves like the last close() */
-		if (arg != 0)
-			return -EINVAL;
-		return bus1_peer_teardown(peer);
-
 	case BUS1_CMD_HANDLE_CREATE:
 	case BUS1_CMD_HANDLE_DESTROY:
 	case BUS1_CMD_HANDLE_RELEASE:
+		return -ENOTTY;
 	case BUS1_CMD_SLICE_RELEASE:
+		return bus1_peer_ioctl_slice_release(peer, arg);
 	case BUS1_CMD_SEND:
+		return bus1_peer_ioctl_send(peer, arg);
 	case BUS1_CMD_RECV:
-		if (bus1_active_is_new(&peer->active))
-			return -ENOTCONN;
-		if (!bus1_peer_acquire(peer))
-			return -ESHUTDOWN;
-		if (cmd == BUS1_CMD_SLICE_RELEASE)
-			r = bus1_peer_ioctl_slice_release(peer, arg);
-		else if (cmd == BUS1_CMD_SEND)
-			r = bus1_peer_ioctl_send(peer, arg);
-		else if (cmd == BUS1_CMD_RECV)
-			r = bus1_peer_ioctl_recv(peer, arg);
-		else
-			r = -ENOTTY;
-		bus1_peer_release(peer);
-		return r;
+		return bus1_peer_ioctl_recv(peer, arg);
 	}
 
 	return -ENOTTY;

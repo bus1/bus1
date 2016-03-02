@@ -20,6 +20,7 @@
 #include <linux/rcupdate.h>
 #include <linux/sched.h>
 #include <linux/slab.h>
+#include <uapi/linux/bus1.h>
 #include "active.h"
 #include "main.h"
 #include "peer.h"
@@ -120,7 +121,33 @@ static long bus1_fop_ioctl(struct file *file,
 			   unsigned int cmd,
 			   unsigned long arg)
 {
-	return bus1_peer_ioctl(file->private_data, file, cmd, arg);
+	struct bus1_peer *peer = file->private_data;
+	int r;
+
+	switch (cmd) {
+	case BUS1_CMD_CONNECT:
+		return bus1_peer_connect(peer, file, arg);
+	case BUS1_CMD_DISCONNECT:
+		/* no arguments allowed, it behaves like the last close() */
+		if (arg != 0)
+			return -EINVAL;
+		return bus1_peer_teardown(peer);
+	case BUS1_CMD_HANDLE_CREATE:
+	case BUS1_CMD_HANDLE_DESTROY:
+	case BUS1_CMD_HANDLE_RELEASE:
+	case BUS1_CMD_SLICE_RELEASE:
+	case BUS1_CMD_SEND:
+	case BUS1_CMD_RECV:
+		if (bus1_active_is_new(&peer->active))
+			return -ENOTCONN;
+		if (!bus1_peer_acquire(peer))
+			return -ESHUTDOWN;
+		r = bus1_peer_ioctl(peer, cmd, arg);
+		bus1_peer_release(peer);
+		return r;
+	}
+
+	return -ENOTTY;
 }
 
 const struct file_operations bus1_fops = {
