@@ -95,10 +95,7 @@ static int bus1_fop_mmap(struct file *file, struct vm_area_struct *vma)
 
 	pool = &bus1_peer_dereference(peer)->pool;
 
-	if ((vma->vm_end - vma->vm_start) > pool->size) {
-		/* do not allow to map more than the size of the file */
-		r = -EFAULT;
-	} else if (vma->vm_flags & VM_WRITE) {
+	if (vma->vm_flags & VM_WRITE) {
 		/* deny write access to the pool */
 		r = -EPERM;
 	} else {
