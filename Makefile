@@ -118,19 +118,17 @@ uninstall:
 	rm -f /lib/modules/$(KERNELVER)/kernel/ipc/bus1/bus$(BUS1_EXT).ko
 .PHONY: uninstall
 
-tt-prepare: module tests
+tt-prepare: module
 	-sudo sh -c 'dmesg -c > /dev/null'
-	-sudo umount /sys/fs/bus$(BUS1_EXT)
 	-sudo sh -c 'rmmod bus$(BUS1_EXT)'
 	sudo sh -c 'insmod ipc/bus1/bus$(BUS1_EXT).ko'
-	sudo mount -t bus$(BUS1_EXT)fs bus$(BUS1_EXT)fs /sys/fs/bus$(BUS1_EXT)
 .PHONY: tt-prepare
 
-tt: tt-prepare
+tt: tests tt-prepare
 	tools/testing/selftests/bus1/b1-test --module bus$(BUS1_EXT) ; (R=$$? ; dmesg ; exit $$R)
 .PHONY: tt
 
-stt: tt-prepare
+stt: tests tt-prepare
 	sudo tools/testing/selftests/bus1/b1-test --module bus$(BUS1_EXT) ; (R=$$? ; dmesg ; exit $$R)
 .PHONY: stt
 
