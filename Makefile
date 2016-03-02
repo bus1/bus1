@@ -81,8 +81,9 @@ tests:
 # the core bus1 repositories checked out in a local bus1/ directory.
 #
 b: ../build/linux
-	$(MAKE) -C ../build/linux M=$(PWD) \
-		EXTRA_CFLAGS="$(EXTRA_CFLAGS)" BUS1_EXT=1 CONFIG_BUS1=m
+	$(MAKE) -C ../build/linux M=$(PWD) EXTRA_CFLAGS="$(EXTRA_CFLAGS)" \
+		HOST_EXTRACFLAGS="$(HOST_EXTRACFLAGS)" BUS1_EXT=$(BUS1_EXT) \
+		CONFIG_BUS1=m
 .PHONY: b
 
 #
