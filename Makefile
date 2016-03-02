@@ -1,7 +1,7 @@
 #
 # Out-of-tree Bus1 Module
 # This makefile builds the out-of-tree Bus1 module and all complementary
-# elements, including samples and documentation provided alongside the module.
+# elements, including documentation provided alongside the module.
 #
 # This Makefile serves two purposes. It serves as main Makefile for this
 # project, but also as entry point for the out-of-tree kernel makefile hook.
@@ -13,13 +13,11 @@
 # Kernel Makefile
 # This part builds the kernel module and everything related. It uses the kbuild
 # infrastructure to hook into the obj- build of the kernel.
-# Both the actual module and the samples are added. The Documentation cannot be
-# added here, as the kernel doesn't support that for out-of-tree modules.
+# The Documentation cannot be added here, as the kernel doesn't support that
+# for out-of-tree modules.
 #
-SHELL=/bin/bash
 
 obj-$(CONFIG_BUS1) += ipc/bus1/
-obj-$(CONFIG_SAMPLES) += samples/bus1/
 
 #
 # Project Makefile
@@ -30,6 +28,7 @@ obj-$(CONFIG_SAMPLES) += samples/bus1/
 BUS1_EXT		?= 1
 KERNELVER		?= $(shell uname -r)
 KERNELDIR 		?= /lib/modules/$(KERNELVER)/build
+SHELL			:= /bin/bash
 PWD			:= $(shell pwd)
 EXTRA_CFLAGS		+= -I$(PWD)/include -DBUS1_SUPER_MAGIC=0x64627573
 HOST_EXTRACFLAGS	+= -I$(PWD)/usr/include
@@ -52,7 +51,7 @@ all: module
 module:
 	$(MAKE) -C $(KERNELDIR) M=$(PWD) EXTRA_CFLAGS="$(EXTRA_CFLAGS)" \
 		HOST_EXTRACFLAGS="$(HOST_EXTRACFLAGS)" BUS1_EXT=$(BUS1_EXT) \
-		CONFIG_BUS1=m CONFIG_SAMPLES=y CONFIG_SAMPLE_BUS1=y
+		CONFIG_BUS1=m
 .PHONY: module
 
 #
@@ -95,7 +94,6 @@ b: ../build/linux
 diff:
 	-@diff -q -u include/uapi/linux/bus1.h ./$(KERNELSRC)/include/uapi/linux/bus1.h
 	-@diff -q -u -r ipc/bus1/ ./$(KERNELSRC)/ipc/bus1
-	-@diff -q -u -r samples/bus1/ ./$(KERNELSRC)/samples/bus1
 	-@diff -q -u -r Documentation/bus1/ ./$(KERNELSRC)/Documentation/bus1
 	-@diff -q -u -r tools/testing/selftests/bus1/ ./$(KERNELSRC)/tools/testing/selftests/bus1
 .PHONY: diff
@@ -104,8 +102,6 @@ clean:
 	rm -f *.o *~ core .depend .*.cmd *.ko *.mod.c
 	rm -f ipc/bus1/{*.ko,*.o,.*.cmd,*.order,*.mod.c}
 	rm -f Module.markers Module.symvers modules.order
-	rm -f samples/bus1/{*.o,modules.order,Module.symvers}
-	rm -rf samples/bus1/{.*.cmd,.tmp_versions}
 	rm -f Documentation/bus1/{*.7,*.html}
 	rm -f tools/testing/selftests/bus1/*.o
 	rm -rf .tmp_versions Modules.symvers $(hostprogs-y)
