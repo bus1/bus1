@@ -52,32 +52,43 @@ static unsigned int bus1_fop_poll(struct file *file,
 {
 	struct bus1_peer *peer = file->private_data;
 	struct bus1_peer_info *peer_info;
-	unsigned int mask = 0;
+	unsigned int mask = POLLERR | POLLHUP;
 
 	poll_wait(file, &peer->waitq, wait);
 
 	/*
 	 * If the peer is still in state NEW, then CONNECT hasn't been called
 	 * and the peer is unused. Return no event at all.
+	 */
+	if (bus1_active_is_new(&peer->active))
+		return 0;
+
+	/*
 	 * If the peer is not NEW, then CONNECT *was* called. We then check
 	 * whether it was deactivated, yet. In that case, the peer is dead.
+	 */
+	if (bus1_active_is_deactivated(&peer->active))
+		return mask;
+
+	/*
 	 * Lastly, we dereference the peer object (which is rcu-protected). It
 	 * might be NULL during a racing DISCONNECT (_very_ unlikely, but lets
-	 * be safe). If it is not NULL, the peer is live and active, so it is
-	 * at least writable. Check if the queue is non-empty, and then also
-	 * mark it as readable.
+	 * be safe).
 	 */
 	rcu_read_lock();
-	if (!bus1_active_is_new(&peer->active)) {
-		peer_info = rcu_dereference(peer->info);
-		if (bus1_active_is_deactivated(&peer->active) || !peer_info) {
-			mask = POLLERR | POLLHUP;
-		} else {
-			mask = POLLOUT | POLLWRNORM;
-			if (bus1_queue_peek_rcu(&peer_info->queue))
-				mask |= POLLIN | POLLRDNORM;
-		}
-	}
+	peer_info = rcu_dereference(peer->info);
+	if (!peer_info)
+		return mask;
+
+	/*
+	 * If it is not NULL, the peer is live and active, so it is at least
+	 * writable.
+	 */
+	mask = POLLOUT | POLLWRNORM;
+
+	/* If the queue is non-empty, then also mark it as readable.*/
+	if (bus1_queue_peek_rcu(&peer_info->queue))
+		mask |= POLLIN | POLLRDNORM;
 	rcu_read_unlock();
 
 	return mask;
