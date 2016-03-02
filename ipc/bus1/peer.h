@@ -74,8 +74,8 @@ struct bus1_peer {
 struct bus1_peer *bus1_peer_new(void);
 struct bus1_peer *bus1_peer_free(struct bus1_peer *peer);
 int bus1_peer_connect(struct bus1_peer *peer,
-		      struct file *file,
-		      unsigned long arg);
+		      kuid_t uid,
+		      struct bus1_cmd_connect *param);
 int bus1_peer_disconnect(struct bus1_peer *peer);
 int bus1_peer_ioctl(struct bus1_peer *peer,
 		    unsigned int cmd,

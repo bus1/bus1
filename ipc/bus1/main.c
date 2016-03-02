@@ -26,6 +26,7 @@
 #include "peer.h"
 #include "queue.h"
 #include "tests.h"
+#include "util.h"
 
 static int bus1_fop_open(struct inode *inode, struct file *file)
 {
@@ -124,7 +125,28 @@ static long bus1_fop_ioctl(struct file *file,
 
 	switch (cmd) {
 	case BUS1_CMD_CONNECT:
-		return bus1_peer_connect(peer, file, arg);
+	{
+		struct bus1_cmd_connect __user *uparam = (void __user *)arg;
+		struct bus1_cmd_connect param;
+
+		r = bus1_import_fixed_ioctl(&param, arg, sizeof(param));
+		if (r < 0)
+			return r;
+
+		r = bus1_peer_connect(peer, file->f_cred->uid, &param);
+		if (r < 0)
+			return r;
+
+		/*
+		 * QUERY can be combined with any CONNECT operation. On success,
+		 * it causes the peer information to be copied back to
+		 * user-space. The CONNECT handlers must provide that
+		 * information in @param for this to copy it back.
+		 */
+		if ((param.flags & BUS1_CONNECT_FLAG_QUERY) &&
+		    put_user(param.pool_size, &uparam->pool_size))
+			return -EFAULT; /* Don't care.. keep what we have */
+	}
 	case BUS1_CMD_DISCONNECT:
 		/* no arguments allowed, it behaves like the last close() */
 		if (arg != 0)

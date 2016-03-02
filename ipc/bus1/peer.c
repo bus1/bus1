@@ -313,53 +313,30 @@ static int bus1_peer_connect_query(struct bus1_peer *peer,
  * Return: 0 on success, negative error code on failure.
  */
 int bus1_peer_connect(struct bus1_peer *peer,
-		      struct file *file,
-		      unsigned long arg)
+		      kuid_t uid,
+		      struct bus1_cmd_connect *param)
 {
-	struct bus1_cmd_connect __user *uparam = (void __user *)arg;
-	struct bus1_cmd_connect param;
-	int r;
-
-	r = bus1_import_fixed_ioctl(&param, arg, sizeof(param));
-	if (r < 0)
-		return r;
-
 	/* check for validity of all flags */
-	if (param.flags & ~(BUS1_CONNECT_FLAG_CLIENT |
-		    /* XXX: BUS1_CONNECT_FLAG_MONITOR | */
-			    BUS1_CONNECT_FLAG_QUERY |
-			    BUS1_CONNECT_FLAG_RESET))
+	if (param->flags & ~(BUS1_CONNECT_FLAG_CLIENT |
+		     /* XXX: BUS1_CONNECT_FLAG_MONITOR | */
+			     BUS1_CONNECT_FLAG_QUERY |
+			     BUS1_CONNECT_FLAG_RESET))
 		return -EINVAL;
 	/* only one mode can be specified */
-	if (!!(param.flags & BUS1_CONNECT_FLAG_CLIENT) +
-	    !!(param.flags & BUS1_CONNECT_FLAG_MONITOR) +
-	    !!(param.flags & BUS1_CONNECT_FLAG_RESET) > 1)
+	if (!!(param->flags & BUS1_CONNECT_FLAG_CLIENT) +
+	    !!(param->flags & BUS1_CONNECT_FLAG_MONITOR) +
+	    !!(param->flags & BUS1_CONNECT_FLAG_RESET) > 1)
 		return -EINVAL;
 
-	if (param.flags & (BUS1_CONNECT_FLAG_CLIENT |
-			   BUS1_CONNECT_FLAG_MONITOR))
-		r = bus1_peer_connect_new(peer, file->f_cred->uid, &param);
-	else if (param.flags & BUS1_CONNECT_FLAG_RESET)
-		r = bus1_peer_connect_reset(peer, &param);
-	else if (param.flags & BUS1_CONNECT_FLAG_QUERY)
-		r = bus1_peer_connect_query(peer, &param);
+	if (param->flags & (BUS1_CONNECT_FLAG_CLIENT |
+			    BUS1_CONNECT_FLAG_MONITOR))
+		return bus1_peer_connect_new(peer, uid, param);
+	else if (param->flags & BUS1_CONNECT_FLAG_RESET)
+		return bus1_peer_connect_reset(peer, param);
+	else if (param->flags & BUS1_CONNECT_FLAG_QUERY)
+		return bus1_peer_connect_query(peer, param);
 	else
-		r = -EINVAL; /* no mode specified */
-
-	if (r < 0)
-		return r;
-
-	/*
-	 * QUERY can be combined with any CONNECT operation. On success, it
-	 * causes the peer information to be copied back to user-space.
-	 * All handlers above must provide that information in @param for this
-	 * to copy it back.
-	 */
-	if ((param.flags & BUS1_CONNECT_FLAG_QUERY) &&
-	    put_user(param.pool_size, &uparam->pool_size))
-		return -EFAULT; /* Don't care.. keep what we have */
-
-	return 0;
+		return -EINVAL; /* no mode specified */
 }
 
 static int bus1_peer_ioctl_slice_release(struct bus1_peer *peer,
