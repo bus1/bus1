@@ -649,6 +649,8 @@ int bus1_transaction_commit_for_id(struct bus1_transaction *transaction,
 	if (r < 0)
 		goto exit;
 
+	bus1_queue_node_init(&message->qnode, BUS1_QUEUE_NODE_MESSAGE_NORMAL);
+
 	mutex_lock(&peer_info->lock);
 	timestamp = bus1_queue_sync(&peer_info->queue, timestamp);
 	timestamp = bus1_queue_tick(&peer_info->queue);
