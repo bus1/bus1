@@ -108,6 +108,9 @@ bus1_peer_info_new(struct bus1_cmd_connect *param,
 	peer_info->map_handles_by_node = RB_ROOT;
 	seqcount_init(&peer_info->seqcount);
 	peer_info->handle_ids = 0;
+	peer_info->n_allocated = 0;
+	peer_info->n_messages = 0;
+	peer_info->n_handles = 0;
 
 	peer_info->user = bus1_user_ref_by_uid(cred->uid);
 	if (IS_ERR(peer_info->user)) {

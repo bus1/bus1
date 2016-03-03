@@ -46,6 +46,9 @@
  * @map_handles_by_node:	map of owned handles, by node pointer
  * @seqcount:			sequence counter
  * @handle_ids:			handle ID allocator
+ * @n_allocated:		current amount of allocated pool memory
+ * @n_messages:			current number of queue entries
+ * @n_handles:			current number of handles
  */
 struct bus1_peer_info {
 	union {
@@ -62,6 +65,10 @@ struct bus1_peer_info {
 	struct rb_root map_handles_by_node;
 	struct seqcount seqcount;
 	u64 handle_ids;
+
+	size_t n_allocated;
+	size_t n_messages;
+	size_t n_handles;
 };
 
 /**

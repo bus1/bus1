@@ -109,8 +109,7 @@ int bus1_message_allocate_locked(struct bus1_message *message,
 	if (WARN_ON(message->user || message->slice))
 		return -EINVAL;
 
-	r = bus1_user_quota_charge(&peer_info->quota, user,
-				   peer_info->pool.size, slice_size,
+	r = bus1_user_quota_charge(peer_info, user, slice_size,
 				   message->handles.batch.n_allocated,
 				   message->n_files);
 	if (r < 0)
@@ -118,7 +117,7 @@ int bus1_message_allocate_locked(struct bus1_message *message,
 
 	slice = bus1_pool_alloc(&peer_info->pool, slice_size);
 	if (IS_ERR(slice)) {
-		bus1_user_quota_discharge(&peer_info->quota, user, slice_size,
+		bus1_user_quota_discharge(peer_info, user, slice_size,
 					  message->handles.batch.n_allocated,
 					  message->n_files);
 		return PTR_ERR(slice);
@@ -141,7 +140,7 @@ void bus1_message_deallocate_locked(struct bus1_message *message,
 	lockdep_assert_held(&peer_info->lock);
 
 	if (message->slice) {
-		bus1_user_quota_discharge(&peer_info->quota, message->user,
+		bus1_user_quota_discharge(peer_info, message->user,
 					  message->slice->size,
 					  message->handles.batch.n_allocated,
 					  message->n_files);

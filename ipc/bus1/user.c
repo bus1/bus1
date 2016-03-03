@@ -17,6 +17,7 @@
 #include <linux/slab.h>
 #include <linux/uidgid.h>
 #include "main.h"
+#include "peer.h"
 #include "user.h"
 
 #define BUS1_INTERNAL_UID_INVALID ((unsigned int) -1)
@@ -191,9 +192,6 @@ void bus1_user_quota_init(struct bus1_user_quota *quota)
 {
 	quota->n_stats = 0;
 	quota->stats = NULL;
-	quota->allocated_size = 0;
-	quota->n_messages = 0;
-	quota->n_handles = 0;
 }
 
 /**
@@ -239,29 +237,23 @@ bus1_user_quota_query(struct bus1_user_quota *quota,
 
 /**
  * bus1_user_quota_charge() - try charging a user
- * @quota:		quota to operate on
+ * @peer_info:		peer with quota to operate on
  * @user:		user to charge
- * @pool_size:		pool size of the quota owner
  * @size:		size to charge
  * @n_handles:		number of handles to charge
  * @n_fds:		number of FDs to charge
  *
  * This performs a quota charge on the passes quota object for the given user.
- * It first checks whether any quota is exceeded, and if not, it commits the
- * charge immediately.
+ * It first checks whether any quota is exceeded, and if not, it accounts for
+ * the specified quantities on the quota and peer.
  *
  * This charges for _one_ message with a size of @size bytes, carrying
- * @n_handles handles and @n_fds file descriptors as payload. The caller must
- * provide the pool-size of the target user via @pool_size (which us usually
- * peer_info->pool.size on the same peer as @quota is on).
- *
- * The caller must provide suitable locking.
+ * @n_handles handles and @n_fds file descriptors as payload.
  *
  * Return: 0 on success, negative error code on failure.
  */
-int bus1_user_quota_charge(struct bus1_user_quota *quota,
+int bus1_user_quota_charge(struct bus1_peer_info *peer_info,
 			   struct bus1_user *user,
-			   size_t pool_size,
 			   size_t size,
 			   size_t n_handles,
 			   size_t n_fds)
@@ -269,7 +261,9 @@ int bus1_user_quota_charge(struct bus1_user_quota *quota,
 	struct bus1_user_stats *stats;
 	size_t max;
 
-	stats = bus1_user_quota_query(quota, user);
+	lockdep_assert_held(&peer_info->lock);
+
+	stats = bus1_user_quota_query(&peer_info->quota, user);
 	if (IS_ERR(stats))
 		return PTR_ERR(stats);
 
@@ -280,22 +274,23 @@ int bus1_user_quota_charge(struct bus1_user_quota *quota,
 	 * single user shrinks with the quota of other users rising.
 	 */
 
-	WARN_ON(quota->allocated_size > pool_size);
-	WARN_ON(stats->allocated_size > quota->allocated_size);
-	WARN_ON(quota->n_messages > BUS1_MESSAGES_MAX);
-	WARN_ON(stats->n_messages > quota->n_messages);
-	WARN_ON(quota->n_handles > BUS1_HANDLES_MAX);
-	WARN_ON(stats->n_handles > quota->n_handles);
+	WARN_ON(peer_info->n_allocated > peer_info->pool.size);
+	WARN_ON(stats->n_allocated > peer_info->n_allocated);
+	WARN_ON(peer_info->n_messages > BUS1_MESSAGES_MAX);
+	WARN_ON(stats->n_messages > peer_info->n_messages);
+	WARN_ON(peer_info->n_handles > BUS1_HANDLES_MAX);
+	WARN_ON(stats->n_handles > peer_info->n_handles);
 
-	max = pool_size - quota->allocated_size + stats->allocated_size;
-	if (stats->allocated_size + size > max / 2)
+	max = peer_info->pool.size - peer_info->n_allocated +
+	      stats->n_allocated;
+	if (stats->n_allocated + size > max / 2)
 		return -EDQUOT;
 
-	max = BUS1_MESSAGES_MAX - quota->n_messages + stats->n_messages;
+	max = BUS1_MESSAGES_MAX - peer_info->n_messages + stats->n_messages;
 	if (stats->n_messages + 1 > max / 2)
 		return -EDQUOT;
 
-	max = BUS1_HANDLES_MAX - quota->n_handles + stats->n_handles;
+	max = BUS1_HANDLES_MAX - peer_info->n_handles + stats->n_handles;
 	if (stats->n_handles + 1 > max / 2)
 		return -EDQUOT;
 
@@ -311,7 +306,10 @@ int bus1_user_quota_charge(struct bus1_user_quota *quota,
 	if (atomic_read(&user->fds_inflight) + n_fds > rlimit(RLIMIT_NOFILE))
 		return -ETOOMANYREFS;
 
-	stats->allocated_size += size;
+	peer_info->n_allocated += size;
+	peer_info->n_messages += 1;
+	peer_info->n_handles += n_handles;
+	stats->n_allocated += size;
 	stats->n_messages += 1;
 	stats->n_handles += n_handles;
 	atomic_add(n_fds, &user->fds_inflight);
@@ -320,7 +318,7 @@ int bus1_user_quota_charge(struct bus1_user_quota *quota,
 
 /**
  * bus1_user_quota_discharge() - discharge a user
- * @quota:		quota to operate on
+ * @peer_info:		peer with quota to operate on
  * @user:		user to discharge
  * @size:		size to discharge
  * @n_handles:		number of handles to discharge
@@ -330,7 +328,7 @@ int bus1_user_quota_charge(struct bus1_user_quota *quota,
  * discharges a single message with a slice size of @size, @n_handles handles
  * and @n_fds file-descriptors.
  */
-void bus1_user_quota_discharge(struct bus1_user_quota *quota,
+void bus1_user_quota_discharge(struct bus1_peer_info *peer_info,
 			       struct bus1_user *user,
 			       size_t size,
 			       size_t n_handles,
@@ -338,16 +336,57 @@ void bus1_user_quota_discharge(struct bus1_user_quota *quota,
 {
 	struct bus1_user_stats *stats;
 
-	stats = bus1_user_quota_query(quota, user);
+	stats = bus1_user_quota_query(&peer_info->quota, user);
 	if (WARN_ON(IS_ERR_OR_NULL(stats)))
 		return;
 
-	WARN_ON(size > stats->allocated_size);
+	WARN_ON(size > peer_info->n_allocated);
+	WARN_ON(size > stats->n_allocated);
+	WARN_ON(peer_info->n_messages < 1);
+	WARN_ON(stats->n_messages < 1);
+	WARN_ON(n_handles > peer_info->n_handles);
+	WARN_ON(n_handles > stats->n_handles);
+	WARN_ON(n_fds > atomic_read(&user->fds_inflight));
+
+	peer_info->n_allocated -= size;
+	peer_info->n_messages -= 1;
+	peer_info->n_handles -= n_handles;
+	stats->n_allocated -= size;
+	stats->n_messages -= 1;
+	stats->n_handles -= n_handles;
+	atomic_sub(n_fds, &user->fds_inflight);
+}
+
+/**
+ * bus1_user_quota_commit() - commit a quota charge
+ * @peer_info:		peer with quota to operate on
+ * @user:		user to commit for
+ * @size:		size to commit
+ * @n_handles:		number of handles to commit
+ * @n_fds:		number of FDs to commit
+ *
+ * Commit a quota charge to a user. This de-accounts the in-flight charges, but
+ * keeps the actual object charges. The caller must make sure the actual
+ * objects are de-accounted once they are destructed.
+ */
+void bus1_user_quota_commit(struct bus1_peer_info *peer_info,
+			    struct bus1_user *user,
+			    size_t size,
+			    size_t n_handles,
+			    size_t n_fds)
+{
+	struct bus1_user_stats *stats;
+
+	stats = bus1_user_quota_query(&peer_info->quota, user);
+	if (WARN_ON(IS_ERR_OR_NULL(stats)))
+		return;
+
+	WARN_ON(size > stats->n_allocated);
 	WARN_ON(stats->n_messages < 1);
 	WARN_ON(n_handles > stats->n_handles);
 	WARN_ON(n_fds > atomic_read(&user->fds_inflight));
 
-	stats->allocated_size -= size;
+	stats->n_allocated -= size;
 	stats->n_messages -= 1;
 	stats->n_handles -= n_handles;
 	atomic_sub(n_fds, &user->fds_inflight);
