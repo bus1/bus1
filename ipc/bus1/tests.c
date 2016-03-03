@@ -232,6 +232,7 @@ static void bus1_test_peer(void)
 
 void bus1_tests_run(void)
 {
+	pr_info("run selftests..\n");
 	bus1_test_user();
 	bus1_test_pool();
 	bus1_test_peer();
