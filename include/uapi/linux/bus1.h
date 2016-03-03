@@ -105,6 +105,14 @@ struct bus1_cmd_recv {
 	__u64 msg_fds;
 } __attribute__((__aligned__(8)));
 
+struct bus1_header {
+	u64 destination;
+	u32 uid;
+	u32 gid;
+	u32 pid;
+	u32 tid;
+} __attribute__((__aligned__(8)));
+
 enum {
 	BUS1_CMD_CONNECT		= _IOWR(BUS1_IOCTL_MAGIC, 0x00,
 						struct bus1_cmd_connect),

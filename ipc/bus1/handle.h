@@ -188,6 +188,7 @@ struct bus1_handle *bus1_handle_find_by_id(struct bus1_peer_info *peer_info,
 struct bus1_handle *bus1_handle_find_by_node(struct bus1_peer_info *peer_info,
 					     struct bus1_handle *existing);
 bool bus1_handle_is_public(struct bus1_handle *handle);
+u64 bus1_handle_get_owner_id(struct bus1_handle *handle);
 struct bus1_handle *bus1_handle_acquire(struct bus1_handle *handle);
 struct bus1_handle *bus1_handle_release(struct bus1_handle *handle);
 struct bus1_handle *bus1_handle_release_pinned(struct bus1_handle *handle,

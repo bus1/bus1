@@ -9,12 +9,17 @@
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 #include <linux/atomic.h>
+#include <linux/cred.h>
 #include <linux/err.h>
 #include <linux/file.h>
 #include <linux/fs.h>
 #include <linux/kernel.h>
+#include <linux/pid.h>
+#include <linux/pid_namespace.h>
+#include <linux/sched.h>
 #include <linux/slab.h>
 #include <linux/uaccess.h>
+#include <linux/uidgid.h>
 #include <linux/uio.h>
 #include <uapi/linux/bus1.h>
 #include "message.h"
@@ -32,21 +37,17 @@
  */
 #define BUS1_TRANSACTION_EXTRA_VECS (1)
 
-struct bus1_transaction_header {
-	u64 sender;
-	u64 destination;
-	u32 uid;
-	u32 gid;
-} __aligned(8);
-
 struct bus1_transaction {
 	/* sender context */
 	struct bus1_peer_info *peer_info;
 	struct bus1_cmd_send *param;
+	const struct cred *cred;
+	struct pid *pid;
+	struct pid *tid;
 
 	/* transaction state */
 	size_t length_vecs;
-	struct bus1_transaction_header header;
+	struct bus1_header header;
 	u64 timestamp;
 
 	/* payload */
@@ -169,10 +170,11 @@ bus1_transaction_import_message(struct bus1_transaction *transaction)
 		return -EFAULT;
 
 	/* make sure user-space clears values that we fill in */
-	if (transaction->header.sender != 0 ||
-	    transaction->header.destination != 0 ||
+	if (transaction->header.destination != 0 ||
 	    transaction->header.uid != 0 ||
-	    transaction->header.gid != 0)
+	    transaction->header.gid != 0 ||
+	    transaction->header.pid != 0 ||
+	    transaction->header.tid != 0)
 		return -EPERM;
 
 	/*
@@ -204,13 +206,13 @@ bus1_transaction_import_message(struct bus1_transaction *transaction)
 	transaction->vecs->iov_len = sizeof(transaction->header);
 	transaction->length_vecs += sizeof(transaction->header);
 
-	/* XXX: fill in header */
-
 	return 0;
 }
 
 /**
  * bus1_transaction_new_from_user() - XXX
+ *
+ * XXX: transaction objects are pinned to 'current'.
  */
 struct bus1_transaction *
 bus1_transaction_new_from_user(struct bus1_peer_info *peer_info,
@@ -227,8 +229,12 @@ bus1_transaction_new_from_user(struct bus1_peer_info *peer_info,
 	if (IS_ERR(transaction))
 		return ERR_CAST(transaction);
 
+	/* "transaction" objects are local, no need to inc ref-counts */
 	transaction->peer_info = peer_info;
 	transaction->param = param;
+	transaction->cred = current_cred();
+	transaction->pid = task_tgid(current);
+	transaction->tid = task_pid(current);
 
 	r = bus1_transaction_import_vecs(transaction, is_compat);
 	if (r < 0)
@@ -317,6 +323,7 @@ bus1_transaction_free(struct bus1_transaction *transaction, bool do_free)
 
 static int bus1_transaction_instantiate(struct bus1_transaction *transaction,
 					struct bus1_message *message,
+					struct bus1_handle *handle,
 					struct bus1_peer_info *peer_info,
 					struct bus1_user *user)
 {
@@ -337,6 +344,17 @@ static int bus1_transaction_instantiate(struct bus1_transaction *transaction,
 	mutex_unlock(&peer_info->lock);
 	if (r < 0)
 		return r;
+
+	/* fill in individual header */
+	transaction->header.destination = bus1_handle_get_owner_id(handle);
+	transaction->header.uid = from_kuid_munged(peer_info->cred->user_ns,
+						   transaction->cred->uid);
+	transaction->header.gid = from_kgid_munged(peer_info->cred->user_ns,
+						   transaction->cred->gid);
+	transaction->header.pid = pid_nr_ns(transaction->pid,
+					    peer_info->pid_ns);
+	transaction->header.tid = pid_nr_ns(transaction->tid,
+					    peer_info->pid_ns);
 
 	/*
 	 * Copy data into @slice. Only the real message (@length_vecs) is
@@ -404,7 +422,7 @@ int bus1_transaction_instantiate_for_id(struct bus1_transaction *transaction,
 		goto error;
 	}
 
-	r = bus1_transaction_instantiate(transaction, message,
+	r = bus1_transaction_instantiate(transaction, message, handle,
 					 bus1_peer_dereference(peer), user);
 	if (r < 0)
 		goto error;
@@ -612,7 +630,8 @@ int bus1_transaction_commit_for_id(struct bus1_transaction *transaction,
 		goto exit;
 	}
 
-	r = bus1_transaction_instantiate(transaction, message, peer_info, user);
+	r = bus1_transaction_instantiate(transaction, message, handle,
+					 peer_info, user);
 	if (r < 0)
 		goto exit;
 

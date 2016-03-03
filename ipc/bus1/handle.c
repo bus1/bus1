@@ -640,6 +640,22 @@ bool bus1_handle_is_public(struct bus1_handle *handle)
 	return handle && atomic_read(&handle->n_inflight) >= 0;
 }
 
+/**
+ * bus1_handle_get_owner_id() - get id of node owner
+ * @handle:		handle to query
+ *
+ * This returns the ID of the owner of the underlying node that @handle is
+ * linked to. If @handle is the actualy owner handle, the ID is equivalent to
+ * the handle id.
+ *
+ * Return: ID of node owner @handle is linked to.
+ */
+u64 bus1_handle_get_owner_id(struct bus1_handle *handle)
+{
+	WARN_ON(handle->node->owner.id == BUS1_HANDLE_INVALID);
+	return handle->node->owner.id;
+}
+
 static bool bus1_handle_has_id(struct bus1_handle *handle)
 {
 	/* true _iff_ the handle has been installed before */
