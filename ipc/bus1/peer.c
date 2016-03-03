@@ -448,6 +448,26 @@ exit:
 	return r;
 }
 
+static int bus1_peer_peek(struct bus1_peer_info *peer_info,
+			  struct bus1_cmd_recv *param)
+{
+	struct bus1_queue_node *node;
+	struct bus1_message *message;
+
+	mutex_lock(&peer_info->lock);
+	node = bus1_queue_peek(&peer_info->queue);
+	if (node) {
+		message = bus1_message_from_node(node);
+		bus1_pool_publish(&peer_info->pool, message->slice,
+				  &param->msg_offset, &param->msg_size);
+		param->msg_handles = message->handles.batch.n_allocated;
+		param->msg_fds = message->n_files;
+	}
+	mutex_unlock(&peer_info->lock);
+
+	return node ? 0 : -EAGAIN;
+}
+
 static int bus1_peer_ioctl_recv(struct bus1_peer *peer, unsigned long arg)
 {
 	struct bus1_peer_info *peer_info = bus1_peer_dereference(peer);
@@ -473,6 +493,14 @@ static int bus1_peer_ioctl_recv(struct bus1_peer *peer, unsigned long arg)
 	    unlikely(param.msg_fds != 0))
 		return -EINVAL;
 
+	if (param.flags & BUS1_RECV_FLAG_PEEK) {
+		r = bus1_peer_peek(peer_info, &param);
+		if (r < 0)
+			return r;
+
+		goto exit;
+	}
+
 	/*
 	 * Peek at the first message to fetch the FD count. We need to
 	 * pre-allocate FDs, to avoid dropping messages due to FD exhaustion.
@@ -489,32 +517,6 @@ static int bus1_peer_ioctl_recv(struct bus1_peer *peer, unsigned long arg)
 	rcu_read_unlock();
 	if (!node)
 		return -EAGAIN;
-
-	/*
-	 * Deal with PEEK first. This is simple. Just look at the first queued
-	 * message, publish the slice and return the information to user-space.
-	 * Keep the entry queued, so it can be peeked multiple times, and
-	 * received later on.
-	 * We do not install any FDs for PEEK, but provide the number in
-	 * msg_fds, anyway.
-	 */
-	if (param.flags & BUS1_RECV_FLAG_PEEK) {
-		mutex_lock(&peer_info->lock);
-		node = bus1_queue_peek(&peer_info->queue);
-		if (node) {
-			message = bus1_message_from_node(node);
-			bus1_pool_publish(&peer_info->pool, message->slice,
-					  &param.msg_offset, &param.msg_size);
-			param.msg_fds = message->n_files;
-		}
-		mutex_unlock(&peer_info->lock);
-
-		if (!node)
-			return -EAGAIN;
-
-		r = 0;
-		goto exit;
-	}
 
 	/*
 	 * So there is a message queued with 'wanted_fds' attached FDs.
