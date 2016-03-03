@@ -191,8 +191,9 @@ void bus1_user_quota_init(struct bus1_user_quota *quota)
 {
 	quota->n_stats = 0;
 	quota->stats = NULL;
-	quota->n_messages = 0;
 	quota->allocated_size = 0;
+	quota->n_messages = 0;
+	quota->n_handles = 0;
 }
 
 /**
@@ -242,16 +243,17 @@ bus1_user_quota_query(struct bus1_user_quota *quota,
  * @user:		user to charge
  * @pool_size:		pool size of the quota owner
  * @size:		size to charge
+ * @n_handles:		number of handles to charge
  * @n_fds:		number of FDs to charge
  *
  * This performs a quota charge on the passes quota object for the given user.
  * It first checks whether any quota is exceeded, and if not, it commits the
  * charge immediately.
  *
- * This charges for _one_ message with a size of @size bytes, carrying @n_fds
- * file descriptors as payload. The caller must provide the pool-size of the
- * target user via @pool_size (which us usually peer_info->pool.size on the
- * same peer as @quota is on).
+ * This charges for _one_ message with a size of @size bytes, carrying
+ * @n_handles handles and @n_fds file descriptors as payload. The caller must
+ * provide the pool-size of the target user via @pool_size (which us usually
+ * peer_info->pool.size on the same peer as @quota is on).
  *
  * The caller must provide suitable locking.
  *
@@ -261,6 +263,7 @@ int bus1_user_quota_charge(struct bus1_user_quota *quota,
 			   struct bus1_user *user,
 			   size_t pool_size,
 			   size_t size,
+			   size_t n_handles,
 			   size_t n_fds)
 {
 	struct bus1_user_stats *stats;
@@ -270,25 +273,30 @@ int bus1_user_quota_charge(struct bus1_user_quota *quota,
 	if (IS_ERR(stats))
 		return PTR_ERR(stats);
 
-	WARN_ON(quota->n_messages > BUS1_MESSAGES_MAX);
-	WARN_ON(stats->n_messages > quota->n_messages);
+	/*
+	 * For each type of quota, we usually follow a very simple rule: A
+	 * given user can acquire half of the total in-flight budget that is
+	 * not used by any other user. That is, the amount available to a
+	 * single user shrinks with the quota of other users rising.
+	 */
+
 	WARN_ON(quota->allocated_size > pool_size);
 	WARN_ON(stats->allocated_size > quota->allocated_size);
+	WARN_ON(quota->n_messages > BUS1_MESSAGES_MAX);
+	WARN_ON(stats->n_messages > quota->n_messages);
+	WARN_ON(quota->n_handles > BUS1_HANDLES_MAX);
+	WARN_ON(stats->n_handles > quota->n_handles);
 
-	/*
-	 * A given user can have half of the total in-flight message
-	 * budget that is not used by any other user.
-	 */
+	max = pool_size - quota->allocated_size + stats->allocated_size;
+	if (stats->allocated_size + size > max / 2)
+		return -EDQUOT;
+
 	max = BUS1_MESSAGES_MAX - quota->n_messages + stats->n_messages;
 	if (stats->n_messages + 1 > max / 2)
 		return -EDQUOT;
 
-	/*
-	 * Similarly, a given user can use half of the total available
-	 * in-flight pool size that is not used by any other user.
-	 */
-	max = pool_size - quota->allocated_size + stats->allocated_size;
-	if (stats->allocated_size + size > max / 2)
+	max = BUS1_HANDLES_MAX - quota->n_handles + stats->n_handles;
+	if (stats->n_handles + 1 > max / 2)
 		return -EDQUOT;
 
 	/*
@@ -305,6 +313,7 @@ int bus1_user_quota_charge(struct bus1_user_quota *quota,
 
 	stats->allocated_size += size;
 	stats->n_messages += 1;
+	stats->n_handles += n_handles;
 	atomic_add(n_fds, &user->fds_inflight);
 	return 0;
 }
@@ -314,14 +323,17 @@ int bus1_user_quota_charge(struct bus1_user_quota *quota,
  * @quota:		quota to operate on
  * @user:		user to discharge
  * @size:		size to discharge
+ * @n_handles:		number of handles to discharge
  * @n_fds:		number of FDs to discharge
  *
- * This reverts a single charge done via bus1_user_quota_charge(). It discharges
- * a single message with a slice size of @size and @n_fds file-descriptors.
+ * This reverts a single charge done via bus1_user_quota_charge(). It
+ * discharges a single message with a slice size of @size, @n_handles handles
+ * and @n_fds file-descriptors.
  */
 void bus1_user_quota_discharge(struct bus1_user_quota *quota,
 			       struct bus1_user *user,
 			       size_t size,
+			       size_t n_handles,
 			       size_t n_fds)
 {
 	struct bus1_user_stats *stats;
@@ -332,9 +344,11 @@ void bus1_user_quota_discharge(struct bus1_user_quota *quota,
 
 	WARN_ON(size > stats->allocated_size);
 	WARN_ON(stats->n_messages < 1);
+	WARN_ON(n_handles > stats->n_handles);
 	WARN_ON(n_fds > atomic_read(&user->fds_inflight));
 
 	stats->allocated_size -= size;
 	stats->n_messages -= 1;
+	stats->n_handles -= n_handles;
 	atomic_sub(n_fds, &user->fds_inflight);
 }

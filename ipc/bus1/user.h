@@ -50,24 +50,28 @@ struct bus1_user {
  * struct bus1_user_stats - quota statistics between a user and a peer
  * @allocated_size:	memory in bytes used by queued messages
  * @n_messages:		number of queued messages
+ * @n_handles:		number of queued handles
  */
 struct bus1_user_stats {
 	u32 allocated_size;
 	u16 n_messages;
+	u16 n_handles;
 };
 
 /**
  * struct bus1_user_quota - quota handling
  * @n_stats:		number of allocated user entries
  * @stats:		user entries
- * @n_messages:		total amount of accounted messages
  * @allocated_size:	total amount of accounted pool size
+ * @n_messages:		total amount of accounted messages
+ * @n_handles:		total amount of accounted handles
  */
 struct bus1_user_quota {
 	size_t n_stats;
 	struct bus1_user_stats *stats;
-	size_t n_messages;
 	size_t allocated_size;
+	size_t n_messages;
+	size_t n_handles;
 };
 
 /* users */
@@ -82,10 +86,12 @@ int bus1_user_quota_charge(struct bus1_user_quota *quota,
 			   struct bus1_user *user,
 			   size_t pool_size,
 			   size_t size,
+			   size_t n_handles,
 			   size_t n_fds);
 void bus1_user_quota_discharge(struct bus1_user_quota *quota,
 			       struct bus1_user *user,
 			       size_t size,
+			       size_t n_handles,
 			       size_t n_fds);
 
 #endif /* __BUS1_USER_H */
