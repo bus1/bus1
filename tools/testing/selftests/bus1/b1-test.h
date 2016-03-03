@@ -37,21 +37,16 @@ enum {
 
 struct b1_test {
 	const char *name;
-	int (*main) (const char *mount_path);
+	int (*main) (const char *path);
 };
 
-int test_filesystem(const char *mount_path);
-int test_mount(const char *mount_path);
 int test_peer(const char *mount_path);
 
 static const struct b1_test b1_tests[] = {
-	{ .name = "filesystem", .main = test_filesystem },
-	{ .name = "mount", .main = test_mount },
 	{ .name = "peer", .main = test_peer },
 };
 
-extern const char *b1_filesystem;
-extern const char *b1_mountpath;
+extern const char *b1_path;
 
 int b1_sys_clone(unsigned long flags, void *child_stack);
 

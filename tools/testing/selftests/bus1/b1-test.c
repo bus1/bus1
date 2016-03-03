@@ -24,8 +24,7 @@
 
 static const char *arg_module = "bus1";
 static const char *arg_test = NULL;
-const char *b1_filesystem = NULL;
-const char *b1_mountpath = NULL;
+const char *b1_path = NULL;
 
 int b1_sys_clone(unsigned long flags, void *child_stack)
 {
@@ -36,7 +35,7 @@ int b1_sys_clone(unsigned long flags, void *child_stack)
 #endif
 }
 
-static int fork_and_run(const struct b1_test *test, const char *mount_path)
+static int fork_and_run(const struct b1_test *test, const char *path)
 {
 	pid_t pid;
 	int r;
@@ -45,7 +44,7 @@ static int fork_and_run(const struct b1_test *test, const char *mount_path)
 	assert(pid >= 0);
 
 	if (pid == 0) {
-		r = test->main(mount_path);
+		r = test->main(path);
 		_exit(r);
 	}
 
@@ -72,7 +71,7 @@ static int run_one(const struct b1_test *test)
 	fflush(stdout);
 
 	/* run test */
-	r = fork_and_run(test, b1_mountpath);
+	r = fork_and_run(test, b1_path);
 
 	/* print result */
 	if (r == B1_TEST_OK || r == B1_TEST_SKIP)
@@ -167,10 +166,7 @@ static int parse_argv(int argc, char **argv)
 	if (argc > optind)
 		arg_test = argv[optind];
 
-	r = asprintf((char **)&b1_filesystem, "%sfs", arg_module);
-	assert(r >= 0);
-
-	r = asprintf((char **)&b1_mountpath, "/sys/fs/%s", arg_module);
+	r = asprintf((char **)&b1_path, "/dev/%s", arg_module);
 	assert(r >= 0);
 
 	return 1;
@@ -190,7 +186,6 @@ int main(int argc, char **argv)
 		r = run_all();
 
 exit:
-	free((char *)b1_mountpath);
-	free((char *)b1_filesystem);
+	free((char *)b1_path);
 	return r < 0 ? EXIT_FAILURE : EXIT_SUCCESS;
 }

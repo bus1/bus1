@@ -24,18 +24,11 @@ struct b1_client;
 
 int b1_client_new_from_fd(struct b1_client **out, int fd);
 int b1_client_new_from_path(struct b1_client **out, const char *path);
-int b1_client_new_from_mount(struct b1_client **out, const char *mount_path);
 struct b1_client *b1_client_free(struct b1_client *client);
 
-int b1_client_resolve(struct b1_client *client, uint64_t *out_id,
-		      const char *name);
-
 int b1_client_connect(struct b1_client *client, uint64_t flags,
-		      size_t pool_size, const char **names, size_t n_names);
+		      size_t pool_size);
 int b1_client_disconnect(struct b1_client *client);
-
-int b1_client_track(struct b1_client *client, uint64_t id);
-int b1_client_untrack(struct b1_client *client, uint64_t id);
 
 int b1_client_send(struct b1_client *client,
 		   uint64_t flags,

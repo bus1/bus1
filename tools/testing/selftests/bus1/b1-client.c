@@ -51,7 +51,7 @@ int b1_client_new_from_path(struct b1_client **out, const char *path)
 	int r, fd;
 
 	if (!path)
-		path = "/sys/fs/bus1/bus";
+		path = "/dev/bus1";
 
 	fd = open(path, O_RDWR | O_CLOEXEC | O_NOCTTY | O_NONBLOCK);
 	if (fd < 0)
@@ -62,24 +62,6 @@ int b1_client_new_from_path(struct b1_client **out, const char *path)
 		close(fd);
 
 	return r;
-}
-
-int b1_client_new_from_mount(struct b1_client **out, const char *mount_path)
-{
-	char *path = NULL;
-	size_t length;
-
-	if (mount_path) {
-		length = strlen(mount_path);
-		if (length > PATH_MAX)
-			return -ENAMETOOLONG;
-
-		path = alloca(length + 5);
-		memcpy(path, mount_path, length);
-		memcpy(path + length, "/bus", 5);
-	}
-
-	return b1_client_new_from_path(out, path);
 }
 
 struct b1_client *b1_client_free(struct b1_client *client)
@@ -112,34 +94,19 @@ static int b1_client_ioctl(struct b1_client *client, unsigned int cmd,
 
 int b1_client_connect(struct b1_client *client,
 		      uint64_t flags,
-		      size_t pool_size,
-		      const char **names,
-		      size_t n_names)
+		      size_t pool_size)
 {
-	struct bus1_cmd_connect *cmd;
+	struct bus1_cmd_connect cmd = {
+		.flags = flags,
+		.pool_size = pool_size,
+	};
 	const void *map;
-	char *pname;
-	size_t i, size = sizeof(*cmd);
 	int r;
 
 	assert(pool_size > 0);
 	assert(pool_size < (uint64_t)-1);
-	assert(n_names == 0 || names);
 
-	for (i = 0; i < n_names; i ++)
-		size += strlen(names[i]) + 1;
-
-	cmd = alloca(size);
-	cmd->size = size;
-	cmd->flags = flags,
-	cmd->pool_size = pool_size,
-	cmd->unique_id = 0;
-
-	pname = cmd->names;
-	for (i = 0; i < n_names; ++i)
-		pname = stpcpy(pname, names[i]) + 1;
-
-	r = b1_client_ioctl(client, BUS1_CMD_CONNECT, cmd);
+	r = b1_client_ioctl(client, BUS1_CMD_CONNECT, &cmd);
 	if (r < 0)
 		return r;
 
@@ -155,52 +122,12 @@ int b1_client_connect(struct b1_client *client,
 	client->pool_map = map;
 	client->pool_size = pool_size;
 
-	return cmd->unique_id;
+	return 0;
 }
 
 int b1_client_disconnect(struct b1_client *client)
 {
 	return b1_client_ioctl(client, BUS1_CMD_DISCONNECT, NULL);
-}
-
-int b1_client_resolve(struct b1_client *client,
-		      uint64_t *out_id,
-		      const char *name)
-{
-	struct bus1_cmd_resolve *cmd;
-	size_t namelen;
-	int r;
-
-	assert(name);
-
-	namelen = strlen(name) + 1;
-	if (namelen > BUS1_NAME_MAX_SIZE)
-		return -EMSGSIZE;
-
-	cmd = alloca(sizeof(*cmd) + namelen);
-	cmd->size = sizeof(*cmd) + namelen;
-	cmd->flags = 0;
-	cmd->unique_id = 0;
-	memcpy(cmd->name, name, namelen);
-
-	r = b1_client_ioctl(client, BUS1_CMD_RESOLVE, cmd);
-	if (r < 0)
-		return r;
-
-	if (out_id)
-		*out_id = cmd->unique_id;
-
-	return r;
-}
-
-int b1_client_track(struct b1_client *client, uint64_t id)
-{
-	return b1_client_ioctl(client, BUS1_CMD_TRACK, &id);
-}
-
-int b1_client_untrack(struct b1_client *client, uint64_t id)
-{
-	return b1_client_ioctl(client, BUS1_CMD_UNTRACK, &id);
 }
 
 int b1_client_send(struct b1_client *client,

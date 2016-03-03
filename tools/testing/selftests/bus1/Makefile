@@ -3,8 +3,6 @@ TEST_PROGS := b1-test
 OBJS =				\
 	b1-client.o		\
 	b1-test.o		\
-	test-filesystem.o	\
-	test-mount.o		\
 	test-peer.o
 
 CFLAGS += -I../../../../usr/include/

@@ -17,9 +17,10 @@
 #define N_DESTS (512)
 #define N_ITERATIONS (100000ULL)
 #define PAYLOAD_SIZE (1024)
-#define CONNECT_FLAGS (BUS1_CONNECT_FLAG_PEER | BUS1_CONNECT_FLAG_QUERY)
+#define CONNECT_FLAGS (BUS1_CONNECT_FLAG_CLIENT | BUS1_CONNECT_FLAG_QUERY)
 #define POOL_SIZE (1024 * 1024 * 32)
 
+/*
 static inline uint64_t nsec_from_clock(clockid_t clock)
 {
 	struct timespec ts;
@@ -30,9 +31,9 @@ static inline uint64_t nsec_from_clock(clockid_t clock)
 	return ts.tv_sec * UINT64_C(1000000000) + ts.tv_nsec;
 }
 
-/* by way of comparison test unicast message passing on unix domain sockets,
- * we expect this to be faster than bus1, but the aim is of course to be
- * competitive even in the degenerate unicast case */
+// by way of comparison test unicast message passing on unix domain sockets,
+// we expect this to be faster than bus1, but the aim is of course to be
+// competitive even in the degenerate unicast case
 static int test_uds_sequential(size_t len_payload)
 {
 	uint64_t time_start, time_end, i, iterations = N_ITERATIONS;
@@ -74,9 +75,9 @@ static int test_uds_sequential(size_t len_payload)
 	return (time_end - time_start) / iterations;
 }
 
-/* test the degenerate un-contended case, this is only interesting in as far as
- * it gives us a baseline of how fast things can be in the best case */
-static int test_peer_sequential(const char *mount_path, size_t n_dests,
+// test the degenerate un-contended case, this is only interesting in as far as
+// it gives us a baseline of how fast things can be in the best case
+static int test_peer_sequential(const char *path, size_t n_dests,
 				size_t len_payload)
 {
 	struct b1_client *client = NULL;
@@ -90,11 +91,11 @@ static int test_peer_sequential(const char *mount_path, size_t n_dests,
 	};
 	int r;
 
-	assert(mount_path);
+	assert(path);
 	assert(n_dests < N_ITERATIONS);
 	assert(len_payload <= PAYLOAD_SIZE);
 
-	r = b1_client_new_from_mount(&client, mount_path);
+	r = b1_client_new_from_path(&client, path);
 	assert(r >= 0);
 
 	r = b1_client_connect(client, CONNECT_FLAGS, POOL_SIZE, NULL, 0);
@@ -102,7 +103,7 @@ static int test_peer_sequential(const char *mount_path, size_t n_dests,
 
 	for (i = 0; i < n_dests; i++) {
 		clients[i] = NULL;
-		r = b1_client_new_from_mount(&clients[i], mount_path);
+		r = b1_client_new_from_path(&clients[i], path);
 		assert(r >= 0);
 		assert(clients[i]);
 
@@ -113,7 +114,7 @@ static int test_peer_sequential(const char *mount_path, size_t n_dests,
 		dests[i] = r;
 	}
 
-	/* make sure test-runs take a reasonable amount of time */
+	// make sure test-runs take a reasonable amount of time
 	if (n_dests > 0)
 		iterations /= n_dests;
 
@@ -151,185 +152,40 @@ static int test_peer_sequential(const char *mount_path, size_t n_dests,
 
 	return (time_end - time_start) / iterations;
 }
+*/
 
-static void test_peer_api(const char *mount_path)
+static void test_peer_api(const char *path)
 {
-	struct b1_client *client1 = NULL, *client2 = NULL;
-	const char *name1 = "foo", *name2 = "bar";
-	const char *names[] = { name1, name2, name2, name1};
-	uint64_t dests[2] = { };
-	uint64_t id1, id2;
-	const void *slice;
-	size_t size;
-	unsigned i;
+	struct b1_client *client;
 	int r;
 
-	/* connection */
-	r = b1_client_new_from_mount(&client1, mount_path);
+	r = b1_client_new_from_path(&client, path);
 	assert(r >= 0);
-	assert(client1);
+	assert(client);
 
-	id1 = b1_client_connect(client1, CONNECT_FLAGS, POOL_SIZE, NULL, 0);
-	assert(id1 > 0);
-
-	r = b1_client_disconnect(client1);
+	r = b1_client_connect(client, CONNECT_FLAGS, POOL_SIZE);
 	assert(r >= 0);
 
-	client1 = b1_client_free(client1);
-	assert(!client1);
-
-	r = b1_client_new_from_mount(&client1, mount_path);
-	assert(r >= 0);
-	assert(client1);
-
-	id2 = b1_client_connect(client1, CONNECT_FLAGS, POOL_SIZE, names, 2);
-	assert(id2 > 0);
-	assert(id1 != id2);
-
-	r = b1_client_connect(client1, CONNECT_FLAGS, POOL_SIZE, names, 2);
-	assert(r == -EISCONN);
-
-	r = b1_client_connect(client1, CONNECT_FLAGS, POOL_SIZE, names, 1);
-	assert(r == -EREMCHG);
-
-	r = b1_client_connect(client1, CONNECT_FLAGS, POOL_SIZE, names, 3);
-	assert(r == -EREMCHG);
-
-	r = b1_client_connect(client1, CONNECT_FLAGS, POOL_SIZE, &names[1], 2);
-	assert(r == -EREMCHG);
-
-	r = b1_client_connect(client1, CONNECT_FLAGS, POOL_SIZE, &names[1], 1);
-	assert(r == -EREMCHG);
-
-	r = b1_client_connect(client1, CONNECT_FLAGS, POOL_SIZE, NULL, 0);
-	assert(r == -EREMCHG);
-
-	r = b1_client_connect(client1, CONNECT_FLAGS, POOL_SIZE, &names[2], 2);
-	assert(r == -EISCONN);
-
-	r = b1_client_new_from_mount(&client2, mount_path);
-	assert(r >= 0);
-	assert(client2);
-
-	r = b1_client_connect(client2, CONNECT_FLAGS, POOL_SIZE, NULL, 0);
-	assert(r > 0);
-
-	/* resolution */
-	r = b1_client_resolve(client1, &id1, name1);
-	assert(r >= 0);
-	assert(id1 == id2);
-
-	r = b1_client_resolve(client1, &id1, name2);
-	assert(r >= 0);
-	assert(id1 == id2);
-
-	r = b1_client_resolve(client1, &id1, "unknown name");
-	assert(r == -ENXIO);
-	assert(id1 == id2);
-
-	/* tracking */
-	r = b1_client_track(client1, id1);
-	assert(r == -ELOOP);
-
-	r = b1_client_track(client1, -1);
-	assert(r == -ENXIO);
-
-	r = b1_client_track(client2, id1);
+	r = b1_client_disconnect(client);
 	assert(r >= 0);
 
-	r = b1_client_track(client2, id1);
-	assert(r == -EALREADY);
-
-	r = b1_client_untrack(client2, id1);
-	assert(r >= 0);
-
-	r = b1_client_untrack(client2, id1);
-	assert(r == -ENXIO);
-
-	r = b1_client_track(client2, id1);
-	assert(r >= 0);
-
-	/* send, receive and free */
-	r = b1_client_recv(client1, 0, NULL, NULL);
-	assert(r == -EAGAIN);
-
-	dests[0] = id1;
-	r = b1_client_send(client1, 0, dests, 1, NULL, 0);
-	assert(r >= 0);
-
-	slice = NULL;
-	size = 0;
-	r = b1_client_recv(client1, 0, &slice, &size);
-	assert(r >= 0);
-	assert(size == 24);
-
-	r = b1_client_slice_release(client1, slice - 1);
-	assert(r == -ENXIO);
-
-	r = b1_client_slice_release(client1, slice + 1);
-	assert(r == -ENXIO);
-
-	r = b1_client_slice_release(client1, slice);
-	assert(r >= 0);
-
-	r = b1_client_slice_release(client1, slice);
-	assert(r == -ENXIO);
-
-	r = b1_client_recv(client1, 0, NULL, NULL);
-	assert(r == -EAGAIN);
-
-	r = b1_client_send(client1, 0, dests, 1, NULL, 0);
-	assert(r >= 0);
-
-	r = b1_client_send(client1, 0, dests, 1, NULL, 0);
-	assert(r >= 0);
-
-	dests[1] = id1;
-	r = b1_client_send(client1, 0, dests, 2, NULL, 0);
-	assert(r == -ENOTUNIQ);
-
-	size = 0;
-	r = b1_client_recv(client1, 0, NULL, &size);
-	assert(r >= 0);
-	assert(size == 24);
-
-	size = 0;
-	r = b1_client_recv(client1, 0, NULL, &size);
-	assert(r >= 0);
-	assert(size == 24);
-
-	size = 0;
-	r = b1_client_recv(client1, 0, NULL, &size);
-	assert(r == -EAGAIN);
-	assert(size == 0);
-
-	/* cleanup */
-	r = b1_client_disconnect(client1);
-	assert(r >= 0);
-
-	client1 = b1_client_free(client1);
-	assert(!client1);
-
-	r = b1_client_disconnect(client2);
-	assert(r >= 0);
-
-	client2 = b1_client_free(client2);
-	assert(!client2);
+	client = b1_client_free(client);
+	assert(!client);
 }
 
-int test_peer(const char *mount_path)
+int test_peer(const char *path)
 {
 	unsigned i;
 	int r, with, without;
 
-	test_peer_api(mount_path);
+	test_peer_api(path);
 
-	/* initialize all caches */
-	r = test_peer_sequential(mount_path, N_DESTS, PAYLOAD_SIZE);
+	/* initialize all caches
+	r = test_peer_sequential(path, N_DESTS, PAYLOAD_SIZE);
 	r = test_uds_sequential(PAYLOAD_SIZE);
 	assert(r >= 0);
 
-	r = test_peer_sequential(mount_path, 0, 0);
+	r = test_peer_sequential(path, 0, 0);
 	assert(r >= 0);
 	fprintf(stderr, "noop send takes %zu ns\n", r);
 
@@ -343,9 +199,9 @@ int test_peer(const char *mount_path)
 		with > without ? with - without : without - with,
 		with > without ? "slower" : "faster");
 
-	without = test_peer_sequential(mount_path, 1, 0);
+	without = test_peer_sequential(path, 1, 0);
 	assert(without >= 0);
-	with = test_peer_sequential(mount_path, 1, PAYLOAD_SIZE);
+	with = test_peer_sequential(path, 1, PAYLOAD_SIZE);
 	assert(with >= 0);
 	fprintf(stderr, "unicast send without payload takes %d ns, with %d "
 		"byte payload is %d ns %s\n",
@@ -354,9 +210,9 @@ int test_peer(const char *mount_path)
 		with > without ? "slower" : "faster");
 
 	for (i = 2; i <= N_DESTS; i *= 2) {
-		without = test_peer_sequential(mount_path, i, 0);
+		without = test_peer_sequential(path, i, 0);
 		assert(without >= 0);
-		with = test_peer_sequential(mount_path, i, PAYLOAD_SIZE);
+		with = test_peer_sequential(path, i, PAYLOAD_SIZE);
 		assert(with >= 0);
 
 		fprintf(stderr, "multicast %3u messages without payload in "
@@ -367,6 +223,6 @@ int test_peer(const char *mount_path)
 	}
 
 	fprintf(stderr, "\n\n");
-
+*/
 	return B1_TEST_OK;
 }
