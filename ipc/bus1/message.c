@@ -24,7 +24,7 @@
  * bus1_message_new() - allocate new message
  * @n_files:		number of files to pre-allocate
  * @n_handles:		number of handles to pre-allocate
- * @bool:		is this a silent message?
+ * @silent:		is this a silent message?
  *
  * This allocates a new, unused message for free use to the caller. Storage for
  * files and handles is (partially) pre-allocated.
