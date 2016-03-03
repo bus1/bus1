@@ -42,6 +42,7 @@ struct bus1_transaction_header {
 struct bus1_transaction {
 	/* sender context */
 	struct bus1_peer_info *peer_info;
+	struct bus1_cmd_send *param;
 
 	/* transaction state */
 	size_t length_vecs;
@@ -105,10 +106,10 @@ bus1_transaction_new(size_t n_vecs, size_t n_files, void *buf, size_t buf_len)
 
 static int
 bus1_transaction_import_vecs(struct bus1_transaction *transaction,
-			     struct bus1_cmd_send *param,
 			     bool is_compat)
 {
 	const struct iovec __user *ptr_vecs;
+	struct bus1_cmd_send *param = transaction->param;
 	int r;
 
 	if (WARN_ON(transaction->n_vecs > 0))
@@ -125,9 +126,9 @@ bus1_transaction_import_vecs(struct bus1_transaction *transaction,
 }
 
 static int
-bus1_transaction_import_files(struct bus1_transaction *transaction,
-			      struct bus1_cmd_send *param)
+bus1_transaction_import_files(struct bus1_transaction *transaction)
 {
+	struct bus1_cmd_send *param = transaction->param;
 	const int __user *ptr_fds;
 	struct file *f;
 	size_t i;
@@ -229,12 +230,13 @@ bus1_transaction_new_from_user(struct bus1_peer_info *peer_info,
 		return ERR_CAST(transaction);
 
 	transaction->peer_info = peer_info;
+	transaction->param = param;
 
-	r = bus1_transaction_import_vecs(transaction, param, is_compat);
+	r = bus1_transaction_import_vecs(transaction, is_compat);
 	if (r < 0)
 		goto error;
 
-	r = bus1_transaction_import_files(transaction, param);
+	r = bus1_transaction_import_files(transaction);
 	if (r < 0)
 		goto error;
 
@@ -362,7 +364,6 @@ static int bus1_transaction_instantiate(struct bus1_transaction *transaction,
  * bus1_transaction_instantiate_for_id() - instantiate a message
  * @transaction:	transaction to work with
  * @destination:	destination
- * @flags:		BUS1_SEND_FLAG_* to affect behavior
  *
  * Instantiate the message from the given transaction for the peer given as
  * @peer_id. A new pool-slice is allocated, a queue entry is created and the
@@ -374,15 +375,17 @@ static int bus1_transaction_instantiate(struct bus1_transaction *transaction,
  */
 int bus1_transaction_instantiate_for_id(struct bus1_transaction *transaction,
 					struct bus1_user *user,
-					u64 destination,
-					u64 flags)
+					u64 destination)
 {
 	struct bus1_message *message = NULL, *iter;
 	struct bus1_peer_info *peer_info;
 	struct rb_node *n, **slot;
 	struct bus1_handle *handle;
 	struct bus1_peer *peer;
+	bool cont;
 	int r;
+
+	cont = transaction->param->flags & BUS1_SEND_FLAG_CONTINUE;
 
 	handle = bus1_handle_find_by_id(transaction->peer_info, destination);
 	if (handle) {
@@ -391,7 +394,7 @@ int bus1_transaction_instantiate_for_id(struct bus1_transaction *transaction,
 			handle = bus1_handle_unref(handle);
 	}
 	if (!handle)
-		return (flags & BUS1_SEND_FLAG_CONTINUE) ? 0 : -ENXIO;
+		return cont ? 0 : -ENXIO;
 
 	peer_info = bus1_peer_dereference(peer);
 
@@ -436,7 +439,7 @@ int bus1_transaction_instantiate_for_id(struct bus1_transaction *transaction,
 
 error:
 	bus1_message_free(message);
-	if (r < 0 && (flags & BUS1_SEND_FLAG_CONTINUE)) {
+	if (r < 0 && cont) {
 		/* XXX: convey error to @peer */
 		r = 0;
 	}
@@ -603,7 +606,6 @@ void bus1_transaction_commit(struct bus1_transaction *transaction)
  * bus1_transaction_commit_for_id() - instantiate and commit unicast
  * @transaction:	transaction to use
  * @destination:	destination ID
- * @flags:		BUS1_CMD_SEND_* flags
  *
  * This is a fast-path for unicast messages. It is equivalent to calling
  * bus1_transaction_instantiate_for_id(), followed by a commit.
@@ -612,16 +614,17 @@ void bus1_transaction_commit(struct bus1_transaction *transaction)
  */
 int bus1_transaction_commit_for_id(struct bus1_transaction *transaction,
 				   struct bus1_user *user,
-				   u64 destination,
-				   u64 flags)
+				   u64 destination)
 {
 	struct bus1_peer_info *peer_info;
 	struct bus1_message *message;
 	struct bus1_handle *handle;
 	struct bus1_peer *peer;
+	bool wake, cont;
 	u64 timestamp;
-	bool wake;
 	int r;
+
+	cont = transaction->param->flags & BUS1_SEND_FLAG_CONTINUE;
 
 	handle = bus1_handle_find_by_id(transaction->peer_info, destination);
 	if (handle) {
@@ -630,7 +633,7 @@ int bus1_transaction_commit_for_id(struct bus1_transaction *transaction,
 			handle = bus1_handle_unref(handle);
 	}
 	if (!handle)
-		return (flags & BUS1_SEND_FLAG_CONTINUE) ? 0 : -ENXIO;
+		return cont ? 0 : -ENXIO;
 
 	peer_info = bus1_peer_dereference(peer);
 	timestamp = transaction->timestamp;
@@ -661,7 +664,7 @@ int bus1_transaction_commit_for_id(struct bus1_transaction *transaction,
 
 exit:
 	bus1_message_free(message);
-	if (r < 0 && (flags & BUS1_SEND_FLAG_CONTINUE)) {
+	if (r < 0 && cont) {
 		/* XXX: convey error to @peer */
 		r = 0;
 	}

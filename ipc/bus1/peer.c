@@ -408,8 +408,7 @@ static int bus1_peer_ioctl_send(struct bus1_peer *peer, unsigned long arg)
 
 		r = bus1_transaction_commit_for_id(transaction,
 						   peer->info->user,
-						   destination,
-						   param.flags);
+						   destination);
 		if (r < 0)
 			goto exit;
 	} else { /* Slowpath: any message */
@@ -421,8 +420,7 @@ static int bus1_peer_ioctl_send(struct bus1_peer *peer, unsigned long arg)
 
 			r = bus1_transaction_instantiate_for_id(transaction,
 							peer->info->user,
-							destination,
-							param.flags);
+							destination);
 			if (r < 0)
 				goto exit;
 		}
