@@ -88,7 +88,8 @@ bus1_message_from_node(struct bus1_queue_node *node)
 {
 	unsigned int type = bus1_queue_node_get_type(node);
 
-	if (WARN_ON(type != BUS1_QUEUE_NODE_MESSAGE_NORMAL))
+	if (WARN_ON(type != BUS1_QUEUE_NODE_MESSAGE_NORMAL &&
+		    type != BUS1_QUEUE_NODE_MESSAGE_SILENT))
 		return NULL;
 
 	return container_of(node, struct bus1_message, qnode);

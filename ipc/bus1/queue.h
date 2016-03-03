@@ -98,6 +98,7 @@
 
 enum {
 	BUS1_QUEUE_NODE_MESSAGE_NORMAL,
+	BUS1_QUEUE_NODE_MESSAGE_SILENT,
 	_BUS1_QUEUE_NODE_N,
 };
 
@@ -105,11 +106,13 @@ enum {
  * struct bus1_queue - message queue
  * @messages:		queued messages
  * @front:		cached front entry
+ * @n_committed:	number of committed, non-silent entries
  * @clock:		local clock (used for Lamport Timestamps)
  */
 struct bus1_queue {
 	struct rb_root messages;
 	struct rb_node __rcu *front;
+	size_t n_committed;
 	u64 clock;
 };
 
@@ -216,6 +219,40 @@ bus1_queue_peek_rcu(struct bus1_queue *queue)
 {
 	return rb_entry_safe(rcu_dereference(queue->front),
 			     struct bus1_queue_node, rb);
+}
+
+/**
+ * bus1_queue_is_readable() - check whether a queue is readable
+ * @queue:	queue to operate on
+ *
+ * This checks whether the given queue is readable. It is similar to
+ * bus1_queue_peek(), but also takes in account silent messages. That is, a
+ * queue is only considered readable, if it has a front entry *and* at least a
+ * single non-silent, committed message.
+ *
+ * Note that messages can have 3 different states:
+ *   - staging: the message is part of an active transaction
+ *   - committed: the message is fully committed, but might still be blocked by
+ *                a staging message
+ *   - ready: the message is committed and ready to be dequeued.
+ *
+ * This function only checks that there is at least one ready entry (which
+ * might be silent), and at least one committed non-silent entry. Preferably,
+ * we would check whether there is at least one *ready, non-silent* entry, but
+ * this would require linear queue-searches (since the transition from
+ * committed to ready is not explicit).
+ *
+ * In other words: There might be a short race where we wake up a peer, even
+ * though it can *only* dequeue silent messages. However, if that happens, we
+ * guarantee that there is a non-silent message queued *AND* committed, that
+ * will reach the peer as soon as the kernel is done resolving in-flight
+ * dependencies. Hence, we would wake up the peer in the near future, anyway.
+ *
+ * Return: True if the queue is readable, false if not.
+ */
+static inline bool bus1_queue_is_readable(struct bus1_queue *queue)
+{
+	return rcu_access_pointer(queue->front) && queue->n_committed;
 }
 
 #endif /* __BUS1_QUEUE_H */

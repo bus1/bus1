@@ -475,8 +475,8 @@ void bus1_transaction_commit(struct bus1_transaction *transaction)
 	struct bus1_message *message, *t, *list;
 	struct bus1_handle *handle;
 	struct bus1_peer *peer;
+	bool wake, silent;
 	u64 timestamp;
-	bool wake;
 
 	/* nothing to do for empty destination sets */
 	if (RB_EMPTY_ROOT(&transaction->entries))
@@ -484,6 +484,7 @@ void bus1_transaction_commit(struct bus1_transaction *transaction)
 
 	list = NULL;
 	timestamp = transaction->timestamp;
+	silent = transaction->param->flags & BUS1_SEND_FLAG_SILENT;
 
 	/*
 	 * We now have to queue all message on their respective destination
@@ -514,7 +515,8 @@ void bus1_transaction_commit(struct bus1_transaction *transaction)
 
 		/* prepare qnode for queue insertion */
 		bus1_queue_node_init(&message->qnode,
-				     BUS1_QUEUE_NODE_MESSAGE_NORMAL);
+				     silent ? BUS1_QUEUE_NODE_MESSAGE_SILENT :
+					      BUS1_QUEUE_NODE_MESSAGE_NORMAL);
 
 		/* sync clocks and queue message as staging entry */
 		mutex_lock(&peer_info->lock);
@@ -620,11 +622,12 @@ int bus1_transaction_commit_for_id(struct bus1_transaction *transaction,
 	struct bus1_message *message;
 	struct bus1_handle *handle;
 	struct bus1_peer *peer;
-	bool wake, cont;
+	bool wake, cont, silent;
 	u64 timestamp;
 	int r;
 
 	cont = transaction->param->flags & BUS1_SEND_FLAG_CONTINUE;
+	silent = transaction->param->flags & BUS1_SEND_FLAG_SILENT;
 
 	handle = bus1_handle_find_by_id(transaction->peer_info, destination);
 	if (handle) {
@@ -649,7 +652,9 @@ int bus1_transaction_commit_for_id(struct bus1_transaction *transaction,
 	if (r < 0)
 		goto exit;
 
-	bus1_queue_node_init(&message->qnode, BUS1_QUEUE_NODE_MESSAGE_NORMAL);
+	bus1_queue_node_init(&message->qnode,
+			     silent ? BUS1_QUEUE_NODE_MESSAGE_SILENT :
+				      BUS1_QUEUE_NODE_MESSAGE_NORMAL);
 
 	mutex_lock(&peer_info->lock);
 	timestamp = bus1_queue_sync(&peer_info->queue, timestamp);

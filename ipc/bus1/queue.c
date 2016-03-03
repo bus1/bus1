@@ -66,6 +66,11 @@ static void bus1_queue_node_set_timestamp(struct bus1_queue_node *node, u64 ts)
 	node->timestamp_and_type |= ts;
 }
 
+static bool bus1_queue_node_is_silent(struct bus1_queue_node *node)
+{
+	return bus1_queue_node_get_type(node) == BUS1_QUEUE_NODE_MESSAGE_SILENT;
+}
+
 /**
  * bus1_queue_init_internal() - initialize queue
  * @queue:	queue to initialize
@@ -83,6 +88,7 @@ void bus1_queue_init_internal(struct bus1_queue *queue)
 {
 	queue->messages = RB_ROOT;
 	rcu_assign_pointer(queue->front, NULL);
+	queue->n_committed = 0;
 	queue->clock = 0;
 }
 
@@ -104,6 +110,7 @@ void bus1_queue_destroy(struct bus1_queue *queue)
 	if (!queue)
 		return;
 
+	WARN_ON(queue->n_committed);
 	WARN_ON(rcu_access_pointer(queue->front));
 	WARN_ON(!RB_EMPTY_ROOT(&queue->messages));
 }
@@ -128,6 +135,7 @@ void bus1_queue_post_flush(struct bus1_queue *queue)
 
 	queue->messages = RB_ROOT;
 	rcu_assign_pointer(queue->front, NULL);
+	queue->n_committed = 0;
 }
 
 /**
@@ -157,11 +165,12 @@ bool bus1_queue_stage(struct bus1_queue *queue,
 {
 	struct rb_node *front, *n, **slot;
 	struct bus1_queue_node *iter;
-	bool is_leftmost;
+	bool is_leftmost, readable;
 	u64 ts;
 
 	bus1_queue_assert_held(queue);
 	ts = bus1_queue_node_get_timestamp(node);
+	readable = bus1_queue_is_readable(queue);
 
 	/* provided timestamp must be valid */
 	if (WARN_ON(timestamp == 0 || timestamp > queue->clock))
@@ -210,9 +219,10 @@ bool bus1_queue_stage(struct bus1_queue *queue,
 		}
 	}
 
-	/* drop from rb-tree if already linked */
-	if (!RB_EMPTY_NODE(&node->rb))
+	if (!RB_EMPTY_NODE(&node->rb)) {
 		rb_erase(&node->rb, &queue->messages);
+		/* must be staging, so no need to adjust queue->n_committed */
+	}
 
 	/* re-insert into sorted rb-tree with new timestamp */
 	slot = &queue->messages.rb_node;
@@ -234,11 +244,14 @@ bool bus1_queue_stage(struct bus1_queue *queue,
 	rb_insert_color(&node->rb, &queue->messages);
 	bus1_queue_node_set_timestamp(node, timestamp);
 
-	if (is_leftmost && !(timestamp & 1))
-		rcu_assign_pointer(queue->front, &node->rb);
+	if (!(timestamp & 1)) {
+		if (!bus1_queue_node_is_silent(node))
+			++queue->n_committed;
+		if (is_leftmost)
+			rcu_assign_pointer(queue->front, &node->rb);
+	}
 
-	/* if this uncovered a front, then the queue became readable */
-	return !front && rcu_access_pointer(queue->front);
+	return !readable && bus1_queue_is_readable(queue);
 }
 
 /**
@@ -260,6 +273,7 @@ bool bus1_queue_remove(struct bus1_queue *queue,
 {
 	struct bus1_queue_node *iter;
 	struct rb_node *front, *n;
+	bool readable;
 	u64 ts;
 
 	bus1_queue_assert_held(queue);
@@ -267,6 +281,7 @@ bool bus1_queue_remove(struct bus1_queue *queue,
 	if (!node || RB_EMPTY_NODE(&node->rb))
 		return false;
 
+	readable = bus1_queue_is_readable(queue);
 	front = rcu_dereference_protected(queue->front,
 					  bus1_queue_is_held(queue));
 
@@ -290,9 +305,11 @@ bool bus1_queue_remove(struct bus1_queue *queue,
 
 	rb_erase(&node->rb, &queue->messages);
 	RB_CLEAR_NODE(&node->rb);
+	if (!(bus1_queue_node_get_timestamp(node) & 1) &&
+	    !bus1_queue_node_is_silent(node))
+		--queue->n_committed;
 
-	/* if this uncovered a front, then the queue became readable */
-	return !front && rcu_access_pointer(queue->front);
+	return !readable && bus1_queue_is_readable(queue);
 }
 
 /**
