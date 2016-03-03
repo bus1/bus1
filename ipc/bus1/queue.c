@@ -26,29 +26,44 @@
 				      struct bus1_peer_info, queue)->lock)
 
 /* distinguish different node types via these masks */
-#define BUS1_QUEUE_NODE_MASK_TYPE	((u64)(1ULL << 63))
-#define BUS1_QUEUE_NODE_MASK_TS		(~BUS1_QUEUE_NODE_MASK_TYPE)
+#define BUS1_QUEUE_TYPE_SHIFT (62)
+#define BUS1_QUEUE_TYPE_MASK (((u64)3ULL) << BUS1_QUEUE_TYPE_SHIFT)
+
+/**
+ * bus1_queue_node_get_type() - query node type
+ * @node:		node to query
+ *
+ * This queries the node type that was provided via the node constructor. A
+ * node never changes its type during its entire lifetime.
+ *
+ * Return: Type of @node is returned.
+ */
+unsigned int bus1_queue_node_get_type(struct bus1_queue_node *node)
+{
+	return (node->timestamp_and_type & BUS1_QUEUE_TYPE_MASK) >>
+							BUS1_QUEUE_TYPE_SHIFT;
+}
 
 static u64 bus1_queue_node_get_timestamp(struct bus1_queue_node *node)
 {
-	return node->timestamp_and_type & BUS1_QUEUE_NODE_MASK_TS;
-}
-
-static u64 bus1_queue_node_get_type(struct bus1_queue_node *node)
-{
-	return node->timestamp_and_type & BUS1_QUEUE_NODE_MASK_TYPE;
-}
-
-static void bus1_queue_node_set_timestamp(struct bus1_queue_node *node, u64 ts)
-{
-	WARN_ON(ts & BUS1_QUEUE_NODE_MASK_TYPE);
-	node->timestamp_and_type = bus1_queue_node_get_type(node) | ts;
+	return node->timestamp_and_type & ~BUS1_QUEUE_TYPE_MASK;
 }
 
 static void bus1_queue_node_set_type(struct bus1_queue_node *node, u64 type)
 {
-	WARN_ON(type & BUS1_QUEUE_NODE_MASK_TS);
-	node->timestamp_and_type = bus1_queue_node_get_timestamp(node) | type;
+	BUILD_BUG_ON((_BUS1_QUEUE_NODE_N - 1) > (BUS1_QUEUE_TYPE_MASK >>
+							BUS1_QUEUE_TYPE_SHIFT));
+
+	WARN_ON(type & ~(BUS1_QUEUE_TYPE_MASK >> BUS1_QUEUE_TYPE_SHIFT));
+	node->timestamp_and_type &= ~BUS1_QUEUE_TYPE_MASK;
+	node->timestamp_and_type |= type << BUS1_QUEUE_TYPE_SHIFT;
+}
+
+static void bus1_queue_node_set_timestamp(struct bus1_queue_node *node, u64 ts)
+{
+	WARN_ON(ts & BUS1_QUEUE_TYPE_MASK);
+	node->timestamp_and_type &= BUS1_QUEUE_TYPE_MASK;
+	node->timestamp_and_type |= ts;
 }
 
 /**
@@ -312,21 +327,16 @@ struct bus1_queue_node *bus1_queue_peek(struct bus1_queue *queue)
 /**
  * bus1_queue_node_init() - initialize queue node
  * @node:		node to initialize
- * @is_message:		whether this node should be marked as ordinary message
+ * @type:		message type
  *
  * This initializes a previously unused node, and prepares it for use with a
- * message queue. If @is_message is true, the node is marked as ordinary
- * message. It is a boolean flag that can be queried via
- * bus1_queue_node_is_message(). It does not affect queue behavior at all, but
- * is for private use of the caller. It is usually used to get the type of the
- * surrounding object, for use with container_of().
+ * message queue.
  */
-void bus1_queue_node_init(struct bus1_queue_node *node, bool is_message)
+void bus1_queue_node_init(struct bus1_queue_node *node, unsigned int type)
 {
 	RB_CLEAR_NODE(&node->rb);
 	node->timestamp_and_type = 0;
-	if (is_message)
-		bus1_queue_node_set_type(node, BUS1_QUEUE_NODE_MASK_TYPE);
+	bus1_queue_node_set_type(node, type);
 }
 
 /**
@@ -339,20 +349,6 @@ void bus1_queue_node_init(struct bus1_queue_node *node, bool is_message)
 void bus1_queue_node_destroy(struct bus1_queue_node *node)
 {
 	WARN_ON(node && !RB_EMPTY_NODE(&node->rb));
-}
-
-/**
- * bus1_queue_node_is_message() - query node type
- * @node:		node to query
- *
- * This queries the "message" flag that was provided for this node via
- * bus1_queue_node_init(). See its description for details.
- *
- * Return: True if @node is marked as message.
- */
-bool bus1_queue_node_is_message(struct bus1_queue_node *node)
-{
-	return bus1_queue_node_get_type(node) == BUS1_QUEUE_NODE_MASK_TYPE;
 }
 
 /**

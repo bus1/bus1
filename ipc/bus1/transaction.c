@@ -510,7 +510,8 @@ void bus1_transaction_commit(struct bus1_transaction *transaction)
 		list = message;
 
 		/* prepare qnode for queue insertion */
-		bus1_queue_node_init(&message->qnode, true);
+		bus1_queue_node_init(&message->qnode,
+				     BUS1_QUEUE_NODE_MESSAGE_NORMAL);
 
 		/* sync clocks and queue message as staging entry */
 		mutex_lock(&peer_info->lock);

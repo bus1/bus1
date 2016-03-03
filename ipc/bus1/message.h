@@ -86,7 +86,9 @@ void bus1_message_deallocate_locked(struct bus1_message *message,
 static inline struct bus1_message *
 bus1_message_from_node(struct bus1_queue_node *node)
 {
-	if (WARN_ON(!bus1_queue_node_is_message(node)))
+	unsigned int type = bus1_queue_node_get_type(node);
+
+	if (WARN_ON(type != BUS1_QUEUE_NODE_MESSAGE_NORMAL))
 		return NULL;
 
 	return container_of(node, struct bus1_message, qnode);

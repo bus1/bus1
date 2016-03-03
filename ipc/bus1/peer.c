@@ -38,10 +38,7 @@ static void bus1_peer_info_reset(struct bus1_peer_info *peer_info)
 
 	rbtree_postorder_for_each_entry_safe(node, t,
 					     &peer_info->queue.messages, rb) {
-		if (WARN_ON(!bus1_queue_node_is_message(node)))
-			continue;
-
-		message = container_of(node, struct bus1_message, qnode);
+		message = bus1_message_from_node(node);
 		RB_CLEAR_NODE(&node->rb);
 		if (bus1_queue_node_is_committed(node)) {
 			bus1_message_deallocate_locked(message, peer_info);
@@ -475,7 +472,6 @@ static int bus1_peer_ioctl_recv(struct bus1_peer *peer, unsigned long arg)
 	rcu_read_lock();
 	node = bus1_queue_peek_rcu(&peer_info->queue);
 	if (node) {
-		WARN_ON(!bus1_queue_node_is_message(node));
 		message = bus1_message_from_node(node);
 		wanted_fds = message->n_files;
 	}

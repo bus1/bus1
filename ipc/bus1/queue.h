@@ -96,6 +96,11 @@
 #include <linux/rbtree.h>
 #include <linux/rcupdate.h>
 
+enum {
+	BUS1_QUEUE_NODE_MESSAGE_NORMAL,
+	_BUS1_QUEUE_NODE_N,
+};
+
 /**
  * struct bus1_queue - message queue
  * @messages:		queued messages
@@ -134,11 +139,11 @@ bool bus1_queue_remove(struct bus1_queue *queue,
 struct bus1_queue_node *bus1_queue_peek(struct bus1_queue *queue);
 
 /* nodes */
-void bus1_queue_node_init(struct bus1_queue_node *node, bool is_message);
+void bus1_queue_node_init(struct bus1_queue_node *node, unsigned int type);
 void bus1_queue_node_destroy(struct bus1_queue_node *node);
-bool bus1_queue_node_is_message(struct bus1_queue_node *node);
 bool bus1_queue_node_is_queued(struct bus1_queue_node *node);
 bool bus1_queue_node_is_committed(struct bus1_queue_node *node);
+unsigned int bus1_queue_node_get_type(struct bus1_queue_node *node);
 
 /* see bus1_queue_init_internal() for details */
 #define bus1_queue_init_for_peer(_queue, _peer) ({		\
