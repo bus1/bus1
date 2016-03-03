@@ -294,7 +294,7 @@ int bus1_user_quota_charge(struct bus1_peer_info *peer_info,
 		return -EDQUOT;
 
 	max = BUS1_HANDLES_MAX - peer_info->n_handles + stats->n_handles;
-	if (stats->n_handles + 1 > max / 2)
+	if (stats->n_handles + n_handles > max / 2)
 		return -EDQUOT;
 
 	/*
@@ -309,13 +309,14 @@ int bus1_user_quota_charge(struct bus1_peer_info *peer_info,
 	if (atomic_read(&user->fds_inflight) + n_fds > rlimit(RLIMIT_NOFILE))
 		return -ETOOMANYREFS;
 
+	atomic_add(n_fds, &user->fds_inflight);
 	peer_info->n_allocated += size;
 	peer_info->n_messages += 1;
 	peer_info->n_handles += n_handles;
 	stats->n_allocated += size;
 	stats->n_messages += 1;
 	stats->n_handles += n_handles;
-	atomic_add(n_fds, &user->fds_inflight);
+
 	return 0;
 }
 
