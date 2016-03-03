@@ -106,11 +106,11 @@ struct bus1_cmd_recv {
 } __attribute__((__aligned__(8)));
 
 struct bus1_header {
-	u64 destination;
-	u32 uid;
-	u32 gid;
-	u32 pid;
-	u32 tid;
+	__u64 destination;
+	__u32 uid;
+	__u32 gid;
+	__u32 pid;
+	__u32 tid;
 } __attribute__((__aligned__(8)));
 
 enum {
