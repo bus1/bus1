@@ -78,8 +78,7 @@ struct b1_client *b1_client_free(struct b1_client *client)
 	return NULL;
 }
 
-static int b1_client_ioctl(struct b1_client *client, unsigned int cmd,
-			   void *arg)
+int b1_client_ioctl(struct b1_client *client, unsigned int cmd, void *arg)
 {
 	int r;
 

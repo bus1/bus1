@@ -154,6 +154,67 @@ static int test_peer_sequential(const char *path, size_t n_dests,
 }
 */
 
+static void test_peer_invalid_ioctl(const char *path)
+{
+	struct b1_client *client;
+	struct bus1_cmd_connect connect = {};
+	struct bus1_cmd_recv recv = {};
+	int r;
+
+	r = b1_client_new_from_path(&client, path);
+	assert(r >= 0);
+	assert(client);
+
+	r = b1_client_ioctl(client, BUS1_CMD_CONNECT, NULL);
+	assert(r == -EFAULT);
+
+	r = b1_client_ioctl(client, BUS1_CMD_CONNECT, &connect);
+	assert(r == -EINVAL);
+
+	connect.flags = BUS1_CONNECT_FLAG_CLIENT | BUS1_CONNECT_FLAG_RESET;
+	r = b1_client_ioctl(client, BUS1_CMD_CONNECT, &connect);
+	assert(r == -EINVAL);
+
+	connect.flags = BUS1_CONNECT_FLAG_CLIENT;
+	connect.pool_size = 0;
+	r = b1_client_ioctl(client, BUS1_CMD_CONNECT, &connect);
+	assert(r == -EINVAL);
+
+	r = b1_client_ioctl(client, BUS1_CMD_DISCONNECT, &recv);
+	assert(r == -EINVAL);
+
+	r = b1_client_connect(client, BUS1_CONNECT_FLAG_CLIENT, 4096);
+	assert(r >= 0);
+
+	connect.flags = BUS1_CONNECT_FLAG_RESET;
+	connect.pool_size = 4096;
+	r = b1_client_ioctl(client, BUS1_CMD_CONNECT, &connect);
+	assert(r == -EINVAL);
+
+	connect.flags = BUS1_CONNECT_FLAG_QUERY;
+	connect.pool_size = 4096;
+	r = b1_client_ioctl(client, BUS1_CMD_CONNECT, &connect);
+	assert(r == -EINVAL);
+
+	r = b1_client_ioctl(client, BUS1_CMD_SEND, NULL);
+	assert(r == -EFAULT);
+
+	r = b1_client_ioctl(client, BUS1_CMD_RECV, NULL);
+	assert(r == -EFAULT);
+
+	r = b1_client_ioctl(client, BUS1_CMD_RECV, &recv);
+	assert(r == -EINVAL);
+
+	r = b1_client_ioctl(client, BUS1_CMD_SLICE_RELEASE, NULL);
+	assert(r == -EFAULT);
+
+	r = b1_client_disconnect(client);
+	assert(r >= 0);
+
+	client = b1_client_free(client);
+	assert(!client);
+}
+
 static void test_peer_api(const char *path)
 {
 	struct b1_client *client;
@@ -178,6 +239,7 @@ int test_peer(const char *path)
 	unsigned i;
 	int r, with, without;
 
+	test_peer_invalid_ioctl(path);
 	test_peer_api(path);
 
 	/* initialize all caches
