@@ -132,7 +132,10 @@ static long bus1_fop_ioctl(struct file *file,
 		if (r < 0)
 			return r;
 
-		r = bus1_peer_connect(peer, file->f_cred->uid, &param);
+		r = bus1_peer_connect(peer,
+				      current_cred(),
+				      task_active_pid_ns(current),
+				      &param);
 		if (r < 0)
 			return r;
 

@@ -8,11 +8,13 @@
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+#include <linux/cred.h>
 #include <linux/err.h>
 #include <linux/file.h>
 #include <linux/fs.h>
 #include <linux/kernel.h>
 #include <linux/mutex.h>
+#include <linux/pid_namespace.h>
 #include <linux/rbtree.h>
 #include <linux/rcupdate.h>
 #include <linux/seqlock.h>
@@ -66,6 +68,8 @@ bus1_peer_info_free(struct bus1_peer_info *peer_info)
 	bus1_user_quota_destroy(&peer_info->quota);
 
 	peer_info->user = bus1_user_unref(peer_info->user);
+	put_pid_ns(peer_info->pid_ns);
+	put_cred(peer_info->cred);
 
 	/*
 	 * Make sure the object is freed in a delayed-manner. Some
@@ -78,7 +82,9 @@ bus1_peer_info_free(struct bus1_peer_info *peer_info)
 }
 
 static struct bus1_peer_info *
-bus1_peer_info_new(struct bus1_cmd_connect *param, kuid_t uid)
+bus1_peer_info_new(struct bus1_cmd_connect *param,
+		   const struct cred *cred,
+		   struct pid_namespace *pid_ns)
 {
 	struct bus1_peer_info *peer_info;
 	int r;
@@ -92,6 +98,8 @@ bus1_peer_info_new(struct bus1_cmd_connect *param, kuid_t uid)
 		return ERR_PTR(-ENOMEM);
 
 	mutex_init(&peer_info->lock);
+	peer_info->cred = get_cred(cred);
+	peer_info->pid_ns = get_pid_ns(pid_ns);
 	peer_info->user = NULL;
 	bus1_user_quota_init(&peer_info->quota);
 	peer_info->pool = BUS1_POOL_NULL;
@@ -101,7 +109,7 @@ bus1_peer_info_new(struct bus1_cmd_connect *param, kuid_t uid)
 	seqcount_init(&peer_info->seqcount);
 	peer_info->handle_ids = 0;
 
-	peer_info->user = bus1_user_ref_by_uid(uid);
+	peer_info->user = bus1_user_ref_by_uid(cred->uid);
 	if (IS_ERR(peer_info->user)) {
 		r = PTR_ERR(peer_info->user);
 		peer_info->user = NULL;
@@ -212,14 +220,15 @@ int bus1_peer_disconnect(struct bus1_peer *peer)
 }
 
 static int bus1_peer_connect_new(struct bus1_peer *peer,
-				 kuid_t uid,
+				 const struct cred *cred,
+				 struct pid_namespace *pid_ns,
 				 struct bus1_cmd_connect *param)
 {
 	struct bus1_peer_info *peer_info;
 	unsigned long flags;
 	int r;
 
-	peer_info = bus1_peer_info_new(param, uid);
+	peer_info = bus1_peer_info_new(param, cred, pid_ns);
 	if (IS_ERR(peer_info))
 		return PTR_ERR(peer_info);
 
@@ -299,7 +308,8 @@ static int bus1_peer_connect_query(struct bus1_peer *peer,
 /**
  * bus1_peer_connect() - establish new peer
  * @peer:		peer to operate on
- * @file:		underlying file of @peer
+ * @cred:		user creds
+ * @pid_ns:		user pid namespace
  * @arg:		ioctl arguments
  *
  * This performs a peer-connect. Depending on the parameter flags in @arg, the
@@ -310,7 +320,8 @@ static int bus1_peer_connect_query(struct bus1_peer *peer,
  * Return: 0 on success, negative error code on failure.
  */
 int bus1_peer_connect(struct bus1_peer *peer,
-		      kuid_t uid,
+		      const struct cred *cred,
+		      struct pid_namespace *pid_ns,
 		      struct bus1_cmd_connect *param)
 {
 	/* check for validity of all flags */
@@ -327,7 +338,7 @@ int bus1_peer_connect(struct bus1_peer *peer,
 
 	if (param->flags & (BUS1_CONNECT_FLAG_CLIENT |
 			    BUS1_CONNECT_FLAG_MONITOR))
-		return bus1_peer_connect_new(peer, uid, param);
+		return bus1_peer_connect_new(peer, cred, pid_ns, param);
 	else if (param->flags & BUS1_CONNECT_FLAG_RESET)
 		return bus1_peer_connect_reset(peer, param);
 	else if (param->flags & BUS1_CONNECT_FLAG_QUERY)

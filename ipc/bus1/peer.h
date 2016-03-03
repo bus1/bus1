@@ -16,9 +16,11 @@
  * XXX
  */
 
+#include <linux/cred.h>
 #include <linux/kernel.h>
 #include <linux/lockdep.h>
 #include <linux/mutex.h>
+#include <linux/pid_namespace.h>
 #include <linux/rcupdate.h>
 #include <linux/rbtree.h>
 #include <linux/sched.h>
@@ -34,6 +36,8 @@
  * struct bus1_peer_info - peer specific runtime information
  * @lock:			data lock
  * @rcu:			rcu
+ * @cred:			user creds
+ * @pid_ns:			user pid namespace
  * @user:			object owner
  * @quota:			quota handling
  * @pool:			data pool
@@ -48,6 +52,8 @@ struct bus1_peer_info {
 		struct mutex lock;
 		struct rcu_head rcu;
 	};
+	const struct cred *cred;
+	struct pid_namespace *pid_ns;
 	struct bus1_user *user;
 	struct bus1_user_quota quota;
 	struct bus1_pool pool;
@@ -75,7 +81,8 @@ struct bus1_peer {
 struct bus1_peer *bus1_peer_new(void);
 struct bus1_peer *bus1_peer_free(struct bus1_peer *peer);
 int bus1_peer_connect(struct bus1_peer *peer,
-		      kuid_t uid,
+		      const struct cred *cred,
+		      struct pid_namespace *pid_ns,
 		      struct bus1_cmd_connect *param);
 int bus1_peer_disconnect(struct bus1_peer *peer);
 int bus1_peer_ioctl(struct bus1_peer *peer,
