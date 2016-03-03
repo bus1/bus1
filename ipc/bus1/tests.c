@@ -17,13 +17,36 @@
 
 static void bus1_test_user(void)
 {
-	struct bus1_user *user;
-	kuid_t uid = KUIDT_INIT(0);
+	struct bus1_user *user1, *user2;
+	kuid_t uid1 = KUIDT_INIT(1), uid2 = KUIDT_INIT(2);
 
-	user = bus1_user_ref_by_uid(uid);
-	WARN_ON(!user);
+	/* create a user */
+	user1 = bus1_user_ref_by_uid(uid1);
+	WARN_ON(!user1);
 
-	WARN_ON(bus1_user_unref(user));
+	/* create a different user */
+	user2 = bus1_user_ref_by_uid(uid2);
+	WARN_ON(!user2);
+	WARN_ON(user1 == user2);
+
+	/* drop the second user */
+	user2 = bus1_user_unref(user2);
+	WARN_ON(user2);
+
+	/* take another ref on the first user */
+	user2 = bus1_user_ref(user1);
+	WARN_ON(user1 != user2);
+
+	/* drop the ref again */
+	user2 = bus1_user_unref(user2);
+	WARN_ON(user2);
+
+	/* look up the first user again by uid */
+	user2 = bus1_user_ref_by_uid(uid1);
+	WARN_ON(user1 != user2);
+
+	WARN_ON(bus1_user_unref(user1));
+	WARN_ON(bus1_user_unref(user2));
 }
 
 static void bus1_test_pool(void)
