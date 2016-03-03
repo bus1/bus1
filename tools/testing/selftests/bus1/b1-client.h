@@ -28,8 +28,8 @@ struct b1_client *b1_client_free(struct b1_client *client);
 
 int b1_client_ioctl(struct b1_client *client, unsigned int cmd, void *arg);
 
-int b1_client_connect(struct b1_client *client, uint64_t flags,
-		      size_t pool_size);
+int b1_client_connect(struct b1_client *client, size_t pool_size);
+int b1_client_reset(struct b1_client *client);
 int b1_client_disconnect(struct b1_client *client);
 
 int b1_client_send(struct b1_client *client,

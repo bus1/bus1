@@ -17,7 +17,6 @@
 #define N_DESTS (512)
 #define N_ITERATIONS (100000ULL)
 #define PAYLOAD_SIZE (1024)
-#define CONNECT_FLAGS (BUS1_CONNECT_FLAG_CLIENT | BUS1_CONNECT_FLAG_QUERY)
 #define POOL_SIZE (1024 * 1024 * 32)
 
 /*
@@ -183,7 +182,7 @@ static void test_peer_invalid_ioctl(const char *path)
 	r = b1_client_ioctl(client, BUS1_CMD_DISCONNECT, &recv);
 	assert(r == -EINVAL);
 
-	r = b1_client_connect(client, BUS1_CONNECT_FLAG_CLIENT, 4096);
+	r = b1_client_connect(client, 4096);
 	assert(r >= 0);
 
 	connect.flags = BUS1_CONNECT_FLAG_RESET;
@@ -224,7 +223,7 @@ static void test_peer_api(const char *path)
 	assert(r >= 0);
 	assert(client);
 
-	r = b1_client_connect(client, CONNECT_FLAGS, POOL_SIZE);
+	r = b1_client_connect(client, POOL_SIZE);
 	assert(r >= 0);
 
 	r = b1_client_disconnect(client);

@@ -27,18 +27,17 @@ struct b1_client {
 	size_t pool_size;
 };
 
-int b1_client_new_from_fd(struct b1_client **out, int fd)
+static int b1_client_new(struct b1_client **out)
 {
 	struct b1_client *client;
 
 	assert(out);
-	assert(fd >= 0);
 
 	client = malloc(sizeof(*client));
 	if (!client)
 		return -ENOMEM;
 
-	client->fd = fd;
+	client->fd = -1;
 	client->pool_map = NULL;
 	client->pool_size = 0;
 
@@ -46,9 +45,77 @@ int b1_client_new_from_fd(struct b1_client **out, int fd)
 	return 0;
 }
 
+static int b1_client_query(struct b1_client *client)
+{
+	struct bus1_cmd_connect cmd = {
+		.flags = BUS1_CONNECT_FLAG_QUERY,
+	};
+	int r;
+
+	r = b1_client_ioctl(client, BUS1_CMD_CONNECT, &cmd);
+	if (r < 0)
+		return r;
+
+	client->pool_size = cmd.pool_size;
+
+	return 0;
+}
+
+static int b1_client_mmap(struct b1_client *client)
+{
+	const void *map;
+	int r;
+
+	assert(client);
+
+	map = mmap(NULL, client->pool_size, PROT_READ, MAP_SHARED,
+		   client->fd, 0);
+	if (map == MAP_FAILED)
+		return -errno;
+
+	assert(map != NULL);
+
+	client->pool_map = map;
+
+	return 0;
+}
+
+int b1_client_new_from_fd(struct b1_client **out, int fd)
+{
+	struct b1_client *client;
+	int r;
+
+	assert(out);
+	assert(fd >= 0);
+
+	r = b1_client_new(&client);
+	if (r < 0)
+		return r;
+
+	client->fd = fd;
+
+	r = b1_client_query(client);
+	if (r >= 0) {
+		r = b1_client_mmap(client);
+		if (r < 0) {
+			b1_client_free(client);
+			return r;
+		}
+	} else if (r < 0 &&  r != -ENOTCONN && r != -ESHUTDOWN) {
+		b1_client_free(client);
+		return r;
+	}
+
+	*out = client;
+
+	return 0;
+}
+
 int b1_client_new_from_path(struct b1_client **out, const char *path)
 {
 	int r, fd;
+
+	assert(out);
 
 	if (!path)
 		path = "/dev/bus1";
@@ -57,11 +124,15 @@ int b1_client_new_from_path(struct b1_client **out, const char *path)
 	if (fd < 0)
 		return -errno;
 
-	r = b1_client_new_from_fd(out, fd);
-	if (r < 0)
+	r = b1_client_new(out);
+	if (r < 0) {
 		close(fd);
+		return r;
+	}
 
-	return r;
+	(*out)->fd = fd;
+
+	return 0;
 }
 
 struct b1_client *b1_client_free(struct b1_client *client)
@@ -91,42 +162,57 @@ int b1_client_ioctl(struct b1_client *client, unsigned int cmd, void *arg)
 	return r;
 }
 
-int b1_client_connect(struct b1_client *client,
-		      uint64_t flags,
-		      size_t pool_size)
+int b1_client_connect(struct b1_client *client, size_t pool_size)
 {
 	struct bus1_cmd_connect cmd = {
-		.flags = flags,
+		.flags = BUS1_CONNECT_FLAG_CLIENT,
 		.pool_size = pool_size,
 	};
-	const void *map;
 	int r;
 
-	assert(pool_size > 0);
-	assert(pool_size < (uint64_t)-1);
+	assert(pool_size);
 
 	r = b1_client_ioctl(client, BUS1_CMD_CONNECT, &cmd);
 	if (r < 0)
 		return r;
 
-	map = mmap(NULL, pool_size, PROT_READ, MAP_SHARED, client->fd, 0);
-	if (map == MAP_FAILED) {
-		r = -errno;
+	client->pool_size = pool_size;
+
+	r = b1_client_mmap(client);
+	if (r < 0) {
 		b1_client_disconnect(client);
 		return r;
 	}
 
-	assert(map != NULL);
-
-	client->pool_map = map;
-	client->pool_size = pool_size;
-
 	return 0;
+}
+
+int b1_client_reset(struct b1_client *client)
+{
+	struct bus1_cmd_connect cmd = {
+		.flags = BUS1_CONNECT_FLAG_RESET,
+	};
+
+	return b1_client_ioctl(client, BUS1_CMD_CONNECT, &cmd);
 }
 
 int b1_client_disconnect(struct b1_client *client)
 {
-	return b1_client_ioctl(client, BUS1_CMD_DISCONNECT, NULL);
+	int r;
+
+	assert(client);
+
+	r = b1_client_ioctl(client, BUS1_CMD_DISCONNECT, NULL);
+	if (r < 0)
+		return r;
+
+	if (client->pool_map) {
+		munmap((void *)client->pool_map, client->pool_size);
+		client->pool_map = NULL;
+		client->pool_size = 0;
+	}
+
+	return 0;
 }
 
 int b1_client_send(struct b1_client *client,
