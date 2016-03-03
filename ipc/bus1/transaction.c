@@ -666,7 +666,7 @@ int bus1_transaction_commit_for_id(struct bus1_transaction *transaction,
 	if (wake)
 		bus1_peer_wake(peer);
 
-	message = 0;
+	message = NULL;
 	r = 0;
 
 exit:
