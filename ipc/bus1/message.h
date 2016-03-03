@@ -31,8 +31,6 @@ struct bus1_user;
 /**
  * struct bus1_message - message
  * @qnode:			embedded queue node
- * @dd.rb:			link into multicast tree (duplicate detection)
- * @dd.destination:		destination ID (duplicate detection)
  * @transaction.next:		message list (during transactions)
  * @transaction.handle:		pinned handle (during transactions)
  * @transaction.raw_peer:	pinned destination (during transactions)
@@ -43,13 +41,7 @@ struct bus1_user;
  * @handles:			passed handles
  */
 struct bus1_message {
-	union {
-		struct {
-			struct rb_node rb;
-			u64 destination;
-		} dd;
-		struct bus1_queue_node qnode;
-	};
+	struct bus1_queue_node qnode;
 
 	struct {
 		struct bus1_message *next;
@@ -65,7 +57,9 @@ struct bus1_message {
 	/* handles must be last */
 };
 
-struct bus1_message *bus1_message_new(size_t n_files, size_t n_handles);
+struct bus1_message *bus1_message_new(size_t n_files,
+				      size_t n_handles,
+				      bool silent);
 struct bus1_message *bus1_message_free(struct bus1_message *message);
 int bus1_message_allocate_locked(struct bus1_message *message,
 				 struct bus1_peer_info *peer_info,

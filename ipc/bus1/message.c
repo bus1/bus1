@@ -17,19 +17,23 @@
 #include "message.h"
 #include "peer.h"
 #include "pool.h"
+#include "queue.h"
 #include "user.h"
 
 /**
  * bus1_message_new() - allocate new message
  * @n_files:		number of files to pre-allocate
  * @n_handles:		number of handles to pre-allocate
+ * @bool:		is this a silent message?
  *
  * This allocates a new, unused message for free use to the caller. Storage for
  * files and handles is (partially) pre-allocated.
  *
  * Return: Pointer to new message, ERR_PTR on failure.
  */
-struct bus1_message *bus1_message_new(size_t n_files, size_t n_handles)
+struct bus1_message *bus1_message_new(size_t n_files,
+				      size_t n_handles,
+				      bool silent)
 {
 	struct bus1_message *message;
 	size_t base_size, fds_size;
@@ -42,7 +46,9 @@ struct bus1_message *bus1_message_new(size_t n_files, size_t n_handles)
 	if (!message)
 		return ERR_PTR(-ENOMEM);
 
-	message->dd.destination = 0;
+	bus1_queue_node_init(&message->qnode,
+			     silent ? BUS1_QUEUE_NODE_MESSAGE_SILENT :
+				      BUS1_QUEUE_NODE_MESSAGE_NORMAL);
 	message->user = NULL;
 	message->slice = NULL;
 	message->files = (void *)((u8 *)message + base_size);
@@ -81,6 +87,7 @@ struct bus1_message *bus1_message_free(struct bus1_message *message)
 			fput(message->files[i]);
 
 	bus1_handle_inflight_destroy(&message->handles);
+	bus1_queue_node_destroy(&message->qnode);
 	kfree_rcu(message, qnode.rcu);
 
 	return NULL;

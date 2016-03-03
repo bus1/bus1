@@ -56,7 +56,7 @@ struct bus1_transaction {
 	struct file **files;
 
 	/* destinations */
-	struct rb_root entries;
+	struct bus1_message *entries;
 };
 
 static struct bus1_transaction *
@@ -98,8 +98,6 @@ bus1_transaction_new(size_t n_vecs, size_t n_files, void *buf, size_t buf_len)
 
 	/* skip extra-vecs initially, just guarantee they're there */
 	transaction->vecs += BUS1_TRANSACTION_EXTRA_VECS;
-
-	transaction->entries = RB_ROOT;
 
 	return transaction;
 }
@@ -274,8 +272,8 @@ error:
 struct bus1_transaction *
 bus1_transaction_free(struct bus1_transaction *transaction, bool do_free)
 {
-	struct bus1_message *message, *t;
 	struct bus1_peer_info *peer_info;
+	struct bus1_message *message;
 	struct bus1_handle *handle;
 	struct bus1_peer *peer;
 	size_t i;
@@ -284,13 +282,14 @@ bus1_transaction_free(struct bus1_transaction *transaction, bool do_free)
 		return NULL;
 
 	/* release all in-flight queue entries and their pinned peers */
-	rbtree_postorder_for_each_entry_safe(message, t,
-					     &transaction->entries, dd.rb) {
+	while ((message = transaction->entries)) {
+		transaction->entries = message->transaction.next;
 		handle = message->transaction.handle;
 		peer = message->transaction.raw_peer;
 		bus1_active_lockdep_acquired(&peer->active);
 		peer_info = bus1_peer_dereference(peer);
 
+		message->transaction.next = NULL;
 		message->transaction.handle = NULL;
 		message->transaction.raw_peer = NULL;
 
@@ -377,15 +376,15 @@ int bus1_transaction_instantiate_for_id(struct bus1_transaction *transaction,
 					struct bus1_user *user,
 					u64 destination)
 {
-	struct bus1_message *message = NULL, *iter;
+	struct bus1_message *message = NULL;
 	struct bus1_peer_info *peer_info;
-	struct rb_node *n, **slot;
 	struct bus1_handle *handle;
 	struct bus1_peer *peer;
-	bool cont;
+	bool cont, silent;
 	int r;
 
 	cont = transaction->param->flags & BUS1_SEND_FLAG_CONTINUE;
+	silent = transaction->param->flags & BUS1_SEND_FLAG_SILENT;
 
 	handle = bus1_handle_find_by_id(transaction->peer_info, destination);
 	if (handle) {
@@ -398,27 +397,11 @@ int bus1_transaction_instantiate_for_id(struct bus1_transaction *transaction,
 
 	peer_info = bus1_peer_dereference(peer);
 
-	message = bus1_message_new(transaction->n_files, 0);
+	message = bus1_message_new(transaction->n_files, 0, silent);
 	if (IS_ERR(message)) {
 		r = PTR_ERR(message);
 		message = NULL;
 		goto error;
-	}
-
-	/* duplicate detection */
-	slot = &transaction->entries.rb_node;
-	n = NULL;
-	while (*slot) {
-		n = *slot;
-		iter = container_of(n, struct bus1_message, qnode.rb);
-		if (destination < iter->dd.destination) {
-			slot = &n->rb_left;
-		} else if (destination > iter->dd.destination) {
-			slot = &n->rb_right;
-		} else /* if (destination == iter->dd.destination) */ {
-			r = -ENOTUNIQ;
-			goto error;
-		}
 	}
 
 	r = bus1_transaction_instantiate(transaction, message,
@@ -426,13 +409,10 @@ int bus1_transaction_instantiate_for_id(struct bus1_transaction *transaction,
 	if (r < 0)
 		goto error;
 
-	/* link into duplicate detection tree */
-	rb_link_node(&message->dd.rb, n, slot);
-	rb_insert_color(&message->dd.rb, &transaction->entries);
-	message->dd.destination = destination;
-
+	message->transaction.next = transaction->entries;
 	message->transaction.handle = handle;
 	message->transaction.raw_peer = peer;
+	transaction->entries = message;
 	bus1_active_lockdep_released(&peer->active);
 
 	return 0;
@@ -472,27 +452,22 @@ error:
 void bus1_transaction_commit(struct bus1_transaction *transaction)
 {
 	struct bus1_peer_info *peer_info;
-	struct bus1_message *message, *t, *list;
+	struct bus1_message *message, *list;
 	struct bus1_handle *handle;
 	struct bus1_peer *peer;
 	bool wake, silent;
 	u64 timestamp;
 
 	/* nothing to do for empty destination sets */
-	if (RB_EMPTY_ROOT(&transaction->entries))
+	if (!transaction->entries)
 		return;
 
-	list = NULL;
+	list = transaction->entries;
+	transaction->entries = NULL;
 	timestamp = transaction->timestamp;
 	silent = transaction->param->flags & BUS1_SEND_FLAG_SILENT;
 
 	/*
-	 * We now have to queue all message on their respective destination
-	 * queues. This requires us to drop them from the dd-tree and rather
-	 * keep them in a single linked list (dd.rb nodes are shared with the
-	 * qnode memory). Duplicate detection is already done, so we are fine
-	 * with a single linked list.
-	 *
 	 * Before queueing a message as staging entry in the destination queue,
 	 * we sync the remote clock with our timestamp, and possible update our
 	 * own timestamp in case we're behind. This guarantees that no peer
@@ -503,20 +478,10 @@ void bus1_transaction_commit(struct bus1_transaction *transaction)
 	 * sure it actually treated the message as a real unique event. And
 	 * eventually queue the message as staging entry.
 	 */
-	rbtree_postorder_for_each_entry_safe(message, t,
-					     &transaction->entries, dd.rb) {
+	for (message = list; message; message = message->transaction.next) {
 		peer = message->transaction.raw_peer;
 		bus1_active_lockdep_acquired(&peer->active);
 		peer_info = bus1_peer_dereference(peer);
-
-		/* rb-tree is gone now, so remember all entries in a list */
-		message->transaction.next = list;
-		list = message;
-
-		/* prepare qnode for queue insertion */
-		bus1_queue_node_init(&message->qnode,
-				     silent ? BUS1_QUEUE_NODE_MESSAGE_SILENT :
-					      BUS1_QUEUE_NODE_MESSAGE_NORMAL);
 
 		/* sync clocks and queue message as staging entry */
 		mutex_lock(&peer_info->lock);
@@ -532,7 +497,6 @@ void bus1_transaction_commit(struct bus1_transaction *transaction)
 		bus1_active_lockdep_released(&peer->active);
 	}
 
-	transaction->entries = RB_ROOT;
 	transaction->timestamp = timestamp;
 
 	/*
@@ -641,7 +605,7 @@ int bus1_transaction_commit_for_id(struct bus1_transaction *transaction,
 	peer_info = bus1_peer_dereference(peer);
 	timestamp = transaction->timestamp;
 
-	message = bus1_message_new(transaction->n_files, 0);
+	message = bus1_message_new(transaction->n_files, 0, silent);
 	if (IS_ERR(message)) {
 		r = PTR_ERR(message);
 		message = NULL;
@@ -651,10 +615,6 @@ int bus1_transaction_commit_for_id(struct bus1_transaction *transaction,
 	r = bus1_transaction_instantiate(transaction, message, peer_info, user);
 	if (r < 0)
 		goto exit;
-
-	bus1_queue_node_init(&message->qnode,
-			     silent ? BUS1_QUEUE_NODE_MESSAGE_SILENT :
-				      BUS1_QUEUE_NODE_MESSAGE_NORMAL);
 
 	mutex_lock(&peer_info->lock);
 	timestamp = bus1_queue_sync(&peer_info->queue, timestamp);
