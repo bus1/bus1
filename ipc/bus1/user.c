@@ -274,6 +274,9 @@ int bus1_user_quota_charge(struct bus1_peer_info *peer_info,
 	 * single user shrinks with the quota of other users rising.
 	 */
 
+	BUILD_BUG_ON(BUS1_MESSAGES_MAX > U16_MAX);
+	BUILD_BUG_ON(BUS1_HANDLES_MAX > U16_MAX);
+
 	WARN_ON(peer_info->n_allocated > peer_info->pool.size);
 	WARN_ON(stats->n_allocated > peer_info->n_allocated);
 	WARN_ON(peer_info->n_messages > BUS1_MESSAGES_MAX);
