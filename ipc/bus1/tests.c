@@ -30,17 +30,94 @@ static void bus1_test_pool(void)
 {
 	struct bus1_peer_info peer = {};
 	struct bus1_pool *pool = &peer.pool;
+	struct bus1_pool_slice *slice1, *slice2, *slice3;
+	u64 offset, size;
 
 	/* make lockdep happy */
 	mutex_init(&peer.lock);
 	mutex_lock(&peer.lock);
 
-	WARN_ON(bus1_pool_create_for_peer(pool, &peer, BUS1_POOL_SIZE_MAX + 1) !=
-								-EMSGSIZE);
+	WARN_ON(bus1_pool_create_for_peer(pool, &peer, BUS1_POOL_SIZE_MAX + 1)
+		!= -EMSGSIZE);
 	WARN_ON(bus1_pool_create_for_peer(pool, &peer, 0) != -EMSGSIZE);
-	WARN_ON(bus1_pool_create_for_peer(pool, &peer, PAGE_SIZE) < 0);
-	bus1_pool_destroy(pool);
+	WARN_ON(bus1_pool_create_for_peer(pool, &peer, PAGE_SIZE - 8) < 0);
 
+	WARN_ON(bus1_pool_alloc(pool, 0) != ERR_PTR(-EMSGSIZE));
+	WARN_ON(bus1_pool_alloc(pool, BUS1_POOL_SLICE_SIZE_MAX + 1) !=
+		ERR_PTR(-EMSGSIZE));
+	WARN_ON(bus1_pool_alloc(pool, PAGE_SIZE) != ERR_PTR(-EXFULL));
+
+	/* split the pool in four parts, the first three of equal size and
+	 * the reminder the same size - 1 */
+	slice1 = bus1_pool_alloc(pool, PAGE_SIZE / 4);
+	slice2 = bus1_pool_alloc(pool, PAGE_SIZE / 4);
+	slice3 = bus1_pool_alloc(pool, PAGE_SIZE / 4);
+	WARN_ON(IS_ERR(slice1) || IS_ERR(slice2) || IS_ERR(slice3));
+	/* there is not space for a fourth */
+	WARN_ON(bus1_pool_alloc(pool, PAGE_SIZE / 4) != ERR_PTR(-EXFULL));
+
+	/* drop the first slice */
+	slice1 = bus1_pool_release_kernel(pool, slice1);
+	WARN_ON(slice1);
+	/* there is enough space in the pool, but the slices are not
+	 * adjacent for a bigger slice */
+	WARN_ON(bus1_pool_alloc(pool, PAGE_SIZE / 3) !=
+		ERR_PTR(-EXFULL));
+	/* there is space to add back a same sized slice though */
+	slice1 = bus1_pool_alloc(pool, PAGE_SIZE / 4);
+	WARN_ON(IS_ERR(slice1));
+	/* drop the last slice instead */
+	slice3 = bus1_pool_release_kernel(pool, slice3);
+	WARN_ON(slice3);
+	/* now there is space for the bigger slice */
+	slice3 = bus1_pool_alloc(pool, PAGE_SIZE / 3);
+	WARN_ON(IS_ERR(slice3));
+
+	/* test publish and release */
+	/* can't release a non-existet slice */
+	WARN_ON(bus1_pool_release_user(pool, 1) != -ENXIO);
+	/* can't user-release an unpublished slice */
+	WARN_ON(bus1_pool_release_user(pool, PAGE_SIZE / 4) != -ENXIO);
+	/* verify that publish does the righ thing */
+	bus1_pool_publish(pool, slice2, &offset, &size);
+	WARN_ON(offset != PAGE_SIZE / 4);
+	WARN_ON(size != PAGE_SIZE / 4);
+	/* release the slice again */
+	WARN_ON(bus1_pool_release_user(pool, offset) < 0);
+	/* can't release a slice that has already been released */
+	WARN_ON(bus1_pool_release_user(pool, offset) != -ENXIO);
+	/* publish again */
+	bus1_pool_publish(pool, slice2, NULL, NULL);
+	/* release the kernel ref */
+	slice2 = bus1_pool_release_kernel(pool, slice2);
+	/* verify that the slice is still busy by trying to reuse the space */
+	WARN_ON(bus1_pool_alloc(pool, PAGE_SIZE / 4) != ERR_PTR(-EXFULL));
+	/* now also release the user ref */
+	WARN_ON(bus1_pool_release_user(pool, offset) < 0);
+	/* verify that the slice was now released and the space can be reused */
+	slice2 = bus1_pool_alloc(pool, PAGE_SIZE / 4);
+	WARN_ON(IS_ERR(slice2));
+	/* publish all slices */
+	bus1_pool_publish(pool, slice1, &offset, &size);
+	WARN_ON(offset != 0);
+	WARN_ON(size != PAGE_SIZE / 4);
+	bus1_pool_publish(pool, slice2, &offset, &size);
+	WARN_ON(offset != PAGE_SIZE / 4);
+	WARN_ON(size != PAGE_SIZE / 4);
+	bus1_pool_publish(pool, slice3, &offset, &size);
+	WARN_ON(offset != PAGE_SIZE / 2);
+	WARN_ON(size != ALIGN(PAGE_SIZE / 3, 8));
+	/* flush user references */
+	bus1_pool_flush(pool);
+
+	/* XXX: test writing of iovecs and kvecs */
+
+	/* drop all slices before destorying pool */
+	slice1 = bus1_pool_release_kernel(pool, slice1);
+	slice2 = bus1_pool_release_kernel(pool, slice2);
+	slice3 = bus1_pool_release_kernel(pool, slice3);
+
+	bus1_pool_destroy(pool);
 	mutex_unlock(&peer.lock);
 }
 
