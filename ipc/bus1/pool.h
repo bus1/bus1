@@ -122,8 +122,7 @@ ssize_t bus1_pool_write_kvec(struct bus1_pool *pool,
 			     size_t total_len);
 
 /* see bus1_pool_create_internal() for details */
-#define bus1_pool_create_for_peer(_pool, _peer, _size) ({		\
-		BUILD_BUG_ON((_pool) != &(_peer)->pool);		\
+#define bus1_pool_create_for_peer(_peer, _size) ({		\
 		bus1_pool_create_internal(&(_peer)->pool, (_size));	\
 	})
 

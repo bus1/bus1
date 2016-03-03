@@ -103,7 +103,7 @@ bus1_peer_info_new(struct bus1_cmd_connect *param,
 	peer_info->user = NULL;
 	bus1_user_quota_init(&peer_info->quota);
 	peer_info->pool = BUS1_POOL_NULL;
-	bus1_queue_init_for_peer(&peer_info->queue, peer_info);
+	bus1_queue_init_for_peer(peer_info);
 	peer_info->map_handles_by_id = RB_ROOT;
 	peer_info->map_handles_by_node = RB_ROOT;
 	seqcount_init(&peer_info->seqcount);
@@ -119,8 +119,7 @@ bus1_peer_info_new(struct bus1_cmd_connect *param,
 		goto error;
 	}
 
-	r = bus1_pool_create_for_peer(&peer_info->pool, peer_info,
-				      param->pool_size);
+	r = bus1_pool_create_for_peer(peer_info, param->pool_size);
 	if (r < 0)
 		goto error;
 

@@ -60,10 +60,10 @@ static void bus1_test_pool(void)
 	mutex_init(&peer.lock);
 	mutex_lock(&peer.lock);
 
-	WARN_ON(bus1_pool_create_for_peer(pool, &peer, BUS1_POOL_SIZE_MAX + 1)
+	WARN_ON(bus1_pool_create_for_peer(&peer, BUS1_POOL_SIZE_MAX + 1)
 		!= -EMSGSIZE);
-	WARN_ON(bus1_pool_create_for_peer(pool, &peer, 0) != -EMSGSIZE);
-	WARN_ON(bus1_pool_create_for_peer(pool, &peer, PAGE_SIZE - 8) < 0);
+	WARN_ON(bus1_pool_create_for_peer(&peer, 0) != -EMSGSIZE);
+	WARN_ON(bus1_pool_create_for_peer(&peer, PAGE_SIZE - 8) < 0);
 
 	WARN_ON(bus1_pool_alloc(pool, 0) != ERR_PTR(-EMSGSIZE));
 	WARN_ON(bus1_pool_alloc(pool, BUS1_POOL_SLICE_SIZE_MAX + 1) !=

@@ -149,8 +149,7 @@ bool bus1_queue_node_is_committed(struct bus1_queue_node *node);
 unsigned int bus1_queue_node_get_type(struct bus1_queue_node *node);
 
 /* see bus1_queue_init_internal() for details */
-#define bus1_queue_init_for_peer(_queue, _peer) ({		\
-		BUILD_BUG_ON((_queue) != &(_peer)->queue);	\
+#define bus1_queue_init_for_peer(_peer) ({		\
 		bus1_queue_init_internal(&(_peer)->queue);	\
 	})
 
