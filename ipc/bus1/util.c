@@ -21,26 +21,6 @@
 #include "util.h"
 
 /**
- * bus1_import_fixed_ioctl() - copy fixed-size ioctl payload from user
- * @dst:	destination to copy data to
- * @src:	user address to copy from
- * @size:	exact size of the ioctl payload
- *
- * Copy ioctl payload from user-space into kernel-space. Backing memory must be
- * pre-allocated by the caller, alignment restrictions are checked.
- *
- * Return: 0 on success, negative error code on failure.
- */
-int bus1_import_fixed_ioctl(void *dst, unsigned long src, size_t size)
-{
-	if (src & 0x7)
-		return -EFAULT;
-	if (copy_from_user(dst, (void __user *)src, size))
-		return -EFAULT;
-	return 0;
-}
-
-/**
  * bus1_import_vecs() - import vectors from user
  * @out_vecs:		kernel memory to store vecs, preallocated
  * @out_length:		output storage for sum of all vectors lengths
