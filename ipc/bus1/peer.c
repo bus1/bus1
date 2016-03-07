@@ -448,6 +448,38 @@ exit:
 	return r;
 }
 
+static int bus1_peer_install(struct bus1_peer_info *peer_info,
+			     struct bus1_message *message,
+			     int *fds,
+			     size_t n_fds)
+{
+	struct kvec vec;
+	int r;
+
+	/*
+	 * Copy the FD numbers from the fd-array @fds into the message
+	 * @message. If we success, install the files on the given FDs and
+	 * return.
+	 * The only reason this can fail, is if writing the pool fails,
+	 * which itself can only happen during OOM. In that case, we
+	 * don't support reverting the operation, but you rather lose
+	 * the message. We cannot put it back on the queue (would break
+	 * ordering), and we don't want to perform the copy-operation
+	 * while holding the queue-lock.
+	 * We treat this OOM as if the actual message transaction OOMed
+	 * and simply drop the message.
+	 */
+
+	vec.iov_base = fds;
+	vec.iov_len = n_fds * sizeof(*fds);
+
+	r = bus1_pool_write_kvec(&peer_info->pool, message->slice,
+				 message->slice->size - ALIGN(vec.iov_len, 8),
+				 &vec, 1, vec.iov_len);
+
+	return r;
+}
+
 static int bus1_peer_peek(struct bus1_peer_info *peer_info,
 			  struct bus1_cmd_recv *param)
 {
@@ -477,7 +509,6 @@ static int bus1_peer_ioctl_recv(struct bus1_peer *peer, unsigned long arg)
 	struct bus1_cmd_recv param;
 	size_t wanted_fds, n_fds = 0;
 	int r, *t, *fds = NULL;
-	struct kvec vec;
 
 	r = bus1_import_fixed_ioctl(&param, arg, sizeof(param));
 	if (r < 0)
@@ -579,26 +610,7 @@ static int bus1_peer_ioctl_recv(struct bus1_peer *peer, unsigned long arg)
 		put_unused_fd(fds[--n_fds]);
 
 	if (n_fds > 0) {
-		/*
-		 * We dequeued the message, we already fetched enough FDs, all
-		 * we have to do is copy the FD numbers into the slice and link
-		 * the FDs.
-		 * The only reason this can fail, is if writing the pool fails,
-		 * which itself can only happen during OOM. In that case, we
-		 * don't support reverting the operation, but you rather lose
-		 * the message. We cannot put it back on the queue (would break
-		 * ordering), and we don't want to perform the copy-operation
-		 * while holding the queue-lock.
-		 * We treat this OOM as if the actual message transaction OOMed
-		 * and simply drop the message.
-		 */
-
-		vec.iov_base = fds;
-		vec.iov_len = n_fds * sizeof(*fds);
-
-		r = bus1_pool_write_kvec(&peer_info->pool, message->slice,
-					 message->slice->size - vec.iov_len,
-					 &vec, 1, vec.iov_len);
+		r = bus1_peer_install(peer_info, message, fds, n_fds);
 
 		mutex_lock(&peer_info->lock);
 		bus1_message_deallocate_locked(message, peer_info);
