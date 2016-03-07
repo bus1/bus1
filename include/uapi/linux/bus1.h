@@ -66,12 +66,13 @@ enum {
 struct bus1_cmd_connect {
 	__u64 flags;
 	__u64 pool_size;
+	__u64 parent_handle;
+	__u64 parent_fd;
 } __attribute__((__aligned__(8)));
 
 struct bus1_cmd_handle_create {
 	__u64 flags;
 	__u64 handle;
-	__u64 owner_fd;
 } __attribute__((__aligned__(8)));
 
 enum {
