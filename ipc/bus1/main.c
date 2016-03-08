@@ -156,8 +156,8 @@ static long bus1_fop_ioctl(struct file *file,
 		if (arg != 0)
 			return -EINVAL;
 		return bus1_peer_disconnect(peer);
-	case BUS1_CMD_HANDLE_CREATE:
-	case BUS1_CMD_HANDLE_DESTROY:
+	case BUS1_CMD_NODE_CREATE:
+	case BUS1_CMD_NODE_DESTROY:
 	case BUS1_CMD_HANDLE_RELEASE:
 	case BUS1_CMD_SLICE_RELEASE:
 	case BUS1_CMD_SEND:

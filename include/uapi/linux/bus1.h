@@ -51,9 +51,9 @@
 #define BUS1_OFFSET_INVALID		((__u64)-1)
 
 enum {
-	BUS1_HANDLE_FLAG_MANAGED	= 1ULL <<  0,
-	BUS1_HANDLE_FLAG_ALLOCATE	= 1ULL <<  1,
-	BUS1_HANDLE_FLAG_ONESHOT	= 1ULL <<  2,
+	BUS1_NODE_FLAG_MANAGED		= 1ULL <<  0,
+	BUS1_NODE_FLAG_ALLOCATE		= 1ULL <<  1,
+	BUS1_NODE_FLAG_ONESHOT		= 1ULL <<  2,
 };
 
 enum {
@@ -70,7 +70,7 @@ struct bus1_cmd_connect {
 	__u64 parent_fd;
 } __attribute__((__aligned__(8)));
 
-struct bus1_cmd_handle_create {
+struct bus1_cmd_node_create {
 	__u64 flags;
 	__u64 handle;
 } __attribute__((__aligned__(8)));
@@ -119,9 +119,9 @@ enum {
 						struct bus1_cmd_connect),
 	BUS1_CMD_DISCONNECT		= _IOWR(BUS1_IOCTL_MAGIC, 0x01,
 						__u64),
-	BUS1_CMD_HANDLE_CREATE		= _IOWR(BUS1_IOCTL_MAGIC, 0x03,
-						struct bus1_cmd_handle_create),
-	BUS1_CMD_HANDLE_DESTROY		= _IOWR(BUS1_IOCTL_MAGIC, 0x04,
+	BUS1_CMD_NODE_CREATE		= _IOWR(BUS1_IOCTL_MAGIC, 0x03,
+						struct bus1_cmd_node_create),
+	BUS1_CMD_NODE_DESTROY		= _IOWR(BUS1_IOCTL_MAGIC, 0x04,
 						__u64),
 	BUS1_CMD_HANDLE_RELEASE		= _IOWR(BUS1_IOCTL_MAGIC, 0x05,
 						__u64),

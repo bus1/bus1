@@ -654,8 +654,8 @@ int bus1_peer_ioctl(struct bus1_peer *peer,
 	lockdep_assert_held(&peer->active);
 
 	switch (cmd) {
-	case BUS1_CMD_HANDLE_CREATE:
-	case BUS1_CMD_HANDLE_DESTROY:
+	case BUS1_CMD_NODE_CREATE:
+	case BUS1_CMD_NODE_DESTROY:
 	case BUS1_CMD_HANDLE_RELEASE:
 		return -ENOTTY;
 	case BUS1_CMD_SLICE_RELEASE:
