@@ -1,0 +1,6 @@
+cmd = $(cmd_$(1))
+srctree = $(shell pwd)
+src = Documentation/bus1
+obj = $(srctree)/$(src)
+
+include Documentation/bus1/Makefile

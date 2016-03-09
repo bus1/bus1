@@ -62,9 +62,7 @@ module:
 # documentation makefile works properly.
 #
 %docs:
-
-# XXX: implement
-#	$(MAKE) -f Makefile.docs $@
+	$(MAKE) -f Makefile.docs $@
 
 #
 # Test

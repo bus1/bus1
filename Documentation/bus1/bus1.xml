@@ -1,0 +1,187 @@
+<?xml version='1.0'?> <!--*-nxml-*-->
+<!DOCTYPE refentry PUBLIC "-//OASIS//DTD DocBook XML V4.2//EN"
+        "http://www.oasis-open.org/docbook/xml/4.2/docbookx.dtd">
+
+<refentry id="bus1">
+
+  <refentryinfo>
+    <title>bus1</title>
+    <productname>kbus1</productname>
+  </refentryinfo>
+
+  <refmeta>
+    <refentrytitle>bus1</refentrytitle>
+    <manvolnum>7</manvolnum>
+  </refmeta>
+
+  <refnamediv>
+    <refname>bus1</refname>
+    <refpurpose>Kernel Message Bus</refpurpose>
+  </refnamediv>
+
+  <refsect1>
+    <title>Synopsis</title>
+    <para>
+      bus1 is an inter-process communication bus system controlled by the
+      kernel. It provides user-space with an API to create peers and send
+      unicast and multicast messages to one, or many, peers. It does not enforce
+      any layout on the transmitted data, but only provides the transport layer
+      used for message interchange between peers.
+    </para>
+    <para>
+      This set of man-pages gives a comprehensive overview of the kernel-level
+      API, with all ioctl commands, associated structs and bit masks. However,
+      most people will not use this API level directly, but rather let one of
+      the high-level abstraction libraries help them integrate bus
+      functionality into their applications.
+    </para>
+  </refsect1>
+
+  <refsect1>
+    <title>Description</title>
+    <para>
+      bus1 provides a character device at <filename>/dev/bus1</filename>. Any
+      advanced operations are done via
+      <function>ioctl()</function> on this file.
+    </para>
+
+  </refsect1>
+
+  <refsect1>
+    <title>Terminology</title>
+
+    <refsect2>
+      <title>Peer</title>
+      <para>
+        A peer is created by opening <filename>/dev/bus1</filename> or by
+        inheriting from an existing filedescriptor. Every peer has potentially
+        several nodes and handles to nodes owned by other peers. A peer can
+        address messages to handles it has and will receive messages addressed
+        to handles of nodes it created. See
+        <citerefentry>
+          <refentrytitle>bus1.peer</refentrytitle>
+          <manvolnum>7</manvolnum>
+        </citerefentry>
+        for more details.
+      </para>
+    </refsect2>
+
+    <refsect2>
+      <title>Pool</title>
+      <para>
+        Each peer allocates a piece of shmem-backed memory that is
+        used to receive messages. It is never used for sending. In order to
+        access that memory, an application must <function>mmap()</function> it
+        into its address space. See
+        <citerefentry>
+          <refentrytitle>bus1.pool</refentrytitle>
+          <manvolnum>7</manvolnum>
+        </citerefentry>
+        for more details.
+      </para>
+    </refsect2>
+
+    <refsect2>
+      <title>Message</title>
+      <para>
+        Peers can exchange messages with other peers by addressing the peers
+        with handles to their nodes. A message consists of a logical byte stream
+        of arbitrary size. Messages can carry additional file descriptors or
+        handles to nodes to be passed from one peer to another, just like
+        passing file descriptors over UNIX domain sockets. See
+        <citerefentry>
+          <refentrytitle>bus1.message</refentrytitle>
+          <manvolnum>7</manvolnum>
+        </citerefentry>
+        for more details.
+      </para>
+    </refsect2>
+
+  </refsect1>
+
+  <refsect1>
+    <title>Metadata</title>
+    <para>
+      Each message comes with the uid, gid, pid and tid of the sending peer. The
+      uid and gid is collected when the file is opened and pid and tid is
+      collected when the message is sent.
+    </para>
+  </refsect1>
+
+  <refsect1>
+    <title>The ioctl interface</title>
+
+    <para>
+      As stated in the 'synopsis' section above, application developers are
+      strongly encouraged to use bus1 through a the high-level abstraction
+      library, rather than using the low-level API directly.
+    </para>
+
+    <para>
+      bus1 on the kernel level exposes its functions exclusively through
+      <citerefentry>
+        <refentrytitle>ioctl</refentrytitle>
+        <manvolnum>2</manvolnum>
+      </citerefentry>,
+      employed on file descriptors returned by
+      <citerefentry>
+        <refentrytitle>open</refentrytitle>
+        <manvolnum>2</manvolnum>
+      </citerefentry>
+      on <filename>/dev/bus1</filename>.
+    </para>
+    <para>
+      Following is a list of all the ioctls, along with the command structs
+      they must be used with.
+    </para>
+
+    <informaltable frame="none">
+      <tgroup cols="3" colsep="1">
+        <thead>
+          <row>
+            <entry>ioctl signature</entry>
+            <entry>command</entry>
+            <entry>transported struct</entry>
+          </row>
+        </thead>
+        <tbody>
+          <row>
+            <entry><constant>0x40189500</constant></entry>
+            <entry><constant>BUS1_CMD_SEND</constant></entry>
+            <entry><type>struct bus1_cmd_send *</type></entry>
+          </row>
+        </tbody>
+      </tgroup>
+    </informaltable>
+
+    <para>
+      These ioctls, along with the structs they transport, are explained in
+      detail in the other documents linked to in the "See Also" section below.
+    </para>
+  </refsect1>
+
+  <refsect1>
+    <title>See Also</title>
+    <simplelist type="inline">
+      <member>
+        <citerefentry>
+          <refentrytitle>bus1.peer</refentrytitle>
+          <manvolnum>7</manvolnum>
+        </citerefentry>
+      </member>
+      <member>
+        <citerefentry>
+          <refentrytitle>bus1.message</refentrytitle>
+          <manvolnum>7</manvolnum>
+        </citerefentry>
+      </member>
+      <member>
+        <citerefentry>
+          <refentrytitle>bus1.pool</refentrytitle>
+          <manvolnum>7</manvolnum>
+        </citerefentry>
+      </member>
+    </simplelist>
+  </refsect1>
+
+</refentry>
