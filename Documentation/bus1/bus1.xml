@@ -6,7 +6,7 @@
 
   <refentryinfo>
     <title>bus1</title>
-    <productname>kbus1</productname>
+    <productname>bus1</productname>
   </refentryinfo>
 
   <refmeta>
@@ -41,8 +41,8 @@
     <title>Description</title>
     <para>
       bus1 provides a character device at <filename>/dev/bus1</filename>. Any
-      advanced operations are done via
-      <function>ioctl()</function> on this file.
+      advanced operations are done via <function>ioctl()</function> on this
+      file.
     </para>
 
   </refsect1>
@@ -54,12 +54,46 @@
       <title>Peer</title>
       <para>
         A peer is created by opening <filename>/dev/bus1</filename> or by
-        inheriting from an existing filedescriptor. Every peer has potentially
+        inheriting from an existing file descriptor. Every peer has potentially
         several nodes and handles to nodes owned by other peers. A peer can
         address messages to handles it has and will receive messages addressed
         to handles of nodes it created. See
         <citerefentry>
           <refentrytitle>bus1.peer</refentrytitle>
+          <manvolnum>7</manvolnum>
+        </citerefentry>
+        for more details.
+      </para>
+    </refsect2>
+
+    <refsect2>
+      <title>Node</title>
+      <para>
+        A peer may create nodes. Any message is addressed to nodes, and the peer
+        that owns a node receives all the messages destined to that node. Nodes
+        are referenced by their handles, and when a node no longer has any
+        handles it is destroyed and the owner is notified. A node can also be
+        destroyed explicitly by its owner, in which case all the owners of
+        handles to the node are notified and the handles dropped. See
+        <citerefentry>
+          <refentrytitle>bus1.node</refentrytitle>
+          <manvolnum>7</manvolnum>
+        </citerefentry>
+        for more details.
+      </para>
+    </refsect2>
+
+    <refsect2>
+      <title>Handle</title>
+      <para>
+        A handle is a reference to a node. When creating a node, a handle to
+        that node is automatically created and installed in the owner peer.
+        Handles are local to each peer, and they are referenced by handle
+        numbers which are local to a given peer. Handles can be copied from one
+        peer to another, by sending them with regular bus messages. Note that
+        this may imply a trust relationship to the new owner. See
+        <citerefentry>
+          <refentrytitle>bus1.node</refentrytitle>
           <manvolnum>7</manvolnum>
         </citerefentry>
         for more details.
