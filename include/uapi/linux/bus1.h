@@ -60,6 +60,7 @@ enum {
 enum {
 	BUS1_PEER_CREATE_FLAG_QUERY		= 1ULL <<  0,
 	BUS1_PEER_CREATE_FLAG_RESET		= 1ULL <<  1,
+	BUS1_PEER_CREATE_FLAG_INIT		= 1ULL <<  2,
 };
 
 struct bus1_cmd_peer_create {

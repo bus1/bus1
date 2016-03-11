@@ -231,6 +231,14 @@ static int bus1_peer_connect_clone(struct bus1_peer *peer,
 	struct file *clone_file = NULL;
 	int r, fd;
 
+	if ((param->flags & ~(BUS1_PEER_CREATE_FLAG_QUERY |
+			      BUS1_PEER_CREATE_FLAG_RESET |
+			      BUS1_PEER_CREATE_FLAG_INIT)) ||
+	    param->pool_size == 0 ||
+	    param->handle != BUS1_HANDLE_INVALID ||
+	    param->fd != (u64)-1)
+		return -EINVAL;
+
 	fd = get_unused_fd_flags(O_CLOEXEC);
 	if (fd < 0)
 		return fd;
@@ -324,13 +332,11 @@ error:
 	return r;
 }
 
-static int bus1_peer_connect_new(struct bus1_peer *peer,
-				 struct file *peer_file,
-				 struct bus1_cmd_peer_create *param)
+static int bus1_peer_connect_init(struct bus1_peer *peer,
+				  struct bus1_cmd_peer_create *param)
 {
 	struct bus1_peer_info *peer_info;
 	unsigned long flags;
-	bool done;
 	int r;
 
 	if ((param->flags & ~(BUS1_PEER_CREATE_FLAG_QUERY |
@@ -351,33 +357,26 @@ static int bus1_peer_connect_new(struct bus1_peer *peer,
 	 * If this is *not* the first attempt to connect the peer, we fall back
 	 * to the clone operation.
 	 */
-	if (bus1_active_is_new(&peer->active)) {
-		peer_info = bus1_peer_info_new(param->pool_size);
-		if (IS_ERR(peer_info))
-			return PTR_ERR(peer_info);
+	peer_info = bus1_peer_info_new(param->pool_size);
+	if (IS_ERR(peer_info))
+		return PTR_ERR(peer_info);
 
-		spin_lock_irqsave(&peer->waitq.lock, flags);
-		if (bus1_active_is_deactivated(&peer->active)) {
-			r = -ESHUTDOWN;
-			done = true;
-		} else if (!rcu_access_pointer(peer->info)) {
-			rcu_assign_pointer(peer->info, peer_info);
-			bus1_active_activate(&peer->active);
-			peer_info = NULL; /* mark as consumed */
-			r = 0;
-			done = true;
-		} else {
-			done = false;
-		}
-		spin_unlock_irqrestore(&peer->waitq.lock, flags);
-
-		bus1_peer_info_free(peer_info);
-
-		if (done)
-			return r;
+	spin_lock_irqsave(&peer->waitq.lock, flags);
+	if (bus1_active_is_deactivated(&peer->active)) {
+		r = -ESHUTDOWN;
+	} else if (!rcu_access_pointer(peer->info)) {
+		rcu_assign_pointer(peer->info, peer_info);
+		bus1_active_activate(&peer->active);
+		peer_info = NULL; /* mark as consumed */
+		r = 0;
+	} else {
+		r = -EISCONN;
 	}
+	spin_unlock_irqrestore(&peer->waitq.lock, flags);
 
-	return bus1_peer_connect_clone(peer, peer_file, param);
+	bus1_peer_info_free(peer_info);
+
+	return r;
 }
 
 static int bus1_peer_connect_reset(struct bus1_peer *peer,
@@ -387,7 +386,8 @@ static int bus1_peer_connect_reset(struct bus1_peer *peer,
 
 	if (bus1_active_is_new(&peer->active))
 		return -ENOTCONN;
-	if ((param->flags & ~BUS1_PEER_CREATE_FLAG_QUERY) ||
+	if ((param->flags & ~(BUS1_PEER_CREATE_FLAG_QUERY |
+			      BUS1_PEER_CREATE_FLAG_INIT)) ||
 	    param->pool_size != 0 ||
 	    param->handle != BUS1_HANDLE_INVALID ||
 	    param->fd != (u64)-1)
@@ -412,7 +412,8 @@ static int bus1_peer_connect_query(struct bus1_peer *peer,
 
 	if (bus1_active_is_new(&peer->active))
 		return -ENOTCONN;
-	if ((param->flags & ~BUS1_PEER_CREATE_FLAG_RESET) ||
+	if ((param->flags & ~(BUS1_PEER_CREATE_FLAG_RESET |
+			      BUS1_PEER_CREATE_FLAG_INIT)) ||
 	    param->pool_size != 0 ||
 	    param->handle != BUS1_HANDLE_INVALID ||
 	    param->fd != (u64)-1)
@@ -455,8 +456,10 @@ int bus1_peer_connect(struct bus1_peer *peer,
 		return bus1_peer_connect_query(peer, param);
 	else if (param->flags & BUS1_PEER_CREATE_FLAG_RESET)
 		return bus1_peer_connect_reset(peer, param);
+	else if (param->flags & BUS1_PEER_CREATE_FLAG_INIT)
+		return bus1_peer_connect_init(peer, param);
 	else
-		return bus1_peer_connect_new(peer, peer_file, param);
+		return bus1_peer_connect_clone(peer, peer_file, param);
 }
 
 static int bus1_peer_ioctl_slice_release(struct bus1_peer *peer,
