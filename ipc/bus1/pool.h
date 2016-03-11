@@ -101,10 +101,7 @@ void bus1_pool_destroy(struct bus1_pool *pool);
 struct bus1_pool_slice *bus1_pool_alloc(struct bus1_pool *pool, size_t size);
 struct bus1_pool_slice *
 bus1_pool_release_kernel(struct bus1_pool *pool, struct bus1_pool_slice *slice);
-void bus1_pool_publish(struct bus1_pool *pool,
-		       struct bus1_pool_slice *slice,
-		       u64 *out_offset,
-		       u64 *out_size);
+void bus1_pool_publish(struct bus1_pool *pool, struct bus1_pool_slice *slice);
 int bus1_pool_release_user(struct bus1_pool *pool, size_t offset);
 void bus1_pool_flush(struct bus1_pool *pool);
 

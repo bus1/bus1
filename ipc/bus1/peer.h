@@ -16,6 +16,7 @@
  * XXX
  */
 
+#include <linux/atomic.h>
 #include <linux/cred.h>
 #include <linux/kernel.h>
 #include <linux/lockdep.h>
@@ -45,6 +46,7 @@
  * @map_handles_by_id:		map of owned handles, by handle id
  * @map_handles_by_node:	map of owned handles, by node pointer
  * @seqcount:			sequence counter
+ * @n_dropped:			number of lost messages since last report
  * @handle_ids:			handle ID allocator
  * @n_allocated:		current amount of allocated pool memory
  * @n_messages:			current number of queue entries
@@ -64,6 +66,7 @@ struct bus1_peer_info {
 	struct rb_root map_handles_by_id;
 	struct rb_root map_handles_by_node;
 	struct seqcount seqcount;
+	atomic_t n_dropped;
 	u64 handle_ids;
 
 	size_t n_allocated;
@@ -88,9 +91,8 @@ struct bus1_peer {
 struct bus1_peer *bus1_peer_new(void);
 struct bus1_peer *bus1_peer_free(struct bus1_peer *peer);
 int bus1_peer_connect(struct bus1_peer *peer,
-		      const struct cred *cred,
-		      struct pid_namespace *pid_ns,
-		      struct bus1_cmd_connect *param);
+		      struct file *peer_file,
+		      struct bus1_cmd_peer_create *param);
 int bus1_peer_disconnect(struct bus1_peer *peer);
 int bus1_peer_ioctl(struct bus1_peer *peer,
 		    unsigned int cmd,

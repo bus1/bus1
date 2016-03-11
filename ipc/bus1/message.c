@@ -22,6 +22,7 @@
 
 /**
  * bus1_message_new() - allocate new message
+ * @n_bytes:		number of bytes to transmit
  * @n_files:		number of files to pre-allocate
  * @n_handles:		number of handles to pre-allocate
  * @silent:		is this a silent message?
@@ -31,7 +32,8 @@
  *
  * Return: Pointer to new message, ERR_PTR on failure.
  */
-struct bus1_message *bus1_message_new(size_t n_files,
+struct bus1_message *bus1_message_new(size_t n_bytes,
+				      size_t n_files,
 				      size_t n_handles,
 				      bool silent)
 {
@@ -49,11 +51,20 @@ struct bus1_message *bus1_message_new(size_t n_files,
 	bus1_queue_node_init(&message->qnode,
 			     silent ? BUS1_QUEUE_NODE_MESSAGE_SILENT :
 				      BUS1_QUEUE_NODE_MESSAGE_NORMAL);
+	message->data.destination = 0;
+	message->data.uid = -1;
+	message->data.gid = -1;
+	message->data.pid = 0;
+	message->data.tid = 0;
+	message->data.offset = BUS1_OFFSET_INVALID;
+	message->data.n_bytes = n_bytes;
+	message->data.n_handles = n_handles;
+	message->data.n_fds = n_files;
 	message->user = NULL;
 	message->slice = NULL;
 	message->files = (void *)((u8 *)message + base_size);
-	message->n_files = 0;
 	bus1_handle_inflight_init(&message->handles, n_handles);
+	memset(message->files, 0, n_files * sizeof(*message->files));
 
 	return message;
 }
@@ -82,7 +93,7 @@ struct bus1_message *bus1_message_free(struct bus1_message *message)
 	WARN_ON(message->transaction.handle);
 	WARN_ON(!message->transaction.next);
 
-	for (i = 0; i < message->n_files; ++i)
+	for (i = 0; i < message->data.n_fds; ++i)
 		if (message->files[i])
 			fput(message->files[i]);
 
@@ -109,25 +120,25 @@ int bus1_message_allocate_locked(struct bus1_message *message,
 	if (WARN_ON(message->user || message->slice))
 		return -EINVAL;
 
-	r = bus1_user_quota_charge(peer_info, user, slice_size,
-				   message->handles.batch.n_allocated,
-				   message->n_files);
+	r = bus1_user_quota_charge(peer_info, user,
+				   message->data.n_bytes,
+				   message->data.n_handles,
+				   message->data.n_fds);
 	if (r < 0)
 		return r;
 
 	slice = bus1_pool_alloc(&peer_info->pool, slice_size);
 	if (IS_ERR(slice)) {
-		bus1_user_quota_discharge(peer_info, user, slice_size,
-					  message->handles.batch.n_allocated,
-					  message->n_files);
+		bus1_user_quota_discharge(peer_info, user,
+					  message->data.n_bytes,
+					  message->data.n_handles,
+					  message->data.n_fds);
 		return PTR_ERR(slice);
 	}
 
-	/* make sure the allocator didn't pad it */
-	WARN_ON(slice_size != slice->size);
-
 	message->user = bus1_user_ref(user);
 	message->slice = slice;
+	message->data.offset = slice->offset;
 	return 0;
 }
 
@@ -141,9 +152,9 @@ void bus1_message_deallocate_locked(struct bus1_message *message,
 
 	if (message->slice) {
 		bus1_user_quota_discharge(peer_info, message->user,
-					  message->slice->size,
-					  message->handles.batch.n_allocated,
-					  message->n_files);
+					  message->data.n_bytes,
+					  message->data.n_handles,
+					  message->data.n_fds);
 		message->slice = bus1_pool_release_kernel(&peer_info->pool,
 							  message->slice);
 	}

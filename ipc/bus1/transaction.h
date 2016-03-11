@@ -19,16 +19,17 @@
 #include <linux/kernel.h>
 #include <uapi/linux/bus1.h>
 
+struct bus1_peer;
 struct bus1_transaction;
+struct bus1_user;
 
 struct bus1_transaction *
-bus1_transaction_new_from_user(struct bus1_peer_info *peer_info,
-			       struct bus1_cmd_send *param,
-			       void *buf,
-			       size_t buf_len,
-			       bool is_compat);
+bus1_transaction_new_from_user(u8 *stack_buffer,
+			       size_t stack_size,
+			       struct bus1_peer *peer,
+			       struct bus1_cmd_send *param);
 struct bus1_transaction *
-bus1_transaction_free(struct bus1_transaction *transaction, bool do_free);
+bus1_transaction_free(struct bus1_transaction *transaction, u8 *stack_buffer);
 
 int bus1_transaction_instantiate_for_id(struct bus1_transaction *transaction,
 					struct bus1_user *user,

@@ -641,6 +641,20 @@ bool bus1_handle_is_public(struct bus1_handle *handle)
 }
 
 /**
+ * bus1_handle_get_id() - get id of handle
+ * @handle:		handle to query
+ *
+ * This returns the ID of the handle @handle.
+ *
+ * Return: ID of @handle.
+ */
+u64 bus1_handle_get_id(struct bus1_handle *handle)
+{
+	WARN_ON(handle->id == BUS1_HANDLE_INVALID);
+	return handle->id;
+}
+
+/**
  * bus1_handle_get_owner_id() - get id of node owner
  * @handle:		handle to query
  *
@@ -1241,6 +1255,94 @@ void bus1_handle_finish_all(struct bus1_peer_info *peer_info,
 	bus1_handle_finalize_destruction(&list_handles);
 }
 
+/*
+ * Handle Lists
+ *
+ * We support operations on large handle sets, bigger than we should allocate
+ * linearly via kmalloc(). Hence, we rather use single-linked lists of
+ * bus1_handle_entry arrays. Each entry in the list contains a maximum of
+ * BUS1_HANDLE_BATCH_SIZE real entries. The BUS1_HANDLE_BATCH_SIZE+1'th entry
+ * points to the next node in the linked list.
+ *
+ * bus1_handle_list_new() allocates a new list with space for @n entries. Such
+ * lists can be released via bus1_handle_list_free().
+ *
+ * Entries are initially uninitialized. The caller has to fill them in.
+ */
+
+static void bus1_handle_list_free(union bus1_handle_entry *list, size_t n)
+{
+	union bus1_handle_entry *t;
+
+	while (list && n > BUS1_HANDLE_BATCH_SIZE) {
+		t = list;
+		list = list[BUS1_HANDLE_BATCH_SIZE].next;
+		kfree(t);
+		n -= BUS1_HANDLE_BATCH_SIZE;
+	}
+	kfree(list);
+}
+
+static union bus1_handle_entry *bus1_handle_list_new(size_t n)
+{
+	union bus1_handle_entry list, *e, *slot;
+	size_t remaining;
+
+	list.next = NULL;
+	slot = &list;
+	remaining = n;
+
+	while (remaining >= BUS1_HANDLE_BATCH_SIZE) {
+		e = kmalloc(sizeof(*e) * (BUS1_HANDLE_BATCH_SIZE + 1),
+			    GFP_KERNEL);
+		if (!e)
+			goto error;
+
+		slot->next = e;
+		slot = &e[BUS1_HANDLE_BATCH_SIZE];
+		slot->next = NULL;
+
+		remaining -= BUS1_HANDLE_BATCH_SIZE;
+	}
+
+	if (remaining > 0) {
+		slot->next = kmalloc(sizeof(*e) * remaining, GFP_KERNEL);
+		if (!slot->next)
+			goto error;
+	}
+
+	return list.next;
+
+error:
+	bus1_handle_list_free(list.next, n);
+	return NULL;
+}
+
+/*
+ * Handle Batches
+ *
+ * A handle batch provides a convenience wrapper around handle lists. It embeds
+ * the first node of the handle list into the batch object, but allocates the
+ * remaining nodes on-demand.
+ *
+ * A handle-batch object is usually embedded into a parent object, and provides
+ * space for a fixed number of handles (can be queried via batch->n_handles).
+ * Initially, none of the entries is initialized. It is up to the user to fill
+ * it with data.
+ *
+ * Batches can store two kinds of handles: Their IDs as entry->id, or a pinned
+ * handle as entry->handle. By default it is assumed only IDs are stored, and
+ * the caller can modify the batch freely. But once IDs are resolved to handles
+ * and pinned in the batch, the caller must increment batch->n_owned for each
+ * stored handle. This makes sure that the pinned handles are released on
+ * destruction (starting at the front, up to @n_owned entries).
+ *
+ * Use the iterators BUS1_HANDLE_BATCH_FOREACH() and
+ * BUS1_HANDLE_BATCH_FOREACH_OWNED() to iterate either *all* entries, or only
+ * the first entries up to the @n_owned'th entry (that is, iterate all entries
+ * that have pinned handles).
+ */
+
 #define BUS1_HANDLE_BATCH_FIRST(_batch, _pos)			\
 	((_pos) = 0, (_batch)->entries)
 
@@ -1249,104 +1351,71 @@ void bus1_handle_finish_all(struct bus1_peer_info *peer_info,
 			((_iter) + 1)->next :			\
 			((_iter) + 1))
 
-#define BUS1_HANDLE_BATCH_FOREACH_ALLOCATED(_iter, _pos, _batch)	\
-	for ((_iter) = BUS1_HANDLE_BATCH_FIRST((_batch), (_pos));	\
-	     (_pos) < (_batch)->n_allocated;				\
-	     (_iter) = BUS1_HANDLE_BATCH_NEXT((_iter), (_pos)))
-
-#define BUS1_HANDLE_BATCH_FOREACH_HANDLE(_iter, _pos, _batch)		\
+#define BUS1_HANDLE_BATCH_FOREACH(_iter, _pos, _batch)			\
 	for ((_iter) = BUS1_HANDLE_BATCH_FIRST((_batch), (_pos));	\
 	     (_pos) < (_batch)->n_handles;				\
 	     (_iter) = BUS1_HANDLE_BATCH_NEXT((_iter), (_pos)))
 
+#define BUS1_HANDLE_BATCH_FOREACH_OWNED(_iter, _pos, _batch)		\
+	for ((_iter) = BUS1_HANDLE_BATCH_FIRST((_batch), (_pos));	\
+	     (_pos) < (_batch)->n_owned;				\
+	     (_iter) = BUS1_HANDLE_BATCH_NEXT((_iter), (_pos)))
+
 static void bus1_handle_batch_init(struct bus1_handle_batch *batch,
-				   size_t n_entries)
+				   size_t n_handles)
 {
-	batch->n_handles = 0;
-	if (n_entries < BUS1_HANDLE_BATCH_SIZE) {
-		batch->n_allocated = n_entries;
-	} else {
-		batch->n_allocated = BUS1_HANDLE_BATCH_SIZE;
+	batch->n_handles = n_handles;
+	batch->n_owned = 0;
+	if (n_handles >= BUS1_HANDLE_BATCH_SIZE)
 		batch->entries[BUS1_HANDLE_BATCH_SIZE].next = NULL;
-	}
 }
 
-static int bus1_handle_batch_create(struct bus1_handle_batch *batch,
-				    size_t n_entries)
+static int bus1_handle_batch_preload(struct bus1_handle_batch *batch)
 {
-	union bus1_handle_entry *slot, *e;
+	union bus1_handle_entry *e;
 
-	if (n_entries == batch->n_allocated)
+	/*
+	 * If the number of stored entries fits into the static buffer, or if
+	 * it was already pre-loaded, there is nothing to do.
+	 */
+	if (likely(batch->n_handles <= BUS1_HANDLE_BATCH_SIZE))
+		return 0;
+	if (batch->entries[BUS1_HANDLE_BATCH_SIZE].next)
 		return 0;
 
-	/* the set must be unused and newly initialized */
-	if (WARN_ON(n_entries < batch->n_allocated ||
-		    batch->n_handles > 0 ||
-		    batch->n_allocated != BUS1_HANDLE_BATCH_SIZE ||
-		    batch->entries[BUS1_HANDLE_BATCH_SIZE].next))
-		return -EINVAL;
+	/* allocate handle-list for remaining, non-static entries */
+	e = bus1_handle_list_new(batch->n_handles - BUS1_HANDLE_BATCH_SIZE);
+	if (!e)
+		return -ENOMEM;
 
-	/* skip already allocated entries */
-	n_entries -= BUS1_HANDLE_BATCH_SIZE;
-	slot = &batch->entries[BUS1_HANDLE_BATCH_SIZE];
-
-	while (n_entries > 0) {
-		if (n_entries < BUS1_HANDLE_BATCH_SIZE) {
-			e = kmalloc(sizeof(*e) * n_entries, GFP_KERNEL);
-			if (!e)
-				return -ENOMEM;
-
-			slot->next = e;
-			batch->n_allocated += n_entries;
-			break;
-		}
-
-		e = kmalloc(sizeof(*e) * (BUS1_HANDLE_BATCH_SIZE + 1),
-			    GFP_KERNEL);
-		if (!e)
-			return -ENOMEM;
-
-		slot->next = e;
-		slot = &e[BUS1_HANDLE_BATCH_SIZE];
-		slot->next = NULL;
-
-		batch->n_allocated += BUS1_HANDLE_BATCH_SIZE;
-		n_entries -= BUS1_HANDLE_BATCH_SIZE;
-	}
-
+	batch->entries[BUS1_HANDLE_BATCH_SIZE].next = e;
 	return 0;
 }
 
 static void bus1_handle_batch_destroy(struct bus1_handle_batch *batch)
 {
-	union bus1_handle_entry *t, *entry;
+	union bus1_handle_entry *e;
 	size_t pos;
 
-	if (!batch || !batch->n_allocated)
+	if (!batch || !batch->n_handles)
 		return;
 
-	BUS1_HANDLE_BATCH_FOREACH_HANDLE(entry, pos, batch) {
-		if (!entry->handle)
-			continue;
-		if (bus1_handle_is_public(entry->handle))
-			bus1_handle_release(entry->handle);
-		bus1_handle_unref(entry->handle);
-	}
-
-	if (batch->n_allocated > BUS1_HANDLE_BATCH_SIZE) {
-		batch->n_allocated -= BUS1_HANDLE_BATCH_SIZE;
-		entry = batch->entries[BUS1_HANDLE_BATCH_SIZE].next;
-		while (batch->n_allocated > BUS1_HANDLE_BATCH_SIZE) {
-			t = entry;
-			entry = entry[BUS1_HANDLE_BATCH_SIZE].next;
-			batch->n_allocated -= BUS1_HANDLE_BATCH_SIZE;
-			kfree(t);
+	BUS1_HANDLE_BATCH_FOREACH_OWNED(e, pos, batch) {
+		if (e->handle) {
+			if (bus1_handle_is_public(e->handle))
+				bus1_handle_release(e->handle);
+			bus1_handle_unref(e->handle);
 		}
-		kfree(entry);
 	}
 
-	batch->n_allocated = 0;
+	if (unlikely(batch->n_handles > BUS1_HANDLE_BATCH_SIZE)) {
+		e = batch->entries[BUS1_HANDLE_BATCH_SIZE].next;
+		bus1_handle_list_free(e, batch->n_handles -
+						BUS1_HANDLE_BATCH_SIZE);
+	}
+
 	batch->n_handles = 0;
+	batch->n_owned = 0;
 }
 
 static int bus1_handle_batch_import(struct bus1_handle_batch *batch,
@@ -1355,7 +1424,7 @@ static int bus1_handle_batch_import(struct bus1_handle_batch *batch,
 {
 	union bus1_handle_entry *block;
 
-	if (WARN_ON(n_ids != batch->n_allocated || batch->n_handles > 0))
+	if (WARN_ON(n_ids != batch->n_handles || batch->n_owned > 0))
 		return -EINVAL;
 
 	BUILD_BUG_ON(sizeof(*block) != sizeof(*ids));
@@ -1377,15 +1446,38 @@ static int bus1_handle_batch_import(struct bus1_handle_batch *batch,
 	return 0;
 }
 
+/**
+ * bus1_handle_transfer_init() - initialize handle transfer context
+ * @transfer:		transfer context to initialize
+ * @n_entries:		number of handles that are transferred
+ *
+ * This initializes a handle-transfer context. This object is needed to lookup,
+ * pin, and optionally create, the handles of the sender during a transaction.
+ * That is, for each transaction, you need one handle-transfer object,
+ * initialized with the number of handles to transfer.
+ *
+ * Handles can be imported via bus1_handle_transfer_instantiate(). Once done,
+ * the handle-inflight objects can be instantiated from it for each destination
+ * of the transaction.
+ *
+ * The handle-transfer context embeds a handle-batch, as such must be
+ * pre-allocated via bus1_handle_batch_inline_size().
+ */
 void bus1_handle_transfer_init(struct bus1_handle_transfer *transfer,
-			       struct bus1_peer *peer,
 			       size_t n_entries)
 {
-	transfer->peer = peer;
 	transfer->n_new = 0;
 	bus1_handle_batch_init(&transfer->batch, n_entries);
 }
 
+/**
+ * bus1_handle_transfer_destroy() - destroy handle transfer context
+ * @transfer:		transfer context to destroy, or NULL
+ *
+ * This releases all data allocated, or pinned by a handle-transfer context. If
+ * NULL is passed, or if the transfer object was already destroyed, then
+ * nothing is done.
+ */
 void bus1_handle_transfer_destroy(struct bus1_handle_transfer *transfer)
 {
 	if (!transfer)
@@ -1395,17 +1487,44 @@ void bus1_handle_transfer_destroy(struct bus1_handle_transfer *transfer)
 	bus1_handle_batch_destroy(&transfer->batch);
 }
 
+/**
+ * bus1_handle_transfer_instantiate() - instantiate handles for transfer
+ * @transfer:		transfer context
+ * @peer_info:		peer to import handles of
+ * @ids:		user-space array of handle IDs
+ * @n_ids:		number of IDs in @ids
+ *
+ * This imports an array of handle-IDs from user-space (provided as @ids +
+ * @n_ids) into the transfer context. It then resolves each of them to their
+ * actual bus1_handle objects, optionally creating new ones on demand.
+ *
+ * This can only be called once per transfer context. Also, @n_ids must match
+ * the size used with bus1_handle_transfer_init().
+ *
+ * Return: 0 on success, negative error code on failure.
+ */
 int bus1_handle_transfer_instantiate(struct bus1_handle_transfer *transfer,
+				     struct bus1_peer_info *peer_info,
 				     const u64 __user *ids,
 				     size_t n_ids)
 {
-	struct bus1_peer_info *peer_info;
 	union bus1_handle_entry *entry;
 	struct bus1_handle *handle;
 	size_t pos;
 	int r;
 
-	r = bus1_handle_batch_create(&transfer->batch, n_ids);
+	/*
+	 * Import the handle IDs from user-space (@ids + @n_ids) into the
+	 * handle-batch. Then resolve each of them and pin their underlying
+	 * handle. If a new node is demanded, we allocate a fresh node+handle,
+	 * but do *not* link it, yet. We just make sure it is allocated, so the
+	 * final commit cannot fail due to OOM.
+	 *
+	 * Note that the batch-import refuses operation if already used, so we
+	 * can rely on @n_owned to be 0.
+	 */
+
+	r = bus1_handle_batch_preload(&transfer->batch);
 	if (r < 0)
 		return r;
 
@@ -1413,9 +1532,7 @@ int bus1_handle_transfer_instantiate(struct bus1_handle_transfer *transfer,
 	if (r < 0)
 		return r;
 
-	peer_info = bus1_peer_dereference(transfer->peer);
-
-	BUS1_HANDLE_BATCH_FOREACH_ALLOCATED(entry, pos, &transfer->batch) {
+	BUS1_HANDLE_BATCH_FOREACH(entry, pos, &transfer->batch) {
 		if (entry->id == BUS1_HANDLE_INVALID) {
 			handle = bus1_handle_new();
 			if (IS_ERR(handle))
@@ -1436,12 +1553,26 @@ int bus1_handle_transfer_instantiate(struct bus1_handle_transfer *transfer,
 		}
 
 		entry->handle = handle;
-		++transfer->batch.n_handles;
+		++transfer->batch.n_owned;
 	}
 
 	return 0;
 }
 
+/**
+ * bus1_handle_inflight_init() - initialize inflight context
+ * @inflight:		inflight context to initialize
+ * @n_entries:		number of entries to store in this context
+ *
+ * This initializes an inflight-context to carry @n_entries handles. An
+ * inflight-context is used to instantiate and commit the handles a peer
+ * *receives* via a transaction. That is, it is created once for each
+ * destination of a transaction, and it is instantiated from the
+ * transfer-context of the transaction origin/sender.
+ *
+ * The inflight-context embeds a handle-batch, as such must be pre-allocated
+ * via bus1_handle_batch_inline_size().
+ */
 void bus1_handle_inflight_init(struct bus1_handle_inflight *inflight,
 			       size_t n_entries)
 {
@@ -1450,6 +1581,14 @@ void bus1_handle_inflight_init(struct bus1_handle_inflight *inflight,
 	bus1_handle_batch_init(&inflight->batch, n_entries);
 }
 
+/**
+ * bus1_handle_inflight_destroy() - destroy inflight-context
+ * @inflight:		inflight context to destroy, or NULL
+ *
+ * This releases all data allocated, or pinned by an inflight-context. If NULL
+ * is passed, or if the inflight context was already destroyed, then nothing is
+ * done.
+ */
 void bus1_handle_inflight_destroy(struct bus1_handle_inflight *inflight)
 {
 	if (!inflight)
@@ -1459,6 +1598,22 @@ void bus1_handle_inflight_destroy(struct bus1_handle_inflight *inflight)
 	bus1_handle_batch_destroy(&inflight->batch);
 }
 
+/**
+ * bus1_handle_inflight_instantiate() - instantiate inflight context
+ * @inflight:		inflight context to instantiate
+ * @peer_info:		peer info to instantiate for
+ * @transfer:		transfer object to instantiate from
+ *
+ * Instantiate an inflight-context from an existing transfer-context. Import
+ * each pinned handle from the transfer-context into the peer @peer_info,
+ * creating new handles if required. All the handles are pinned in the inflight
+ * context, but not committed, yet.
+ *
+ * This must only be called once per inflight object. Furthermore, the number
+ * of handles must match the number of handles of the transfer-context.
+ *
+ * Return: 0 on success, negative error code on failure.
+ */
 int bus1_handle_inflight_instantiate(struct bus1_handle_inflight *inflight,
 				     struct bus1_peer_info *peer_info,
 				     struct bus1_handle_transfer *transfer)
@@ -1468,15 +1623,18 @@ int bus1_handle_inflight_instantiate(struct bus1_handle_inflight *inflight,
 	size_t pos_from, pos_to;
 	int r;
 
-	r = bus1_handle_batch_create(&inflight->batch,
-				     transfer->batch.n_handles);
+	r = bus1_handle_batch_preload(&inflight->batch);
 	if (r < 0)
 		return r;
+	if (WARN_ON(inflight->batch.n_owned > 0))
+		return -EINVAL;
+	if (WARN_ON(inflight->batch.n_handles != transfer->batch.n_handles))
+		return -EINVAL;
 
 	to = BUS1_HANDLE_BATCH_FIRST(&inflight->batch, pos_to);
 
-	BUS1_HANDLE_BATCH_FOREACH_HANDLE(from, pos_from, &transfer->batch) {
-		WARN_ON(pos_to >= inflight->batch.n_allocated);
+	BUS1_HANDLE_BATCH_FOREACH_OWNED(from, pos_from, &transfer->batch) {
+		WARN_ON(pos_to >= inflight->batch.n_handles);
 
 		if (!from->handle) {
 			handle = NULL;
@@ -1494,27 +1652,36 @@ int bus1_handle_inflight_instantiate(struct bus1_handle_inflight *inflight,
 
 		to->handle = handle;
 		to = BUS1_HANDLE_BATCH_NEXT(to, pos_to);
-		++inflight->batch.n_handles;
+		++inflight->batch.n_owned;
 	}
 
 	return 0;
 }
 
+/**
+ * bus1_handle_inflight_install() - install inflight handles
+ * @inflight:		instantiated inflight context
+ * @dst:		peer @inflight is for
+ * @transfer:		transfer context
+ * @src:		peer @transfer is from
+ *
+ * After an inflight context was successfully instantiated, this will install
+ * the handles into the peer @dst. The caller must provide the used transfer
+ * context and the origin peer as @transfer and @src.
+ */
 void bus1_handle_inflight_install(struct bus1_handle_inflight *inflight,
-				  struct bus1_peer *peer,
-				  struct bus1_handle_transfer *transfer)
+				  struct bus1_peer *dst,
+				  struct bus1_handle_transfer *transfer,
+				  struct bus1_peer *src)
 {
 	struct bus1_peer_info *src_info, *dst_info;
-	struct bus1_peer *src, *dst;
 	struct bus1_handle *h, *t;
 	union bus1_handle_entry *e;
 	size_t pos, n_installs;
 
-	if (inflight->batch.n_handles < 1)
+	if (inflight->batch.n_owned < 1)
 		return;
 
-	src = transfer->peer;
-	dst = peer;
 	src_info = bus1_peer_dereference(src);
 	dst_info = bus1_peer_dereference(dst);
 	n_installs = inflight->n_new;
@@ -1522,7 +1689,7 @@ void bus1_handle_inflight_install(struct bus1_handle_inflight *inflight,
 	if (transfer->n_new > 0 || inflight->n_new_local > 0) {
 		mutex_lock(&src_info->lock);
 
-		BUS1_HANDLE_BATCH_FOREACH_HANDLE(e, pos, &transfer->batch) {
+		BUS1_HANDLE_BATCH_FOREACH_OWNED(e, pos, &transfer->batch) {
 			if (transfer->n_new < 1)
 				break;
 
@@ -1536,7 +1703,7 @@ void bus1_handle_inflight_install(struct bus1_handle_inflight *inflight,
 		}
 		WARN_ON(transfer->n_new > 0);
 
-		BUS1_HANDLE_BATCH_FOREACH_HANDLE(e, pos, &inflight->batch) {
+		BUS1_HANDLE_BATCH_FOREACH_OWNED(e, pos, &inflight->batch) {
 			if (inflight->n_new_local < 1)
 				break;
 
@@ -1556,7 +1723,7 @@ void bus1_handle_inflight_install(struct bus1_handle_inflight *inflight,
 	}
 
 	if (inflight->n_new > 0) {
-		BUS1_HANDLE_BATCH_FOREACH_HANDLE(e, pos, &inflight->batch) {
+		BUS1_HANDLE_BATCH_FOREACH_OWNED(e, pos, &inflight->batch) {
 			if (inflight->n_new < 1)
 				break;
 
@@ -1574,12 +1741,14 @@ void bus1_handle_inflight_install(struct bus1_handle_inflight *inflight,
 
 	if (n_installs > 0) {
 		mutex_lock(&dst_info->lock);
-		BUS1_HANDLE_BATCH_FOREACH_HANDLE(e, pos, &inflight->batch) {
+		BUS1_HANDLE_BATCH_FOREACH_OWNED(e, pos, &inflight->batch) {
 			if (n_installs < 1)
 				break;
 
 			h = e->handle;
 			if (!h || bus1_handle_has_id(h))
+				continue;
+			if (WARN_ON(!bus1_handle_is_public(h)))
 				continue;
 
 			--n_installs;
@@ -1601,6 +1770,15 @@ void bus1_handle_inflight_install(struct bus1_handle_inflight *inflight,
 	}
 }
 
+/**
+ * bus1_handle_inflight_commit() - commit inflight context
+ * @inflight:		inflight context to commit
+ * @seq:		sequence number of transaction
+ *
+ * This commits a fully installed inflight context, given the sequence number
+ * of the transaction. This will make sure to only transfer the actual handle
+ * if it is ordered *before* the handle destruction.
+ */
 void bus1_handle_inflight_commit(struct bus1_handle_inflight *inflight,
 				 u64 seq)
 {
@@ -1608,9 +1786,9 @@ void bus1_handle_inflight_commit(struct bus1_handle_inflight *inflight,
 	struct bus1_handle *h;
 	size_t pos;
 
-	WARN_ON(inflight->batch.n_handles != inflight->batch.n_allocated);
+	WARN_ON(inflight->batch.n_owned != inflight->batch.n_handles);
 
-	BUS1_HANDLE_BATCH_FOREACH_HANDLE(e, pos, &inflight->batch) {
+	BUS1_HANDLE_BATCH_FOREACH_OWNED(e, pos, &inflight->batch) {
 		h = e->handle;
 		if (h) {
 			e->id = bus1_handle_commit(h, seq);
@@ -1620,5 +1798,5 @@ void bus1_handle_inflight_commit(struct bus1_handle_inflight *inflight,
 		}
 	}
 
-	inflight->batch.n_handles = 0;
+	inflight->batch.n_owned = 0;
 }

@@ -110,8 +110,8 @@ union bus1_handle_entry {
 
 /**
  * struct bus1_handle_batch - dynamic set of handles
- * @n_handles:		number of actually stored handles
- * @n_allocated:	number of slots allocated
+ * @n_handles:		number of handles this batch carries
+ * @n_owned:		number of slots that actually have a handle pinned
  * @entries:		stored entries
  *
  * The batch object allows handling multiple handles in a single set. Each
@@ -128,13 +128,12 @@ union bus1_handle_entry {
  */
 struct bus1_handle_batch {
 	size_t n_handles;
-	size_t n_allocated;
+	size_t n_owned;
 	union bus1_handle_entry entries[0];
 };
 
 /**
  * struct bus1_handle_transfer - handle transfer context
- * @peer:		pinned owner of the context
  * @n_new:		number of newly allocated nodes
  * @batch:		associated handles
  *
@@ -150,7 +149,6 @@ struct bus1_handle_batch {
  * first handle-set of @batch.
  */
 struct bus1_handle_transfer {
-	struct bus1_peer *peer;
 	size_t n_new;
 	struct bus1_handle_batch batch;
 	/* @batch must be last */
@@ -188,6 +186,7 @@ struct bus1_handle *bus1_handle_find_by_id(struct bus1_peer_info *peer_info,
 struct bus1_handle *bus1_handle_find_by_node(struct bus1_peer_info *peer_info,
 					     struct bus1_handle *existing);
 bool bus1_handle_is_public(struct bus1_handle *handle);
+u64 bus1_handle_get_id(struct bus1_handle *handle);
 u64 bus1_handle_get_owner_id(struct bus1_handle *handle);
 struct bus1_handle *bus1_handle_acquire(struct bus1_handle *handle);
 struct bus1_handle *bus1_handle_release(struct bus1_handle *handle);
@@ -208,10 +207,10 @@ void bus1_handle_finish_all(struct bus1_peer_info *peer_info,
 
 /* transfer contexts */
 void bus1_handle_transfer_init(struct bus1_handle_transfer *transfer,
-			       struct bus1_peer *peer,
 			       size_t n_entries);
 void bus1_handle_transfer_destroy(struct bus1_handle_transfer *transfer);
 int bus1_handle_transfer_instantiate(struct bus1_handle_transfer *transfer,
+				     struct bus1_peer_info *peer_info,
 				     const u64 __user *ids,
 				     size_t n_ids);
 
@@ -223,8 +222,9 @@ int bus1_handle_inflight_instantiate(struct bus1_handle_inflight *inflight,
 				     struct bus1_peer_info *peer_info,
 				     struct bus1_handle_transfer *transfer);
 void bus1_handle_inflight_install(struct bus1_handle_inflight *inflight,
-				  struct bus1_peer *peer,
-				  struct bus1_handle_transfer *transfer);
+				  struct bus1_peer *dst,
+				  struct bus1_handle_transfer *transfer,
+				  struct bus1_peer *src);
 void bus1_handle_inflight_commit(struct bus1_handle_inflight *inflight,
 				 u64 seq);
 

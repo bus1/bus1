@@ -78,7 +78,8 @@ static unsigned int bus1_fop_poll(struct file *file,
 		mask = POLLERR | POLLHUP;
 	} else {
 		mask = POLLOUT | POLLWRNORM;
-		if (bus1_queue_is_readable(&peer_info->queue))
+		if (bus1_queue_is_readable(&peer_info->queue) ||
+		    atomic_read(&peer_info->n_dropped) > 0)
 			mask |= POLLIN | POLLRDNORM;
 	}
 	rcu_read_unlock();
@@ -124,39 +125,26 @@ static long bus1_fop_ioctl(struct file *file,
 	int r;
 
 	switch (cmd) {
-	case BUS1_CMD_CONNECT: {
-		struct bus1_cmd_connect __user *uparam = (void __user *)arg;
-		struct bus1_cmd_connect param;
+	case BUS1_CMD_PEER_CREATE: {
+		struct bus1_cmd_peer_create __user *uparam = (void __user *)arg;
+		struct bus1_cmd_peer_create param;
 
 		r = bus1_import_fixed_ioctl(&param, arg, sizeof(param));
 		if (r < 0)
 			return r;
 
-		r = bus1_peer_connect(peer,
-				      current_cred(),
-				      task_active_pid_ns(current),
-				      &param);
+		r = bus1_peer_connect(peer, file, &param);
 		if (r < 0)
 			return r;
 
-		/*
-		 * QUERY can be combined with any CONNECT operation. On success,
-		 * it causes the peer information to be copied back to
-		 * user-space. The CONNECT handlers must provide that
-		 * information in @param for this to copy it back.
-		 */
-		if ((param.flags & BUS1_CONNECT_FLAG_QUERY) &&
-		    put_user(param.pool_size, &uparam->pool_size))
+		if ((param.flags & BUS1_PEER_CREATE_FLAG_QUERY) &&
+		    (put_user(param.pool_size, &uparam->pool_size) ||
+		     put_user(param.handle, &uparam->handle) ||
+		     put_user(param.fd, &uparam->fd)))
 			return -EFAULT; /* Don't care.. keep what we have */
 
 		return 0;
 	}
-	case BUS1_CMD_DISCONNECT:
-		/* no arguments allowed, it behaves like the last close() */
-		if (arg != 0)
-			return -EINVAL;
-		return bus1_peer_disconnect(peer);
-	case BUS1_CMD_NODE_CREATE:
 	case BUS1_CMD_NODE_DESTROY:
 	case BUS1_CMD_HANDLE_RELEASE:
 	case BUS1_CMD_SLICE_RELEASE:

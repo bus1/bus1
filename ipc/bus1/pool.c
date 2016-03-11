@@ -409,28 +409,19 @@ bus1_pool_release_kernel(struct bus1_pool *pool, struct bus1_pool_slice *slice)
  * bus1_pool_publish() - publish a slice
  * @pool:		pool to operate on
  * @slice:		slice to publish
- * @out_offset:		output variable for slice offset
- * @out_size:		output variable for slice size
  *
  * Publish a pool slice to user-space, so user-space can get access to it via
  * the mapped pool memory. If the slice was already published, this is a no-op.
  * Otherwise, the slice is marked as public and will only get freed once both
  * the user-space reference *and* kernel-space reference are released.
  */
-void bus1_pool_publish(struct bus1_pool *pool,
-		       struct bus1_pool_slice *slice,
-		       u64 *out_offset,
-		       u64 *out_size)
+void bus1_pool_publish(struct bus1_pool *pool, struct bus1_pool_slice *slice)
 {
 	bus1_pool_assert_held(pool);
 
 	/* kernel must own a ref to @slice to publish it */
 	WARN_ON(!slice->ref_kernel);
 	slice->ref_user = true;
-	if (out_offset)
-		*out_offset = slice->offset;
-	if (out_size)
-		*out_size = slice->size;
 }
 
 /**

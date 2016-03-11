@@ -8,6 +8,7 @@
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+#include <linux/atomic.h>
 #include <linux/cred.h>
 #include <linux/err.h>
 #include <linux/file.h>
@@ -23,6 +24,7 @@
 #include <linux/uaccess.h>
 #include <linux/wait.h>
 #include <uapi/linux/bus1.h>
+#include "main.h"
 #include "message.h"
 #include "peer.h"
 #include "pool.h"
@@ -81,16 +83,12 @@ bus1_peer_info_free(struct bus1_peer_info *peer_info)
 	return NULL;
 }
 
-static struct bus1_peer_info *
-bus1_peer_info_new(struct bus1_cmd_connect *param,
-		   const struct cred *cred,
-		   struct pid_namespace *pid_ns)
+static struct bus1_peer_info *bus1_peer_info_new(size_t pool_size)
 {
 	struct bus1_peer_info *peer_info;
 	int r;
 
-	if (unlikely(param->pool_size == 0 ||
-		     !IS_ALIGNED(param->pool_size, PAGE_SIZE)))
+	if (unlikely(pool_size == 0 || !IS_ALIGNED(pool_size, PAGE_SIZE)))
 		return ERR_PTR(-EINVAL);
 
 	peer_info = kmalloc(sizeof(*peer_info), GFP_KERNEL);
@@ -98,8 +96,8 @@ bus1_peer_info_new(struct bus1_cmd_connect *param,
 		return ERR_PTR(-ENOMEM);
 
 	mutex_init(&peer_info->lock);
-	peer_info->cred = get_cred(cred);
-	peer_info->pid_ns = get_pid_ns(pid_ns);
+	peer_info->cred = get_cred(current_cred());
+	peer_info->pid_ns = get_pid_ns(task_active_pid_ns(current));
 	peer_info->user = NULL;
 	bus1_user_quota_init(&peer_info->quota);
 	peer_info->pool = BUS1_POOL_NULL;
@@ -107,19 +105,20 @@ bus1_peer_info_new(struct bus1_cmd_connect *param,
 	peer_info->map_handles_by_id = RB_ROOT;
 	peer_info->map_handles_by_node = RB_ROOT;
 	seqcount_init(&peer_info->seqcount);
+	atomic_set(&peer_info->n_dropped, 0);
 	peer_info->handle_ids = 0;
 	peer_info->n_allocated = 0;
 	peer_info->n_messages = 0;
 	peer_info->n_handles = 0;
 
-	peer_info->user = bus1_user_ref_by_uid(cred->uid);
+	peer_info->user = bus1_user_ref_by_uid(peer_info->cred->uid);
 	if (IS_ERR(peer_info->user)) {
 		r = PTR_ERR(peer_info->user);
 		peer_info->user = NULL;
 		goto error;
 	}
 
-	r = bus1_pool_create_for_peer(peer_info, param->pool_size);
+	r = bus1_pool_create_for_peer(peer_info, pool_size);
 	if (r < 0)
 		goto error;
 
@@ -221,18 +220,125 @@ int bus1_peer_disconnect(struct bus1_peer *peer)
 	return 0;
 }
 
+static int bus1_peer_connect_clone(struct bus1_peer *peer,
+				   struct file *peer_file,
+				   struct bus1_cmd_peer_create *param)
+{
+	struct bus1_peer_info *peer_info = bus1_peer_dereference(peer);
+	struct bus1_peer_info *clone_info = NULL;
+	struct bus1_handle *t, *root = NULL, *export = NULL;
+	struct bus1_peer *clone;
+	struct file *clone_file = NULL;
+	int r, fd;
+
+	fd = get_unused_fd_flags(O_CLOEXEC);
+	if (fd < 0)
+		return fd;
+
+	clone = bus1_peer_new();
+	if (IS_ERR(clone)) {
+		r = PTR_ERR(clone);
+		clone = NULL;
+		goto error;
+	}
+
+	clone_file = alloc_file(&peer_file->f_path,
+				FMODE_READ | FMODE_WRITE,
+				&bus1_fops);
+	if (IS_ERR(clone_file)) {
+		r = PTR_ERR(clone_file);
+		clone_file = NULL;
+		clone = bus1_peer_free(clone);
+		goto error;
+	}
+	path_get(&peer_file->f_path); /* required by alloc_file() */
+	clone_file->private_data = clone; /* released via f_op->release() */
+	clone_file->f_flags |= O_RDWR | O_LARGEFILE;
+
+	clone_info = bus1_peer_info_new(param->pool_size);
+	if (IS_ERR(clone_info)) {
+		r = PTR_ERR(clone_info);
+		clone_info = NULL;
+		goto error;
+	}
+	rcu_assign_pointer(clone->info, clone_info);
+	bus1_active_activate(&clone->active);
+	WARN_ON(!bus1_peer_acquire(clone));
+
+	root = bus1_handle_new();
+	if (IS_ERR(root)) {
+		r = PTR_ERR(root);
+		root = NULL;
+		goto error;
+	}
+
+	export = bus1_handle_new_copy(root);
+	if (IS_ERR(export)) {
+		r = PTR_ERR(export);
+		export = NULL;
+		goto error;
+	}
+
+	mutex_lock(&clone_info->lock);
+	WARN_ON(!bus1_handle_attach_unlocked(root, clone));
+	WARN_ON(root != bus1_handle_install_unlocked(root));
+	WARN_ON(!bus1_handle_attach_unlocked(export, peer));
+	mutex_unlock(&clone_info->lock);
+
+	mutex_lock(&peer_info->lock);
+	t = bus1_handle_install_unlocked(export);
+	mutex_unlock(&peer_info->lock);
+
+	if (!t) {
+		bus1_handle_release_pinned(export, peer_info);
+		bus1_handle_release_pinned(root, clone_info);
+		r = -ESHUTDOWN;
+		goto error;
+	}
+
+	if (t != export) {
+		/* conflict: switch over to @t */
+		bus1_handle_release_pinned(export, peer_info);
+		bus1_handle_unref(export);
+		export = t;
+	}
+
+	param->handle = bus1_handle_get_id(export);
+	param->fd = fd;
+	fd_install(fd, clone_file); /* consumes file reference */
+
+	bus1_handle_unref(export);
+	bus1_handle_unref(root);
+	bus1_peer_release(clone);
+
+	return 0;
+
+error:
+	bus1_handle_unref(export);
+	bus1_handle_unref(root);
+	if (clone_info)
+		bus1_peer_release(clone);
+	if (clone_file)
+		fput(clone_file);
+	put_unused_fd(fd);
+	return r;
+}
+
 static int bus1_peer_connect_new(struct bus1_peer *peer,
-				 const struct cred *cred,
-				 struct pid_namespace *pid_ns,
-				 struct bus1_cmd_connect *param)
+				 struct file *peer_file,
+				 struct bus1_cmd_peer_create *param)
 {
 	struct bus1_peer_info *peer_info;
 	unsigned long flags;
+	bool done;
 	int r;
 
-	peer_info = bus1_peer_info_new(param, cred, pid_ns);
-	if (IS_ERR(peer_info))
-		return PTR_ERR(peer_info);
+	if ((param->flags & ~(BUS1_PEER_CREATE_FLAG_QUERY |
+			      BUS1_PEER_CREATE_FLAG_RESET)) ||
+	    param->pool_size == 0 ||
+	    param->handle != BUS1_HANDLE_INVALID ||
+	    param->fd != (u64)-1)
+		return -EINVAL;
 
 	/*
 	 * To connect the peer, we have to set @peer_info on @peer->info *and*
@@ -242,36 +348,49 @@ static int bus1_peer_connect_new(struct bus1_peer *peer,
 	 * pointer and performs a *single* attempt of an atomic cmpxchg (see
 	 * bus1_active_activate() for details). Hence, borrowing the waitq-lock
 	 * is perfectly fine.
+	 * If this is *not* the first attempt to connect the peer, we fall back
+	 * to the clone operation.
 	 */
-	spin_lock_irqsave(&peer->waitq.lock, flags);
-	if (bus1_active_is_deactivated(&peer->active)) {
-		r = -ESHUTDOWN;
-	} else if (rcu_access_pointer(peer->info)) {
-		r = -EISCONN;
-	} else {
-		rcu_assign_pointer(peer->info, peer_info);
-		if (bus1_active_activate(&peer->active)) {
+	if (bus1_active_is_new(&peer->active)) {
+		peer_info = bus1_peer_info_new(param->pool_size);
+		if (IS_ERR(peer_info))
+			return PTR_ERR(peer_info);
+
+		spin_lock_irqsave(&peer->waitq.lock, flags);
+		if (bus1_active_is_deactivated(&peer->active)) {
+			r = -ESHUTDOWN;
+			done = true;
+		} else if (!rcu_access_pointer(peer->info)) {
+			rcu_assign_pointer(peer->info, peer_info);
+			bus1_active_activate(&peer->active);
 			peer_info = NULL; /* mark as consumed */
 			r = 0;
+			done = true;
 		} else {
-			rcu_assign_pointer(peer->info, NULL);
-			r = -ESHUTDOWN;
+			done = false;
 		}
-	}
-	spin_unlock_irqrestore(&peer->waitq.lock, flags);
+		spin_unlock_irqrestore(&peer->waitq.lock, flags);
 
-	bus1_peer_info_free(peer_info);
-	return r;
+		bus1_peer_info_free(peer_info);
+
+		if (done)
+			return r;
+	}
+
+	return bus1_peer_connect_clone(peer, peer_file, param);
 }
 
 static int bus1_peer_connect_reset(struct bus1_peer *peer,
-				   struct bus1_cmd_connect *param)
+				   struct bus1_cmd_peer_create *param)
 {
 	struct bus1_peer_info *peer_info;
 
 	if (bus1_active_is_new(&peer->active))
 		return -ENOTCONN;
-	if (param->pool_size != 0)
+	if ((param->flags & ~BUS1_PEER_CREATE_FLAG_QUERY) ||
+	    param->pool_size != 0 ||
+	    param->handle != BUS1_HANDLE_INVALID ||
+	    param->fd != (u64)-1)
 		return -EINVAL;
 
 	if (!bus1_peer_acquire(peer))
@@ -286,14 +405,17 @@ static int bus1_peer_connect_reset(struct bus1_peer *peer,
 }
 
 static int bus1_peer_connect_query(struct bus1_peer *peer,
-				   struct bus1_cmd_connect *param)
+				   struct bus1_cmd_peer_create *param)
 {
 	struct bus1_peer_info *peer_info;
 	int r = 0;
 
 	if (bus1_active_is_new(&peer->active))
 		return -ENOTCONN;
-	if (param->pool_size != 0)
+	if ((param->flags & ~BUS1_PEER_CREATE_FLAG_RESET) ||
+	    param->pool_size != 0 ||
+	    param->handle != BUS1_HANDLE_INVALID ||
+	    param->fd != (u64)-1)
 		return -EINVAL;
 
 	rcu_read_lock();
@@ -310,8 +432,7 @@ static int bus1_peer_connect_query(struct bus1_peer *peer,
 /**
  * bus1_peer_connect() - establish new peer
  * @peer:		peer to operate on
- * @cred:		user creds
- * @pid_ns:		user pid namespace
+ * @peer_file:		underlying file of @peer
  * @arg:		ioctl arguments
  *
  * This performs a peer-connect. Depending on the parameter flags in @arg, the
@@ -322,31 +443,20 @@ static int bus1_peer_connect_query(struct bus1_peer *peer,
  * Return: 0 on success, negative error code on failure.
  */
 int bus1_peer_connect(struct bus1_peer *peer,
-		      const struct cred *cred,
-		      struct pid_namespace *pid_ns,
-		      struct bus1_cmd_connect *param)
+		      struct file *peer_file,
+		      struct bus1_cmd_peer_create *param)
 {
 	/* check for validity of all flags */
-	if (param->flags & ~(BUS1_CONNECT_FLAG_CLIENT |
-		     /* XXX: BUS1_CONNECT_FLAG_MONITOR | */
-			     BUS1_CONNECT_FLAG_QUERY |
-			     BUS1_CONNECT_FLAG_RESET))
-		return -EINVAL;
-	/* only one mode can be specified */
-	if (!!(param->flags & BUS1_CONNECT_FLAG_CLIENT) +
-	    !!(param->flags & BUS1_CONNECT_FLAG_MONITOR) +
-	    !!(param->flags & BUS1_CONNECT_FLAG_RESET) > 1)
+	if (param->flags & ~(BUS1_PEER_CREATE_FLAG_QUERY |
+			     BUS1_PEER_CREATE_FLAG_RESET))
 		return -EINVAL;
 
-	if (param->flags & (BUS1_CONNECT_FLAG_CLIENT |
-			    BUS1_CONNECT_FLAG_MONITOR))
-		return bus1_peer_connect_new(peer, cred, pid_ns, param);
-	else if (param->flags & BUS1_CONNECT_FLAG_RESET)
-		return bus1_peer_connect_reset(peer, param);
-	else if (param->flags & BUS1_CONNECT_FLAG_QUERY)
+	if (param->flags & BUS1_PEER_CREATE_FLAG_QUERY)
 		return bus1_peer_connect_query(peer, param);
+	else if (param->flags & BUS1_PEER_CREATE_FLAG_RESET)
+		return bus1_peer_connect_reset(peer, param);
 	else
-		return -EINVAL; /* no mode specified */
+		return bus1_peer_connect_new(peer, peer_file, param);
 }
 
 static int bus1_peer_ioctl_slice_release(struct bus1_peer *peer,
@@ -369,7 +479,6 @@ static int bus1_peer_ioctl_slice_release(struct bus1_peer *peer,
 
 static int bus1_peer_ioctl_send(struct bus1_peer *peer, unsigned long arg)
 {
-	struct bus1_peer_info *peer_info = bus1_peer_dereference(peer);
 	struct bus1_transaction *transaction = NULL;
 	/* Use a stack-allocated buffer for the transaction object if it fits */
 	u8 buf[512];
@@ -406,9 +515,8 @@ static int bus1_peer_ioctl_send(struct bus1_peer *peer, unsigned long arg)
 		     (u64)(unsigned long)param.ptr_fds))
 		return -EFAULT;
 
-	transaction = bus1_transaction_new_from_user(peer_info, &param,
-						     buf, sizeof(buf),
-						     bus1_in_compat_syscall());
+	transaction = bus1_transaction_new_from_user(buf, sizeof(buf), peer,
+						     &param);
 	if (IS_ERR(transaction))
 		return PTR_ERR(transaction);
 
@@ -444,44 +552,125 @@ static int bus1_peer_ioctl_send(struct bus1_peer *peer, unsigned long arg)
 	r = 0;
 
 exit:
-	bus1_transaction_free(transaction, transaction != (void*)buf);
+	bus1_transaction_free(transaction, buf);
 	return r;
 }
 
 static int bus1_peer_install(struct bus1_peer_info *peer_info,
-			     struct bus1_message *message,
-			     int *fds,
-			     size_t n_fds)
+			     struct bus1_message *message)
 {
+	size_t i, offset;
 	struct kvec vec;
-	int r;
+	int r, *fds;
 
-	/*
-	 * Copy the FD numbers from the fd-array @fds into the message
-	 * @message. If we success, install the files on the given FDs and
-	 * return.
-	 * The only reason this can fail, is if writing the pool fails,
-	 * which itself can only happen during OOM. In that case, we
-	 * don't support reverting the operation, but you rather lose
-	 * the message. We cannot put it back on the queue (would break
-	 * ordering), and we don't want to perform the copy-operation
-	 * while holding the queue-lock.
-	 * We treat this OOM as if the actual message transaction OOMed
-	 * and simply drop the message.
-	 */
+	fds = kmalloc(message->data.n_fds * sizeof(*fds), GFP_TEMPORARY);
+	if (!fds)
+		return -ENOMEM;
+
+	for (i = 0; i < message->data.n_fds; ++i) {
+		r = get_unused_fd_flags(O_CLOEXEC);
+		if (r < 0) {
+			while (i--)
+				put_unused_fd(fds[i]);
+			kfree(fds);
+			return r;
+		}
+		fds[i] = r;
+	}
 
 	vec.iov_base = fds;
-	vec.iov_len = n_fds * sizeof(*fds);
+	vec.iov_len = message->data.n_fds * sizeof(int);
+	offset = ALIGN(message->data.n_bytes, 8) +
+		 ALIGN(message->data.n_handles * sizeof(u64), 8);
 
 	r = bus1_pool_write_kvec(&peer_info->pool, message->slice,
-				 message->slice->size - ALIGN(vec.iov_len, 8),
-				 &vec, 1, vec.iov_len);
+				 offset, &vec, 1, vec.iov_len);
+	if (r < 0)
+		goto error;
 
+	for (i = 0; i < message->data.n_fds; ++i)
+		fd_install(fds[i], get_file(message->files[i]));
+
+	kfree(fds);
+	return 0;
+
+error:
+	for (i = 0; i < message->data.n_fds; ++i)
+		put_unused_fd(fds[i]);
+	kfree(fds);
 	return r;
 }
 
-static int bus1_peer_peek(struct bus1_peer_info *peer_info,
-			  struct bus1_cmd_recv *param)
+static int bus1_peer_dequeue_message(struct bus1_peer_info *peer_info,
+				     struct bus1_cmd_recv *param,
+				     struct bus1_message *message)
+{
+	int r;
+
+	lockdep_assert_held(&peer_info->lock);
+
+	if (unlikely(message->data.n_fds > 0)) {
+		/*
+		 * Preferably, this would not be underneath the peer lock. But
+		 * unfortunately, even with pre-allocated FD arrays, the final
+		 * slice-copy may fail. Hence, we'd have to sync against other
+		 * parallel readers, which seems overkill. If you receive many
+		 * FDs, you better be able to deal with it.
+		 */
+		r = bus1_peer_install(peer_info, message);
+		if (r < 0)
+			return r;
+	}
+
+	bus1_queue_remove(&peer_info->queue, &message->qnode);
+	bus1_pool_publish(&peer_info->pool, message->slice);
+	bus1_message_deallocate_locked(message, peer_info);
+
+	param->type = BUS1_MSG_DATA;
+	memcpy(&param->data, &message->data, sizeof(param->data));
+
+	return 0;
+}
+
+static int bus1_peer_dequeue(struct bus1_peer_info *peer_info,
+			     struct bus1_cmd_recv *param)
+{
+	struct bus1_queue_node *node;
+	int r;
+
+	mutex_lock(&peer_info->lock);
+	node = bus1_queue_peek(&peer_info->queue);
+	if (node) {
+		switch (bus1_queue_node_get_type(node)) {
+		case BUS1_QUEUE_NODE_MESSAGE_NORMAL:
+		case BUS1_QUEUE_NODE_MESSAGE_SILENT: {
+			struct bus1_message *message;
+
+			message = bus1_message_from_node(node);
+			r = bus1_peer_dequeue_message(peer_info, param,
+						      message);
+			mutex_unlock(&peer_info->lock);
+
+			if (r < 0)
+				return r;
+
+			bus1_message_free(message);
+			return 0;
+		}
+		default:
+			mutex_unlock(&peer_info->lock);
+
+			WARN(1, "Invalid queue-node type");
+			return -EINVAL;
+		}
+	}
+	mutex_unlock(&peer_info->lock);
+
+	return 0;
+}
+
+static void bus1_peer_peek(struct bus1_peer_info *peer_info,
+			   struct bus1_cmd_recv *param)
 {
 	struct bus1_queue_node *node;
 	struct bus1_message *message;
@@ -490,159 +679,44 @@ static int bus1_peer_peek(struct bus1_peer_info *peer_info,
 	node = bus1_queue_peek(&peer_info->queue);
 	if (node) {
 		message = bus1_message_from_node(node);
-		bus1_pool_publish(&peer_info->pool, message->slice,
-				  &param->msg_offset, &param->msg_size);
-		param->msg_handles = message->handles.batch.n_allocated;
-		param->msg_fds = message->n_files;
+		bus1_pool_publish(&peer_info->pool, message->slice);
+		param->type = BUS1_MSG_DATA;
+		memcpy(&param->data, &message->data, sizeof(param->data));
 	}
 	mutex_unlock(&peer_info->lock);
-
-	return node ? 0 : -EAGAIN;
 }
 
 static int bus1_peer_ioctl_recv(struct bus1_peer *peer, unsigned long arg)
 {
 	struct bus1_peer_info *peer_info = bus1_peer_dereference(peer);
-	struct bus1_cmd_recv __user *uparam = (void __user *)arg;
-	struct bus1_queue_node *node;
-	struct bus1_message *message;
 	struct bus1_cmd_recv param;
-	size_t wanted_fds, n_fds = 0;
-	int r, *t, *fds = NULL;
+	int r;
 
 	r = bus1_import_fixed_ioctl(&param, arg, sizeof(param));
 	if (r < 0)
 		return r;
 
-	if (unlikely(param.flags & ~(BUS1_RECV_FLAG_PEEK)))
-		return -EINVAL;
-
-	if (unlikely(param.msg_dropped != 0) ||
-	    unlikely(param.msg_offset != BUS1_OFFSET_INVALID) ||
-	    unlikely(param.msg_size != 0) ||
-	    unlikely(param.msg_handles != 0) ||
-	    unlikely(param.msg_fds != 0))
+	if (unlikely(param.flags & ~BUS1_RECV_FLAG_PEEK ||
+		     param.type != BUS1_MSG_NONE ||
+		     param.n_dropped != 0))
 		return -EINVAL;
 
 	if (param.flags & BUS1_RECV_FLAG_PEEK) {
-		r = bus1_peer_peek(peer_info, &param);
+		bus1_peer_peek(peer_info, &param);
+		param.n_dropped = atomic_read(&peer_info->n_dropped);
+	} else {
+		r = bus1_peer_dequeue(peer_info, &param);
 		if (r < 0)
 			return r;
 
-		goto exit;
+		param.n_dropped = atomic_xchg(&peer_info->n_dropped, 0);
 	}
 
-	/*
-	 * Peek at the first message to fetch the FD count. We need to
-	 * pre-allocate FDs, to avoid dropping messages due to FD exhaustion.
-	 * If no entry is queued, we can bail out early.
-	 * Note that this is just a fast-path optimization. Anyone might race
-	 * us for message retrieval, so we have to check it again below.
-	 */
-	rcu_read_lock();
-	node = bus1_queue_peek_rcu(&peer_info->queue);
-	if (node) {
-		message = bus1_message_from_node(node);
-		wanted_fds = message->n_files;
-	}
-	rcu_read_unlock();
-	if (!node)
+	if (!param.n_dropped && param.type == BUS1_MSG_NONE)
 		return -EAGAIN;
 
-	/*
-	 * So there is a message queued with 'wanted_fds' attached FDs.
-	 * Allocate a temporary buffer to store them, then dequeue the message.
-	 * In case someone raced us and the message changed, re-allocate the
-	 * temporary buffer and retry.
-	 */
-
-	do {
-		if (wanted_fds > n_fds) {
-			t = krealloc(fds, wanted_fds * sizeof(*fds),
-				     GFP_TEMPORARY);
-			if (!t) {
-				r = -ENOMEM;
-				goto exit;
-			}
-
-			fds = t;
-			for ( ; n_fds < wanted_fds; ++n_fds) {
-				r = get_unused_fd_flags(O_CLOEXEC);
-				if (r < 0)
-					goto exit;
-
-				fds[n_fds] = r;
-			}
-		}
-
-		mutex_lock(&peer_info->lock);
-		node = bus1_queue_peek(&peer_info->queue);
-		message = node ? bus1_message_from_node(node) : NULL;
-		if (!node) {
-			/* nothing to do, caught below */
-		} else if (message->n_files > n_fds) {
-			/* re-allocate FD array and retry */
-			wanted_fds = message->n_files;
-		} else {
-			bus1_queue_remove(&peer_info->queue, node);
-			bus1_pool_publish(&peer_info->pool, message->slice,
-					  &param.msg_offset, &param.msg_size);
-			param.msg_fds = message->n_files;
-
-			/*
-			 * Fastpath: If no FD is transmitted, we can avoid the
-			 *           second lock below. Directly release the
-			 *           slice.
-			 */
-			if (message->n_files == 0)
-				bus1_message_deallocate_locked(message,
-							       peer_info);
-		}
-		mutex_unlock(&peer_info->lock);
-	} while (wanted_fds > n_fds);
-
-	if (!node) {
-		r = -EAGAIN;
-		goto exit;
-	}
-
-	while (n_fds > message->n_files)
-		put_unused_fd(fds[--n_fds]);
-
-	if (n_fds > 0) {
-		r = bus1_peer_install(peer_info, message, fds, n_fds);
-
-		mutex_lock(&peer_info->lock);
-		bus1_message_deallocate_locked(message, peer_info);
-		mutex_unlock(&peer_info->lock);
-
-		/* on success, install FDs; on error, see fput() in `exit:' */
-		if (r >= 0) {
-			for ( ; n_fds > 0; --n_fds)
-				fd_install(fds[n_fds - 1],
-					   get_file(message->files[n_fds - 1]));
-		} else {
-			/* XXX: convey error, just like in transactions */
-		}
-	} else {
-		/* slice is already released, nothing to do */
-		r = 0;
-	}
-
-	bus1_message_free(message);
-
-exit:
-	if (r >= 0) {
-		if (put_user(param.msg_offset, &uparam->msg_offset) ||
-		    put_user(param.msg_size, &uparam->msg_size) ||
-		    put_user(param.msg_handles, &uparam->msg_handles) ||
-		    put_user(param.msg_fds, &uparam->msg_fds))
-			r = -EFAULT; /* Don't care.. keep what we did so far */
-	}
-	while (n_fds > 0)
-		put_unused_fd(fds[--n_fds]);
-	kfree(fds);
-	return r;
+	return copy_to_user((void __user *)arg,
+			    &param, sizeof(param)) ? -EFAULT : 0;
 }
 
 /**
@@ -668,7 +742,6 @@ int bus1_peer_ioctl(struct bus1_peer *peer,
 	lockdep_assert_held(&peer->active);
 
 	switch (cmd) {
-	case BUS1_CMD_NODE_CREATE:
 	case BUS1_CMD_NODE_DESTROY:
 	case BUS1_CMD_HANDLE_RELEASE:
 		return -ENOTTY;

@@ -22,6 +22,7 @@
 #include <linux/uidgid.h>
 #include <linux/uio.h>
 #include <uapi/linux/bus1.h>
+#include "handle.h"
 #include "message.h"
 #include "peer.h"
 #include "pool.h"
@@ -30,42 +31,28 @@
 #include "user.h"
 #include "util.h"
 
-/*
- * This constant defines the iovecs that are needed in addition to the
- * user-supplied iovecs. Right now, only a single additional iovec is needed,
- * which is used to point to the kernel-copy of the message header.
- */
-#define BUS1_TRANSACTION_EXTRA_VECS (1)
-
 struct bus1_transaction {
 	/* sender context */
+	struct bus1_peer *peer;
 	struct bus1_peer_info *peer_info;
 	struct bus1_cmd_send *param;
 	const struct cred *cred;
 	struct pid *pid;
 	struct pid *tid;
 
-	/* transaction state */
-	size_t length_vecs;
-	struct bus1_header header;
-	u64 timestamp;
-
 	/* payload */
-	size_t n_vecs;
-	size_t n_files;
 	struct iovec *vecs;
 	struct file **files;
 
-	/* destinations */
+	/* transaction state */
+	size_t length_vecs;
 	struct bus1_message *entries;
+	struct bus1_handle_transfer handles;
+	/* @handles must be last */
 };
 
-static struct bus1_transaction *
-bus1_transaction_new(size_t n_vecs, size_t n_files, void *buf, size_t buf_len)
+static size_t bus1_transaction_size(struct bus1_cmd_send *param)
 {
-	struct bus1_transaction *transaction;
-	size_t size;
-
 	/* make sure @size cannot overflow */
 	BUILD_BUG_ON(BUS1_VEC_MAX > U16_MAX);
 	BUILD_BUG_ON(BUS1_FD_MAX > U16_MAX);
@@ -75,208 +62,33 @@ bus1_transaction_new(size_t n_vecs, size_t n_files, void *buf, size_t buf_len)
 		     __alignof(struct iovec));
 	BUILD_BUG_ON(__alignof(struct iovec) < __alignof(struct file *));
 
-	/* allocate space for our own iovecs */
-	n_vecs += BUS1_TRANSACTION_EXTRA_VECS;
-
-	/* allocate all memory in a single chunk */
-	size = sizeof(*transaction);
-	size += n_vecs * sizeof(*transaction->vecs);
-	size += n_files * sizeof(*transaction->files);
-
-	if (size <= buf_len) {
-		transaction = buf;
-	} else {
-		transaction = kmalloc(size, GFP_TEMPORARY);
-		if (!transaction)
-			return ERR_PTR(-ENOMEM);
-	}
-
-	memset(transaction, 0, size);
-
-	/* only reserve space, don't claim it */
-	transaction->vecs = (void *)(transaction + 1);
-	transaction->files = (void *)(transaction->vecs + n_vecs);
-
-	/* skip extra-vecs initially, just guarantee they're there */
-	transaction->vecs += BUS1_TRANSACTION_EXTRA_VECS;
-
-	return transaction;
+	return sizeof(struct bus1_transaction) +
+	       param->n_vecs * sizeof(struct iovec) +
+	       param->n_fds * sizeof(struct file *) +
+	       bus1_handle_batch_inline_size(param->n_handles);
 }
 
-static int
-bus1_transaction_import_vecs(struct bus1_transaction *transaction,
-			     bool is_compat)
+static void bus1_transaction_init(struct bus1_transaction *transaction,
+				  struct bus1_peer *peer,
+				  struct bus1_cmd_send *param)
 {
-	const struct iovec __user *ptr_vecs;
-	struct bus1_cmd_send *param = transaction->param;
-	int r;
-
-	if (WARN_ON(transaction->n_vecs > 0))
-		return -EINVAL;
-
-	ptr_vecs = (const struct iovec __user *)(unsigned long)param->ptr_vecs;
-	r = bus1_import_vecs(transaction->vecs, &transaction->length_vecs,
-			     ptr_vecs, param->n_vecs, is_compat);
-	if (r < 0)
-		return r;
-
-	transaction->n_vecs = param->n_vecs;
-	return 0;
-}
-
-static int
-bus1_transaction_import_files(struct bus1_transaction *transaction)
-{
-	struct bus1_cmd_send *param = transaction->param;
-	const int __user *ptr_fds;
-	struct file *f;
-	size_t i;
-
-	if (WARN_ON(transaction->n_files > 0))
-		return -EINVAL;
-
-	ptr_fds = (const int __user *)(unsigned long)param->ptr_fds;
-	for (i = 0; i < transaction->n_files; ++i) {
-		f = bus1_import_fd(ptr_fds + i);
-		if (IS_ERR(f))
-			return PTR_ERR(f);
-
-		transaction->files[transaction->n_files++] = f;
-	}
-
-	return 0;
-}
-
-static int
-bus1_transaction_import_message(struct bus1_transaction *transaction)
-{
-	struct iov_iter iter;
-	size_t l;
-
-	iov_iter_init(&iter, READ, transaction->vecs, transaction->n_vecs,
-		      transaction->length_vecs);
-
-	/*
-	 * The specs says short, fixed-size types should default to their
-	 * pre-defined values. Luckily, those pre-defined values equal all 0,
-	 * so we are good if the user specified a short message.
-	 * We just need to make sure we didn't fault in this copy operation. In
-	 * this case, the user tried to supply more but failed.
-	 */
-	l = copy_from_iter(&transaction->header,
-			   sizeof(transaction->header),
-			   &iter);
-	if (l < sizeof(transaction->header) && l != transaction->length_vecs)
-		return -EFAULT;
-
-	/* make sure user-space clears values that we fill in */
-	if (transaction->header.destination != 0 ||
-	    transaction->header.uid != 0 ||
-	    transaction->header.gid != 0 ||
-	    transaction->header.pid != 0 ||
-	    transaction->header.tid != 0)
-		return -EPERM;
-
-	/*
-	 * We copied the header into kernel space, to fill in trusted data.
-	 * Hence, those vecs must be skipped on the final copy.
-	 * copy_from_iter() already adjusted the iterator, so all we have to do
-	 * is merge that information back into our own information.
-	 */
-	transaction->length_vecs -= l;
-	transaction->n_vecs -= iter.iov - transaction->vecs;
-	transaction->vecs = (struct iovec *)iter.iov;
-	if (iter.iov_offset > 0) {
-		if (WARN_ON(transaction->n_vecs == 0 ||
-			    iter.iov_offset > transaction->vecs->iov_len))
-			return -EFAULT;
-
-		transaction->vecs->iov_base += iter.iov_offset;
-		transaction->vecs->iov_len -= iter.iov_offset;
-	}
-
-	/*
-	 * Now that all vecs are adjusted to contain only the remaining data,
-	 * we have to prepend our own vector that points to the header.
-	 */
-	BUILD_BUG_ON(BUS1_TRANSACTION_EXTRA_VECS < 1);
-	--transaction->vecs;
-	++transaction->n_vecs;
-	transaction->vecs->iov_base = &transaction->header;
-	transaction->vecs->iov_len = sizeof(transaction->header);
-	transaction->length_vecs += sizeof(transaction->header);
-
-	return 0;
-}
-
-/**
- * bus1_transaction_new_from_user() - XXX
- *
- * XXX: transaction objects are pinned to 'current'.
- */
-struct bus1_transaction *
-bus1_transaction_new_from_user(struct bus1_peer_info *peer_info,
-			       struct bus1_cmd_send *param,
-			       void *buf,
-			       size_t buf_len,
-			       bool is_compat)
-{
-	struct bus1_transaction *transaction;
-	int r;
-
-	transaction = bus1_transaction_new(param->n_vecs, param->n_fds,
-					   buf, buf_len);
-	if (IS_ERR(transaction))
-		return ERR_CAST(transaction);
-
-	/* "transaction" objects are local, no need to inc ref-counts */
-	transaction->peer_info = peer_info;
+	transaction->peer = peer;
+	transaction->peer_info = bus1_peer_dereference(peer);
 	transaction->param = param;
 	transaction->cred = current_cred();
 	transaction->pid = task_tgid(current);
 	transaction->tid = task_pid(current);
 
-	r = bus1_transaction_import_vecs(transaction, is_compat);
-	if (r < 0)
-		goto error;
+	transaction->vecs = (void *)(transaction + 1);
+	transaction->files = (void *)(transaction->vecs + param->n_vecs);
+	memset(transaction->files, 0, param->n_vecs * sizeof(struct file *));
 
-	r = bus1_transaction_import_files(transaction);
-	if (r < 0)
-		goto error;
-
-	/* make sure vecs+files does not overflow */
-	if (transaction->length_vecs + transaction->n_files * sizeof(int) <
-	    transaction->length_vecs) {
-		r = -EMSGSIZE;
-		goto error;
-	}
-
-	r = bus1_transaction_import_message(transaction);
-	if (r < 0)
-		goto error;
-
-	return transaction;
-
-error:
-	bus1_transaction_free(transaction, transaction != buf);
-	return ERR_PTR(r);
+	transaction->length_vecs = 0;
+	transaction->entries = NULL;
+	bus1_handle_transfer_init(&transaction->handles, param->n_handles);
 }
 
-/**
- * bus1_transaction_free() - free transaction
- * @transaction:	transaction to free, or NULL
- *
- * This releases a transaction and all associated memory. If the transaction
- * failed, any in-flight messages are dropped and pinned peers are released. If
- * the transaction was successfull, this just releases the temporary data that
- * was used for the transmission.
- *
- * If NULL is passed, this is a no-op.
- *
- * Return: NULL is returned.
- */
-struct bus1_transaction *
-bus1_transaction_free(struct bus1_transaction *transaction, bool do_free)
+static void bus1_transaction_destroy(struct bus1_transaction *transaction)
 {
 	struct bus1_peer_info *peer_info;
 	struct bus1_message *message;
@@ -284,10 +96,6 @@ bus1_transaction_free(struct bus1_transaction *transaction, bool do_free)
 	struct bus1_peer *peer;
 	size_t i;
 
-	if (!transaction)
-		return NULL;
-
-	/* release all in-flight queue entries and their pinned peers */
 	while ((message = transaction->entries)) {
 		transaction->entries = message->transaction.next;
 		handle = message->transaction.handle;
@@ -310,71 +118,213 @@ bus1_transaction_free(struct bus1_transaction *transaction, bool do_free)
 		bus1_peer_release(peer);
 	}
 
-	/* release message payload */
-	for (i = 0; i < transaction->n_files; ++i)
+	for (i = 0; i < transaction->param->n_fds; ++i)
 		if (transaction->files[i])
 			fput(transaction->files[i]);
 
-	if (do_free)
+	bus1_handle_transfer_destroy(&transaction->handles);
+}
+
+static int bus1_transaction_import_vecs(struct bus1_transaction *transaction)
+{
+	struct bus1_cmd_send *param = transaction->param;
+	const struct iovec __user *ptr_vecs;
+
+	ptr_vecs = (const struct iovec __user *)(unsigned long)param->ptr_vecs;
+	return bus1_import_vecs(transaction->vecs, &transaction->length_vecs,
+				ptr_vecs, param->n_vecs,
+				bus1_in_compat_syscall());
+}
+
+static int bus1_transaction_import_handles(struct bus1_transaction *transaction)
+{
+	struct bus1_cmd_send *param = transaction->param;
+	const u64 __user *ptr_handles;
+
+	ptr_handles = (const u64 __user *)(unsigned long)param->ptr_handles;
+	return bus1_handle_transfer_instantiate(&transaction->handles,
+						transaction->peer_info,
+						ptr_handles,
+						param->n_handles);
+}
+
+static int bus1_transaction_import_files(struct bus1_transaction *transaction)
+{
+	struct bus1_cmd_send *param = transaction->param;
+	const int __user *ptr_fds;
+	struct file *f;
+	size_t i;
+
+	ptr_fds = (const int __user *)(unsigned long)param->ptr_fds;
+	for (i = 0; i < param->n_fds; ++i) {
+		f = bus1_import_fd(ptr_fds + i);
+		if (IS_ERR(f))
+			return PTR_ERR(f);
+
+		transaction->files[i] = f;
+	}
+
+	return 0;
+}
+
+/**
+ * bus1_transaction_new_from_user() - create new transaction
+ * @stack_buffer:		stack buffer to use as backing memory
+ * @stack_size:			size of @stack_buffer in bytes
+ * @peer:			origin of this transaction
+ * @param:			transaction parameters
+ *
+ * This allocates a new transaction object for a user-transaction as specified
+ * via @param. The transaction is optionally put onto the stack, if the passed
+ * buffer @stack_buffer is big enough. Otherwise, the memory is allocated. The
+ * caller must make sure to pass the same stack-pointer to
+ * bus1_transaction_free().
+ *
+ * The transaction object imports all its data from user-space. If anything
+ * fails, an error is returned.
+ *
+ * Note that the transaction object relies on being local to the current task.
+ * That is, its lifetime must be limited to your own function lifetime. You
+ * must not pass pointers to transaction objects to contexts outside of this
+ * lifetime.
+ * This allows to optimize access to 'current' (and its properties like creds
+ * and pids), and to place the transaction on the stack, if possible.
+ *
+ * Return: Pointer to transaction object, or ERR_PTR on failure.
+ */
+struct bus1_transaction *
+bus1_transaction_new_from_user(u8 *stack_buffer,
+			       size_t stack_size,
+			       struct bus1_peer *peer,
+			       struct bus1_cmd_send *param)
+{
+	struct bus1_transaction *transaction;
+	size_t size;
+	int r;
+
+	/* use caller-provided stack buffer, if possible */
+	size = bus1_transaction_size(param);
+	if (unlikely(size > stack_size)) {
+		transaction = kmalloc(size, GFP_TEMPORARY);
+		if (!transaction)
+			return ERR_PTR(-ENOMEM);
+	} else {
+		transaction = (void *)stack_buffer;
+	}
+	bus1_transaction_init(transaction, peer, param);
+
+	r = bus1_transaction_import_vecs(transaction);
+	if (r < 0)
+		goto error;
+
+	r = bus1_transaction_import_handles(transaction);
+	if (r < 0)
+		goto error;
+
+	r = bus1_transaction_import_files(transaction);
+	if (r < 0)
+		goto error;
+
+	return transaction;
+
+error:
+	bus1_transaction_free(transaction, stack_buffer);
+	return ERR_PTR(r);
+}
+
+/**
+ * bus1_transaction_free() - free transaction
+ * @transaction:	transaction to free, or NULL
+ * @stack_buffer:	stack buffer passed to constructor
+ *
+ * This releases a transaction and all associated memory. If the transaction
+ * failed, any in-flight messages are dropped and pinned peers are released. If
+ * the transaction was successfull, this just releases the temporary data that
+ * was used for the transmission.
+ *
+ * If NULL is passed, this is a no-op.
+ *
+ * Return: NULL is returned.
+ */
+struct bus1_transaction *
+bus1_transaction_free(struct bus1_transaction *transaction, u8 *stack_buffer)
+{
+	if (!transaction)
+		return NULL;
+
+	bus1_transaction_destroy(transaction);
+
+	if (transaction != (void *)stack_buffer)
 		kfree(transaction);
 
 	return NULL;
 }
 
-static int bus1_transaction_instantiate(struct bus1_transaction *transaction,
-					struct bus1_message *message,
-					struct bus1_handle *handle,
-					struct bus1_peer_info *peer_info,
-					struct bus1_user *user)
+static struct bus1_message *
+bus1_transaction_instantiate(struct bus1_transaction *transaction,
+			     struct bus1_peer_info *peer_info,
+			     struct bus1_handle *handle,
+			     struct bus1_user *user)
 {
+	struct bus1_message *message;
 	size_t i, slice_size;
+	bool silent;
 	int r;
 
+	silent = transaction->param->flags & BUS1_SEND_FLAG_SILENT;
+
+	message = bus1_message_new(transaction->length_vecs,
+				   transaction->param->n_fds,
+				   transaction->param->n_handles,
+				   silent);
+	if (IS_ERR(message))
+		return ERR_CAST(message);
+
+	/* cannot overflow as all of those are limited */
 	slice_size = ALIGN(transaction->length_vecs, 8) +
-		     ALIGN(transaction->n_files * sizeof(int), 8);
+		     ALIGN(transaction->param->n_handles * sizeof(u64), 8) +
+		     ALIGN(transaction->param->n_fds * sizeof(int), 8);
 
-	/* files must be set *before* allocating the slice */
-	for (i = 0; i < transaction->n_files; ++i)
+	message->data.destination = bus1_handle_get_owner_id(handle);
+	message->data.uid = from_kuid_munged(peer_info->cred->user_ns,
+					     transaction->cred->uid);
+	message->data.gid = from_kgid_munged(peer_info->cred->user_ns,
+					     transaction->cred->gid);
+	message->data.pid = pid_nr_ns(transaction->pid, peer_info->pid_ns);
+	message->data.tid = pid_nr_ns(transaction->tid, peer_info->pid_ns);
+
+	for (i = 0; i < transaction->param->n_fds; ++i)
 		message->files[i] = get_file(transaction->files[i]);
-	message->n_files = transaction->n_files;
 
-	/* allocate the slice */
+	r = bus1_handle_inflight_instantiate(&message->handles, peer_info,
+					     &transaction->handles);
+	if (r < 0)
+		goto error;
+
 	mutex_lock(&peer_info->lock);
 	r = bus1_message_allocate_locked(message, peer_info, user, slice_size);
 	mutex_unlock(&peer_info->lock);
 	if (r < 0)
-		return r;
+		goto error;
 
-	/* fill in individual header */
-	transaction->header.destination = bus1_handle_get_owner_id(handle);
-	transaction->header.uid = from_kuid_munged(peer_info->cred->user_ns,
-						   transaction->cred->uid);
-	transaction->header.gid = from_kgid_munged(peer_info->cred->user_ns,
-						   transaction->cred->gid);
-	transaction->header.pid = pid_nr_ns(transaction->pid,
-					    peer_info->pid_ns);
-	transaction->header.tid = pid_nr_ns(transaction->tid,
-					    peer_info->pid_ns);
-
-	/*
-	 * Copy data into @slice. Only the real message (@length_vecs) is
-	 * copied, the trailing FD array is left uninitialized. They're filled
-	 * in when the message is received.
-	 */
 	r = bus1_pool_write_iovec(&peer_info->pool,	/* pool to write */
 				  message->slice,	/* slice to write to */
 				  0,			/* offset into slice */
 				  transaction->vecs,	/* vectors */
-				  transaction->n_vecs,	/* #n vectors */
+				  transaction->param->n_vecs, /* #n vectors */
 				  transaction->length_vecs); /* total length */
-	if (r < 0) {
-		mutex_lock(&peer_info->lock);
-		bus1_message_deallocate_locked(message, peer_info);
-		mutex_unlock(&peer_info->lock);
-		return r;
-	}
+	if (r < 0)
+		goto error;
 
-	return 0;
+	return message;
+
+error:
+	mutex_lock(&peer_info->lock);
+	bus1_message_deallocate_locked(message, peer_info);
+	mutex_unlock(&peer_info->lock);
+
+	bus1_message_free(message);
+	return ERR_PTR(r);
 }
 
 /**
@@ -394,15 +344,14 @@ int bus1_transaction_instantiate_for_id(struct bus1_transaction *transaction,
 					struct bus1_user *user,
 					u64 destination)
 {
-	struct bus1_message *message = NULL;
 	struct bus1_peer_info *peer_info;
+	struct bus1_message *message;
 	struct bus1_handle *handle;
 	struct bus1_peer *peer;
-	bool cont, silent;
+	bool cont;
 	int r;
 
 	cont = transaction->param->flags & BUS1_SEND_FLAG_CONTINUE;
-	silent = transaction->param->flags & BUS1_SEND_FLAG_SILENT;
 
 	handle = bus1_handle_find_by_id(transaction->peer_info, destination);
 	if (handle) {
@@ -415,17 +364,13 @@ int bus1_transaction_instantiate_for_id(struct bus1_transaction *transaction,
 
 	peer_info = bus1_peer_dereference(peer);
 
-	message = bus1_message_new(transaction->n_files, 0, silent);
+	message = bus1_transaction_instantiate(transaction, peer_info,
+					       handle, user);
 	if (IS_ERR(message)) {
 		r = PTR_ERR(message);
 		message = NULL;
 		goto error;
 	}
-
-	r = bus1_transaction_instantiate(transaction, message, handle,
-					 bus1_peer_dereference(peer), user);
-	if (r < 0)
-		goto error;
 
 	message->transaction.next = transaction->entries;
 	message->transaction.handle = handle;
@@ -436,9 +381,9 @@ int bus1_transaction_instantiate_for_id(struct bus1_transaction *transaction,
 	return 0;
 
 error:
-	bus1_message_free(message);
 	if (r < 0 && cont) {
-		/* XXX: convey error to @peer */
+		if (atomic_inc_return(&peer_info->n_dropped) == 1)
+			bus1_peer_wake(peer);
 		r = 0;
 	}
 	bus1_handle_release_pinned(handle, peer_info);
@@ -482,7 +427,7 @@ void bus1_transaction_commit(struct bus1_transaction *transaction)
 
 	list = transaction->entries;
 	transaction->entries = NULL;
-	timestamp = transaction->timestamp;
+	timestamp = bus1_queue_tick(&transaction->peer_info->queue);
 	silent = transaction->param->flags & BUS1_SEND_FLAG_SILENT;
 
 	/*
@@ -515,7 +460,7 @@ void bus1_transaction_commit(struct bus1_transaction *transaction)
 		bus1_active_lockdep_released(&peer->active);
 	}
 
-	transaction->timestamp = timestamp;
+	/* XXX: @timestamp vs handle->node->timestamp */
 
 	/*
 	 * We now queued our message on all destinations, and we're guaranteed
@@ -564,6 +509,11 @@ void bus1_transaction_commit(struct bus1_transaction *transaction)
 		message->transaction.handle = NULL;
 		message->transaction.raw_peer = NULL;
 
+		bus1_handle_inflight_install(&message->handles, peer,
+					     &transaction->handles,
+					     transaction->peer);
+		bus1_handle_inflight_commit(&message->handles, timestamp);
+
 		mutex_lock(&peer_info->lock);
 		if (bus1_queue_node_is_queued(&message->qnode)) {
 			/* this transfers ownerhip of @message to the queue */
@@ -604,12 +554,11 @@ int bus1_transaction_commit_for_id(struct bus1_transaction *transaction,
 	struct bus1_message *message;
 	struct bus1_handle *handle;
 	struct bus1_peer *peer;
-	bool wake, cont, silent;
+	bool wake, cont;
 	u64 timestamp;
 	int r;
 
 	cont = transaction->param->flags & BUS1_SEND_FLAG_CONTINUE;
-	silent = transaction->param->flags & BUS1_SEND_FLAG_SILENT;
 
 	handle = bus1_handle_find_by_id(transaction->peer_info, destination);
 	if (handle) {
@@ -621,23 +570,25 @@ int bus1_transaction_commit_for_id(struct bus1_transaction *transaction,
 		return cont ? 0 : -ENXIO;
 
 	peer_info = bus1_peer_dereference(peer);
-	timestamp = transaction->timestamp;
+	timestamp = bus1_queue_tick(&transaction->peer_info->queue);
 
-	message = bus1_message_new(transaction->n_files, 0, silent);
+	message = bus1_transaction_instantiate(transaction, peer_info,
+					       handle, user);
 	if (IS_ERR(message)) {
 		r = PTR_ERR(message);
 		message = NULL;
 		goto exit;
 	}
 
-	r = bus1_transaction_instantiate(transaction, message, handle,
-					 peer_info, user);
-	if (r < 0)
-		goto exit;
+	bus1_handle_inflight_install(&message->handles, peer,
+				     &transaction->handles,
+				     transaction->peer);
 
 	mutex_lock(&peer_info->lock);
 	timestamp = bus1_queue_sync(&peer_info->queue, timestamp);
 	timestamp = bus1_queue_tick(&peer_info->queue);
+	/* XXX: @timestamp vs. @handle->node->timestamp */
+	bus1_handle_inflight_commit(&message->handles, timestamp);
 	/* transfers message ownership to the queue */
 	wake = bus1_queue_stage(&peer_info->queue, &message->qnode, timestamp);
 	mutex_unlock(&peer_info->lock);
@@ -645,13 +596,12 @@ int bus1_transaction_commit_for_id(struct bus1_transaction *transaction,
 	if (wake)
 		bus1_peer_wake(peer);
 
-	message = NULL;
 	r = 0;
 
 exit:
-	bus1_message_free(message);
 	if (r < 0 && cont) {
-		/* XXX: convey error to @peer */
+		if (atomic_inc_return(&peer_info->n_dropped) == 1)
+			bus1_peer_wake(peer);
 		r = 0;
 	}
 	bus1_handle_release_pinned(handle, peer_info);

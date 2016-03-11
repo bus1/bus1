@@ -38,6 +38,7 @@
  *   ESTALE:            referenced node has no local handles
  *   EINPROGRESS:       node destruction already in progress
  *   EDQUOT:            quota exceeded
+ *   EBADF:             invalid file-descriptor
  */
 
 #include <linux/ioctl.h>
@@ -57,22 +58,15 @@ enum {
 };
 
 enum {
-	BUS1_CONNECT_FLAG_CLIENT	= 1ULL <<  0,
-	BUS1_CONNECT_FLAG_MONITOR	= 1ULL <<  1,
-	BUS1_CONNECT_FLAG_QUERY		= 1ULL <<  2,
-	BUS1_CONNECT_FLAG_RESET		= 1ULL <<  3,
+	BUS1_PEER_CREATE_FLAG_QUERY		= 1ULL <<  0,
+	BUS1_PEER_CREATE_FLAG_RESET		= 1ULL <<  1,
 };
 
-struct bus1_cmd_connect {
+struct bus1_cmd_peer_create {
 	__u64 flags;
 	__u64 pool_size;
-	__u64 parent_handle;
-	__u64 parent_fd;
-} __attribute__((__aligned__(8)));
-
-struct bus1_cmd_node_create {
-	__u64 flags;
 	__u64 handle;
+	__u64 fd;
 } __attribute__((__aligned__(8)));
 
 enum {
@@ -94,42 +88,53 @@ struct bus1_cmd_send {
 } __attribute__((__aligned__(8)));
 
 enum {
-	BUS1_RECV_FLAG_PEEK		= 1ULL <<  0,
+	BUS1_MSG_NONE,
+	BUS1_MSG_DATA,
+	BUS1_MSG_NODE_DESTROY,
 };
 
-struct bus1_cmd_recv {
-	__u64 flags;
-	__u64 msg_dropped;
-	__u64 msg_offset;
-	__u64 msg_size;
-	__u64 msg_handles;
-	__u64 msg_fds;
-} __attribute__((__aligned__(8)));
-
-struct bus1_header {
+struct bus1_msg_data {
 	__u64 destination;
 	__u32 uid;
 	__u32 gid;
 	__u32 pid;
 	__u32 tid;
+	__u64 offset;
+	__u64 n_bytes;
+	__u64 n_handles;
+	__u64 n_fds;
+} __attribute__((__aligned__(8)));
+
+struct bus1_msg_node_destroy {
+	__u64 handle;
 } __attribute__((__aligned__(8)));
 
 enum {
-	BUS1_CMD_CONNECT		= _IOWR(BUS1_IOCTL_MAGIC, 0x00,
-						struct bus1_cmd_connect),
-	BUS1_CMD_DISCONNECT		= _IOWR(BUS1_IOCTL_MAGIC, 0x01,
+	BUS1_RECV_FLAG_PEEK		= 1ULL <<  0,
+};
+
+struct bus1_cmd_recv {
+	__u64 flags;
+	__u64 type;
+	__u64 n_dropped;
+	union {
+		struct bus1_msg_data data;
+		struct bus1_msg_node_destroy node_destroy;
+	};
+} __attribute__((__aligned__(8)));
+
+enum {
+	BUS1_CMD_PEER_CREATE		= _IOWR(BUS1_IOCTL_MAGIC, 0x00,
+						struct bus1_cmd_peer_create),
+	BUS1_CMD_NODE_DESTROY		= _IOWR(BUS1_IOCTL_MAGIC, 0x01,
 						__u64),
-	BUS1_CMD_NODE_CREATE		= _IOWR(BUS1_IOCTL_MAGIC, 0x03,
-						struct bus1_cmd_node_create),
-	BUS1_CMD_NODE_DESTROY		= _IOWR(BUS1_IOCTL_MAGIC, 0x04,
+	BUS1_CMD_HANDLE_RELEASE		= _IOWR(BUS1_IOCTL_MAGIC, 0x02,
 						__u64),
-	BUS1_CMD_HANDLE_RELEASE		= _IOWR(BUS1_IOCTL_MAGIC, 0x05,
+	BUS1_CMD_SLICE_RELEASE		= _IOWR(BUS1_IOCTL_MAGIC, 0x03,
 						__u64),
-	BUS1_CMD_SLICE_RELEASE		= _IOWR(BUS1_IOCTL_MAGIC, 0x02,
-						__u64),
-	BUS1_CMD_SEND			= _IOWR(BUS1_IOCTL_MAGIC, 0x06,
+	BUS1_CMD_SEND			= _IOWR(BUS1_IOCTL_MAGIC, 0x04,
 						struct bus1_cmd_send),
-	BUS1_CMD_RECV			= _IOWR(BUS1_IOCTL_MAGIC, 0x07,
+	BUS1_CMD_RECV			= _IOWR(BUS1_IOCTL_MAGIC, 0x05,
 						struct bus1_cmd_recv),
 };
 

@@ -18,6 +18,7 @@
 
 #include <linux/fs.h>
 #include <linux/kernel.h>
+#include <uapi/linux/bus1.h>
 #include "handle.h"
 #include "queue.h"
 
@@ -31,17 +32,18 @@ struct bus1_user;
 /**
  * struct bus1_message - message
  * @qnode:			embedded queue node
+ * @data:			message data
  * @transaction.next:		message list (during transactions)
  * @transaction.handle:		pinned handle (during transactions)
  * @transaction.raw_peer:	pinned destination (during transactions)
  * @user:			sending user
  * @slice:			actual message data
  * @files:			passed file descriptors
- * @n_files:			number of passed file descriptors
  * @handles:			passed handles
  */
 struct bus1_message {
 	struct bus1_queue_node qnode;
+	struct bus1_msg_data data;
 
 	struct {
 		struct bus1_message *next;
@@ -52,12 +54,12 @@ struct bus1_message {
 	struct bus1_user *user;
 	struct bus1_pool_slice *slice;
 	struct file **files;
-	size_t n_files;
 	struct bus1_handle_inflight handles;
 	/* handles must be last */
 };
 
-struct bus1_message *bus1_message_new(size_t n_files,
+struct bus1_message *bus1_message_new(size_t n_bytes,
+				      size_t n_files,
 				      size_t n_handles,
 				      bool silent);
 struct bus1_message *bus1_message_free(struct bus1_message *message);
