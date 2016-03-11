@@ -224,7 +224,7 @@ static int bus1_peer_connect_clone(struct bus1_peer *peer,
 				   struct file *peer_file,
 				   struct bus1_cmd_peer_create *param)
 {
-	struct bus1_peer_info *peer_info = bus1_peer_dereference(peer);
+	struct bus1_peer_info *peer_info;
 	struct bus1_peer_info *clone_info = NULL;
 	struct bus1_handle *t, *root = NULL, *export = NULL;
 	struct bus1_peer *clone;
@@ -239,9 +239,19 @@ static int bus1_peer_connect_clone(struct bus1_peer *peer,
 	    param->fd != (u64)-1)
 		return -EINVAL;
 
+	if (bus1_active_is_new(&peer->active))
+		return -ENOTCONN;
+
+	if (!bus1_peer_acquire(peer))
+		return -ESHUTDOWN;
+
+	peer_info = bus1_peer_dereference(peer);
+
 	fd = get_unused_fd_flags(O_CLOEXEC);
-	if (fd < 0)
-		return fd;
+	if (fd < 0) {
+		r = fd;
+		goto error;
+	}
 
 	clone = bus1_peer_new();
 	if (IS_ERR(clone)) {
@@ -318,6 +328,7 @@ static int bus1_peer_connect_clone(struct bus1_peer *peer,
 	bus1_handle_unref(export);
 	bus1_handle_unref(root);
 	bus1_peer_release(clone);
+	bus1_peer_release(peer);
 
 	return 0;
 
@@ -328,7 +339,9 @@ error:
 		bus1_peer_release(clone);
 	if (clone_file)
 		fput(clone_file);
-	put_unused_fd(fd);
+	if (fd >= 0)
+		put_unused_fd(fd);
+	bus1_peer_release(peer);
 	return r;
 }
 
