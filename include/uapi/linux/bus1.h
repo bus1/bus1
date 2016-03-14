@@ -39,6 +39,10 @@
  *   EINPROGRESS:       node destruction already in progress
  *   EDQUOT:            quota exceeded
  *   EBADF:             invalid file-descriptor
+ *   EPERM:             permission denied
+ *   EAGAIN:            no messages ready to be dequeued
+ *   ETOOMANYREFS:      user has too many in-flight file-descriptor
+ *   EOPNOTSUPP:        failed to pass invalid file-descriptor type
  */
 
 #include <linux/ioctl.h>
