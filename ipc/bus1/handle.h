@@ -110,12 +110,13 @@ union bus1_handle_entry {
 
 /**
  * struct bus1_handle_batch - dynamic set of handles
- * @n_handles:		number of handles this batch carries
- * @n_owned:		number of slots that actually have a handle pinned
+ * @n_entries:		number of ids or handles this batch carries (excluding
+ *			.next pointers)
+ * @n_handles:		number of slots that actually have a handle pinned
  * @entries:		stored entries
  *
  * The batch object allows handling multiple handles in a single set. Each
- * batch can store an unlimited amount of handles, and internally they're
+ * batch can store an unlimited number of handles, and internally they're
  * grouped into batches of BUS1_HANDLE_BATCH_SIZE entries.
  *
  * All handles are put into the trailing array @entries. However, at most
@@ -127,8 +128,8 @@ union bus1_handle_entry {
  * The caller must not access @entries directly!
  */
 struct bus1_handle_batch {
+	size_t n_entries;
 	size_t n_handles;
-	size_t n_owned;
 	union bus1_handle_entry entries[0];
 };
 
