@@ -579,8 +579,8 @@ exit:
 	return r;
 }
 
-static int bus1_peer_install(struct bus1_peer_info *peer_info,
-			     struct bus1_message *message)
+static int bus1_peer_install_fds(struct bus1_peer_info *peer_info,
+				 struct bus1_message *message)
 {
 	size_t i, offset;
 	struct kvec vec;
@@ -640,7 +640,7 @@ static int bus1_peer_dequeue_message(struct bus1_peer_info *peer_info,
 		 * parallel readers, which seems overkill. If you receive many
 		 * FDs, you better be able to deal with it.
 		 */
-		r = bus1_peer_install(peer_info, message);
+		r = bus1_peer_install_fds(peer_info, message);
 		if (r < 0)
 			return r;
 	}
