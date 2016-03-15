@@ -1762,10 +1762,7 @@ void bus1_handle_inflight_install(struct bus1_handle_inflight *inflight,
 			--n_installs;
 
 			t = bus1_handle_install_unlocked(h);
-			if (!t) {
-				e->handle = bus1_handle_unref(h);
-			} else if (t != h) {
-				/* conflict: detach @h, switch to @t */
+			if (t != h) {
 				mutex_unlock(&dst_info->lock);
 				bus1_handle_release(h);
 				bus1_handle_unref(h);
