@@ -1041,6 +1041,7 @@ u64 bus1_handle_commit(struct bus1_handle *handle, u64 msg_seq)
 	struct bus1_peer *peer;
 	unsigned int seq;
 	u64 node_seq, v;
+	bool consumed = false;
 
 	rcu_read_lock();
 	peer = rcu_dereference(handle->node->owner.holder);
@@ -1067,11 +1068,14 @@ u64 bus1_handle_commit(struct bus1_handle *handle, u64 msg_seq)
 
 	if (node_seq == 0 || msg_seq < node_seq) {
 		if (atomic_inc_return(&handle->n_user) == 1)
-			WARN_ON(atomic_inc_return(&handle->n_inflight) < 2);
+			consumed = true;
 		v = handle->id;
 	} else {
 		v = BUS1_HANDLE_INVALID;
 	}
+
+	if (!consumed)
+		bus1_handle_release(handle);
 
 	return v;
 }
