@@ -235,6 +235,7 @@ static int bus1_peer_connect_clone(struct bus1_peer *peer,
 	struct bus1_peer *clone = NULL;
 	struct file *clone_file = NULL;
 	int r, fd;
+	u64 id;
 
 	if (param->flags ||
 	    param->pool_size == 0 ||
@@ -324,7 +325,12 @@ static int bus1_peer_connect_clone(struct bus1_peer *peer,
 		export = t;
 	}
 
-	param->handle = bus1_handle_get_id(export);
+	id = bus1_handle_commit(root, 0);
+	WARN_ON(id == BUS1_HANDLE_INVALID);
+	id = bus1_handle_commit(export, 0);
+	WARN_ON(id == BUS1_HANDLE_INVALID);
+
+	param->handle = id;
 	param->fd = fd;
 	fd_install(fd, clone_file); /* consumes file reference */
 
