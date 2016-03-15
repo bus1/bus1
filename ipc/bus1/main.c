@@ -137,10 +137,9 @@ static long bus1_fop_ioctl(struct file *file,
 		if (r < 0)
 			return r;
 
-		if ((param.flags & BUS1_PEER_CREATE_FLAG_QUERY) &&
-		    (put_user(param.pool_size, &uparam->pool_size) ||
-		     put_user(param.handle, &uparam->handle) ||
-		     put_user(param.fd, &uparam->fd)))
+		if (put_user(param.pool_size, &uparam->pool_size) ||
+		    put_user(param.handle, &uparam->handle) ||
+		    put_user(param.fd, &uparam->fd))
 			return -EFAULT; /* Don't care.. keep what we have */
 
 		return 0;
