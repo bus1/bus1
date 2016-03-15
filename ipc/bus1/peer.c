@@ -38,6 +38,7 @@ static void bus1_peer_info_reset(struct bus1_peer_info *peer_info)
 {
 	struct bus1_queue_node *node, *t;
 	struct bus1_message *message;
+	struct rb_root handles = RB_ROOT;
 
 	mutex_lock(&peer_info->lock);
 
@@ -54,8 +55,11 @@ static void bus1_peer_info_reset(struct bus1_peer_info *peer_info)
 	bus1_queue_post_flush(&peer_info->queue);
 
 	bus1_pool_flush(&peer_info->pool);
+	bus1_handle_flush_all(peer_info, &handles);
 
 	mutex_unlock(&peer_info->lock);
+
+	bus1_handle_finish_all(peer_info, &handles);
 }
 
 static struct bus1_peer_info *
