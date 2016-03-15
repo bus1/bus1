@@ -231,9 +231,7 @@ static int bus1_peer_connect_clone(struct bus1_peer *peer,
 	struct file *clone_file = NULL;
 	int r, fd;
 
-	if ((param->flags & ~(BUS1_PEER_CREATE_FLAG_QUERY |
-			      BUS1_PEER_CREATE_FLAG_RESET |
-			      BUS1_PEER_CREATE_FLAG_INIT)) ||
+	if (param->flags ||
 	    param->pool_size == 0 ||
 	    param->handle != BUS1_HANDLE_INVALID ||
 	    param->fd != (u64)-1)
@@ -352,8 +350,7 @@ static int bus1_peer_connect_init(struct bus1_peer *peer,
 	unsigned long flags;
 	int r;
 
-	if ((param->flags & ~(BUS1_PEER_CREATE_FLAG_QUERY |
-			      BUS1_PEER_CREATE_FLAG_RESET)) ||
+	if ((param->flags & ~(BUS1_PEER_CREATE_FLAG_INIT)) ||
 	    param->pool_size == 0 ||
 	    param->handle != BUS1_HANDLE_INVALID ||
 	    param->fd != (u64)-1)
@@ -399,8 +396,7 @@ static int bus1_peer_connect_reset(struct bus1_peer *peer,
 
 	if (bus1_active_is_new(&peer->active))
 		return -ENOTCONN;
-	if ((param->flags & ~(BUS1_PEER_CREATE_FLAG_QUERY |
-			      BUS1_PEER_CREATE_FLAG_INIT)) ||
+	if ((param->flags & ~(BUS1_PEER_CREATE_FLAG_RESET)) ||
 	    param->pool_size != 0 ||
 	    param->handle != BUS1_HANDLE_INVALID ||
 	    param->fd != (u64)-1)
@@ -425,8 +421,7 @@ static int bus1_peer_connect_query(struct bus1_peer *peer,
 
 	if (bus1_active_is_new(&peer->active))
 		return -ENOTCONN;
-	if ((param->flags & ~(BUS1_PEER_CREATE_FLAG_RESET |
-			      BUS1_PEER_CREATE_FLAG_INIT)) ||
+	if ((param->flags & ~(BUS1_PEER_CREATE_FLAG_QUERY)) ||
 	    param->pool_size != 0 ||
 	    param->handle != BUS1_HANDLE_INVALID ||
 	    param->fd != (u64)-1)
@@ -462,7 +457,8 @@ int bus1_peer_connect(struct bus1_peer *peer,
 {
 	/* check for validity of all flags */
 	if (param->flags & ~(BUS1_PEER_CREATE_FLAG_QUERY |
-			     BUS1_PEER_CREATE_FLAG_RESET))
+			     BUS1_PEER_CREATE_FLAG_RESET |
+			     BUS1_PEER_CREATE_FLAG_INIT))
 		return -EINVAL;
 
 	if (param->flags & BUS1_PEER_CREATE_FLAG_QUERY)
