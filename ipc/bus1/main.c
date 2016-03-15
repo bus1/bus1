@@ -179,6 +179,7 @@ static struct miscdevice bus1_misc = {
 	.fops		= &bus1_fops,
 	.minor		= MISC_DYNAMIC_MINOR,
 	.name		= KBUILD_MODNAME,
+	.mode		= S_IRUGO | S_IWUGO,
 };
 
 static int __init bus1_init(void)
