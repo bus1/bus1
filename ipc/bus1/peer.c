@@ -14,6 +14,7 @@
 #include <linux/file.h>
 #include <linux/fs.h>
 #include <linux/kernel.h>
+#include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/pid_namespace.h>
 #include <linux/rbtree.h>
@@ -227,7 +228,7 @@ static int bus1_peer_connect_clone(struct bus1_peer *peer,
 	struct bus1_peer_info *peer_info;
 	struct bus1_peer_info *clone_info = NULL;
 	struct bus1_handle *t, *root = NULL, *export = NULL;
-	struct bus1_peer *clone;
+	struct bus1_peer *clone = NULL;
 	struct file *clone_file = NULL;
 	int r, fd;
 
@@ -264,10 +265,10 @@ static int bus1_peer_connect_clone(struct bus1_peer *peer,
 	if (IS_ERR(clone_file)) {
 		r = PTR_ERR(clone_file);
 		clone_file = NULL;
-		clone = bus1_peer_free(clone);
 		goto error;
 	}
-	path_get(&peer_file->f_path); /* required by alloc_file() */
+	path_get(&peer_file->f_path); /* consumed by alloc_file() */
+	__module_get(bus1_fops.owner); /* consumed by alloc_file() via fops */
 	clone_file->private_data = clone; /* released via f_op->release() */
 	clone_file->f_flags |= O_RDWR | O_LARGEFILE;
 
@@ -337,6 +338,8 @@ error:
 		bus1_peer_release(clone);
 	if (clone_file)
 		fput(clone_file);
+	else
+		bus1_peer_free(clone);
 	if (fd >= 0)
 		put_unused_fd(fd);
 	bus1_peer_release(peer);
