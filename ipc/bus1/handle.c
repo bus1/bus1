@@ -849,8 +849,11 @@ bool bus1_handle_attach_unlocked(struct bus1_handle *handle,
 	 * us has access to it. Hence, an attach operation will always succeed.
 	 */
 	owner = rcu_access_pointer(handle->node->owner.holder);
-	if (!bus1_handle_is_owner(handle) && !owner)
-		return false;
+	if (!owner) {
+		if (!bus1_handle_is_owner(handle))
+			return false;
+		owner = holder;
+	}
 
 	owner_info = bus1_peer_dereference(owner);
 	lockdep_assert_held(&owner_info->lock);
