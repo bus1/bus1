@@ -10,23 +10,28 @@
 #define _GNU_SOURCE
 #include <assert.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <getopt.h>
+#include <linux/bus1.h>
+#include <linux/sched.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/uio.h>
 #include <sys/wait.h>
 #include <syscall.h>
 #include <unistd.h>
-#include "b1-client.h"
-#include "b1-test.h"
+#include "bus1-client.h"
+#include "test.h"
 
-#define N_TESTS (sizeof(b1_tests) / sizeof(b1_tests[0]))
+#define N_TESTS (sizeof(tests) / sizeof(tests[0]))
 
 static const char *arg_module = "bus1";
 static const char *arg_test = NULL;
-const char *b1_path = NULL;
+char *test_path = NULL;
 
-int b1_sys_clone(unsigned long flags, void *child_stack)
+int c_sys_clone(unsigned long flags, void *child_stack)
 {
 #if defined(__s390__) || defined(__CRIS__)
 	return (int)syscall(__NR_clone, child_stack, flags);
@@ -35,7 +40,7 @@ int b1_sys_clone(unsigned long flags, void *child_stack)
 #endif
 }
 
-static int fork_and_run(const struct b1_test *test, const char *path)
+static int fork_and_run(const struct test *test)
 {
 	pid_t pid;
 	int r;
@@ -44,7 +49,7 @@ static int fork_and_run(const struct b1_test *test, const char *path)
 	assert(pid >= 0);
 
 	if (pid == 0) {
-		r = test->main(path);
+		r = test->main();
 		_exit(r);
 	}
 
@@ -57,7 +62,7 @@ static int fork_and_run(const struct b1_test *test, const char *path)
 		return WEXITSTATUS(r);
 }
 
-static int run_one(const struct b1_test *test)
+static int run_one(const struct test *test)
 {
 	size_t i, line_len;
 	int r;
@@ -71,13 +76,13 @@ static int run_one(const struct b1_test *test)
 	fflush(stdout);
 
 	/* run test */
-	r = fork_and_run(test, b1_path);
+	r = fork_and_run(test);
 
 	/* print result */
-	if (r == B1_TEST_OK || r == B1_TEST_SKIP)
+	if (r == TEST_OK || r == TEST_SKIP)
 		/* scroll down; move right */
 		fprintf(stdout, "\r\e[2T\e[60C %s\n",
-			r == B1_TEST_OK ? "OK" : "SKIP");
+			r == TEST_OK ? "OK" : "SKIP");
 	else
 		fprintf(stdout, "\nERROR\n\n");
 
@@ -94,8 +99,8 @@ static int run_test(const char *test)
 	fprintf(stdout, "\nRun selected test:\n\n");
 
 	for (i = 0; i < N_TESTS; ++i) {
-		if (!strcmp(test, b1_tests[i].name)) {
-			r = run_one(&b1_tests[i]);
+		if (!strcmp(test, tests[i].name)) {
+			r = run_one(&tests[i]);
 			fprintf(stdout, "\n");
 			return r;
 		}
@@ -113,7 +118,7 @@ static int run_all(void)
 	fprintf(stdout, "\nRun all tests:\n\n");
 
 	for (i = 0; i < N_TESTS; ++i) {
-		r = run_one(&b1_tests[i]);
+		r = run_one(&tests[i]);
 		if (r < 0 && res >= 0)
 			res = r;
 	}
@@ -134,7 +139,7 @@ static int parse_argv(int argc, char **argv)
 		{}
 	};
 	size_t i;
-	int r, c;
+	int c;
 
 	while ((c = getopt_long(argc, argv, "h", options, NULL)) >= 0) {
 		switch (c) {
@@ -148,7 +153,7 @@ static int parse_argv(int argc, char **argv)
 				, program_invocation_short_name);
 
 			for (i = 0; i < N_TESTS; ++i)
-				fprintf(stderr, "\t%s\n", b1_tests[i].name);
+				fprintf(stderr, "\t%s\n", tests[i].name);
 
 			return 0;
 
@@ -166,26 +171,30 @@ static int parse_argv(int argc, char **argv)
 	if (argc > optind)
 		arg_test = argv[optind];
 
-	r = asprintf((char **)&b1_path, "/dev/%s", arg_module);
-	assert(r >= 0);
-
 	return 1;
 }
 
 int main(int argc, char **argv)
 {
+	size_t len;
 	int r;
 
 	r = parse_argv(argc, argv);
 	if (r <= 0)
 		goto exit;
 
+	/* store cdev-path for tests to access ("/dev/<module>") */
+	len = strlen(arg_module);
+	test_path = alloca(len + 6);
+	strcpy(test_path, "/dev/");
+	strcpy(test_path + 5, arg_module);
+
+	/* run selected test or all */
 	if (arg_test)
 		r = run_test(arg_test);
 	else
 		r = run_all();
 
 exit:
-	free((char *)b1_path);
 	return r < 0 ? EXIT_FAILURE : EXIT_SUCCESS;
 }

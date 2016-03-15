@@ -1,11 +1,12 @@
-TEST_PROGS := b1-test
+TEST_PROGS := bus1-test
 
 OBJS =				\
-	b1-client.o		\
-	b1-test.o		\
+	bus1-client.o		\
+	test.o			\
+	test-api.o		\
 	test-peer.o
 
-CFLAGS += -I../../../../usr/include/
+CFLAGS += -Wall -I../../../../usr/include/
 
 all: $(TEST_PROGS)
 
@@ -14,8 +15,8 @@ include ../lib.mk
 clean:
 	$(RM) $(TEST_PROGS)
 
-%.o: %.c b1-client.h b1-test.h
+%.o: %.c bus1-client.h test.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
-b1-test: $(OBJS)
+bus1-test: $(OBJS)
 	$(CC) $(CFLAGS) $^ $(LDLIBS) -o $@

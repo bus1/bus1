@@ -12,7 +12,7 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <time.h>
-#include "b1-test.h"
+#include "test.h"
 
 #define N_DESTS (512)
 #define N_ITERATIONS (100000ULL)
@@ -153,6 +153,7 @@ static int test_peer_sequential(const char *path, size_t n_dests,
 }
 */
 
+/*
 static void test_peer_invalid_ioctl(const char *path)
 {
 	struct b1_client *client;
@@ -232,15 +233,16 @@ static void test_peer_api(const char *path)
 	client = b1_client_free(client);
 	assert(!client);
 }
+*/
 
-int test_peer(const char *path)
+int test_peer(void)
 {
-	unsigned i;
+/*	unsigned i;
 	int r, with, without;
 
 	test_peer_invalid_ioctl(path);
 	test_peer_api(path);
-
+*/
 	/* initialize all caches
 	r = test_peer_sequential(path, N_DESTS, PAYLOAD_SIZE);
 	r = test_uds_sequential(PAYLOAD_SIZE);
@@ -285,5 +287,5 @@ int test_peer(const char *path)
 
 	fprintf(stderr, "\n\n");
 */
-	return B1_TEST_OK;
+	return TEST_OK;
 }

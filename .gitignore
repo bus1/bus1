@@ -6,5 +6,5 @@ Module.symvers
 *.o
 *.swp
 .tmp_versions
-b1-test
+bus1-test
 tags

@@ -1,5 +1,5 @@
-#ifndef __B1_TEST_H
-#define __B1_TEST_H
+#ifndef __TEST_H
+#define __TEST_H
 
 /*
  * Copyright (C) 2013-2016 Red Hat, Inc.
@@ -22,32 +22,34 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
-#include <sys/mount.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/uio.h>
 #include <sys/wait.h>
 #include <unistd.h>
-#include "b1-client.h"
+#include "bus1-client.h"
 
 enum {
-	B1_TEST_OK,
-	B1_TEST_FAIL,
-	B1_TEST_SKIP,
+	TEST_OK,
+	TEST_FAIL,
+	TEST_SKIP,
 };
 
-struct b1_test {
+extern char *test_path;
+
+struct test {
 	const char *name;
-	int (*main) (const char *path);
+	int (*main) (void);
 };
 
-int test_peer(const char *mount_path);
+int test_api(void);
+int test_peer(void);
 
-static const struct b1_test b1_tests[] = {
+static const struct test tests[] = {
+	{ .name = "api", .main = test_api },
 	{ .name = "peer", .main = test_peer },
 };
 
-extern const char *b1_path;
+int c_sys_clone(unsigned long flags, void *child_stack);
 
-int b1_sys_clone(unsigned long flags, void *child_stack);
-
-#endif /* __B1_TEST_H */
+#endif /* __TEST_H */

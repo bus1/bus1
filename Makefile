@@ -124,10 +124,10 @@ tt-prepare: module
 .PHONY: tt-prepare
 
 tt: tests tt-prepare
-	tools/testing/selftests/bus1/b1-test --module bus$(BUS1_EXT) ; (R=$$? ; dmesg ; exit $$R)
+	tools/testing/selftests/bus1/bus1-test --module bus$(BUS1_EXT) ; (R=$$? ; dmesg ; exit $$R)
 .PHONY: tt
 
 stt: tests tt-prepare
-	sudo tools/testing/selftests/bus1/b1-test --module bus$(BUS1_EXT) ; (R=$$? ; dmesg ; exit $$R)
+	sudo tools/testing/selftests/bus1/bus1-test --module bus$(BUS1_EXT) ; (R=$$? ; dmesg ; exit $$R)
 .PHONY: stt
 
