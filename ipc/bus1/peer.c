@@ -367,8 +367,6 @@ static int bus1_peer_connect_init(struct bus1_peer *peer,
 	 * pointer and performs a *single* attempt of an atomic cmpxchg (see
 	 * bus1_active_activate() for details). Hence, borrowing the waitq-lock
 	 * is perfectly fine.
-	 * If this is *not* the first attempt to connect the peer, we fall back
-	 * to the clone operation.
 	 */
 	peer_info = bus1_peer_info_new(param->pool_size);
 	if (IS_ERR(peer_info))
