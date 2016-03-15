@@ -998,6 +998,7 @@ struct bus1_handle *bus1_handle_install_unlocked(struct bus1_handle *handle)
 		}
 	}
 	if (likely(!old)) {
+		kref_get(&handle->ref); /* peer owns a ref until unlinked */
 		handle->id = ++peer_info->handle_ids;
 
 		/* insert into node-map */
