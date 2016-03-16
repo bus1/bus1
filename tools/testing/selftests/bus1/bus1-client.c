@@ -110,22 +110,22 @@ _public_ int bus1_client_ioctl(struct bus1_client *client,
 
 _public_ int bus1_client_query(struct bus1_client *client, size_t *pool_sizep)
 {
-	struct bus1_cmd_peer_create peer_create;
+	struct bus1_cmd_peer_init peer_init;
 	int r;
 
 	if (_likely_(client->pool_size > 0))
 		return client->pool_size;
 
-	peer_create.flags = BUS1_PEER_CREATE_FLAG_QUERY;
-	peer_create.pool_size = 0;
-	peer_create.handle = BUS1_HANDLE_INVALID;
-	peer_create.fd = (uint64_t)-1;
-
-	r = bus1_client_ioctl(client, BUS1_CMD_PEER_CREATE, &peer_create);
+	peer_init.flags = 0;
+	peer_init.pool_size = 0;
+	r = bus1_client_ioctl(client, BUS1_CMD_PEER_QUERY, &peer_init);
 	if (r < 0)
 		return r;
 
-	*pool_sizep = peer_create.pool_size;
+	assert(peer_init.flags == 0);
+	assert(peer_init.pool_size != 0);
+
+	*pool_sizep = peer_init.pool_size;
 	return 0;
 }
 
@@ -187,23 +187,18 @@ _public_ int bus1_client_mmap(struct bus1_client *client)
 	return 0;
 }
 
-_public_ int bus1_client_create(struct bus1_client *client, size_t pool_size)
+_public_ int bus1_client_init(struct bus1_client *client, size_t pool_size)
 {
-	struct bus1_cmd_peer_create peer_create;
+	struct bus1_cmd_peer_init peer_init;
 	size_t old_size;
 	int r;
 
-	peer_create.flags = BUS1_PEER_CREATE_FLAG_INIT;
-	peer_create.pool_size = pool_size;
-	peer_create.handle = BUS1_HANDLE_INVALID;
-	peer_create.fd = (uint64_t)-1;
+	peer_init.flags = 0;
+	peer_init.pool_size = pool_size;
 
-	r = bus1_client_ioctl(client, BUS1_CMD_PEER_CREATE, &peer_create);
+	r = bus1_client_ioctl(client, BUS1_CMD_PEER_INIT, &peer_init);
 	if (r < 0)
 		return r;
-
-	assert(peer_create.fd == (uint64_t)-1);
-	assert(peer_create.handle == BUS1_HANDLE_INVALID);
 
 	/* no reason to be atomic, but lets verify the semantics nonetheless */
 	old_size = __atomic_exchange_n(&client->pool_size, pool_size,
@@ -218,23 +213,23 @@ _public_ int bus1_client_clone(struct bus1_client *client,
 			       int *fdp,
 			       size_t pool_size)
 {
-	struct bus1_cmd_peer_create peer_create;
+	struct bus1_cmd_peer_clone peer_clone;
 	int r;
 
-	peer_create.flags = 0;
-	peer_create.pool_size = pool_size;
-	peer_create.handle = BUS1_HANDLE_INVALID;
-	peer_create.fd = (uint64_t)-1;
+	peer_clone.flags = 0;
+	peer_clone.pool_size = pool_size;
+	peer_clone.handle = BUS1_HANDLE_INVALID;
+	peer_clone.fd = (uint64_t)-1;
 
-	r = bus1_client_ioctl(client, BUS1_CMD_PEER_CREATE, &peer_create);
+	r = bus1_client_ioctl(client, BUS1_CMD_PEER_CLONE, &peer_clone);
 	if (r < 0)
 		return r;
 
-	assert(peer_create.fd != (uint64_t)-1);
-	assert(peer_create.handle != BUS1_HANDLE_INVALID);
+	assert(peer_clone.fd != (uint64_t)-1);
+	assert(peer_clone.handle != BUS1_HANDLE_INVALID);
 
-	*handlep = peer_create.handle;
-	*fdp = peer_create.fd;
+	*handlep = peer_clone.handle;
+	*fdp = peer_clone.fd;
 	return 0;
 }
 

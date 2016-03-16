@@ -75,7 +75,7 @@ static void test_api_connect(void)
 
 	/* connect @c1 properly */
 
-	r = bus1_client_create(c1, BUS1_CLIENT_POOL_SIZE);
+	r = bus1_client_init(c1, BUS1_CLIENT_POOL_SIZE);
 	assert(r >= 0);
 
 	/* disconnect and reconnect @c1 */
@@ -86,7 +86,7 @@ static void test_api_connect(void)
 	r = bus1_client_new_from_path(&c1, test_path);
 	assert(r >= 0);
 
-	r = bus1_client_create(c1, BUS1_CLIENT_POOL_SIZE);
+	r = bus1_client_init(c1, BUS1_CLIENT_POOL_SIZE);
 	assert(r >= 0);
 
 	/* clone new peer from @c1 and create @c2 from it */

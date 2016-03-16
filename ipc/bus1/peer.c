@@ -225,9 +225,22 @@ int bus1_peer_disconnect(struct bus1_peer *peer)
 	return 0;
 }
 
-static int bus1_peer_connect_clone(struct bus1_peer *peer,
-				   struct file *peer_file,
-				   struct bus1_cmd_peer_create *param)
+/**
+ * bus1_peer_clone() - create a new peer connected to an existing peer
+ * @peer:		peer to operate on
+ * @peer_file:		underlying file of @peer
+ * @param:		ioctl arguments
+ *
+ * Creates a new initialized peer with a node and installs a handle to that node
+ * in the existing peer.
+ *
+ * The caller must not hold any active reference to the peer.
+ *
+ * Return: 0 on success, negative error code on failure.
+ */
+int bus1_peer_clone(struct bus1_peer *peer,
+		    struct file *peer_file,
+		    struct bus1_cmd_peer_clone *param)
 {
 	struct bus1_peer_info *peer_info;
 	struct bus1_peer_info *clone_info = NULL;
@@ -356,17 +369,26 @@ error:
 	return r;
 }
 
-static int bus1_peer_connect_init(struct bus1_peer *peer,
-				  struct bus1_cmd_peer_create *param)
+/**
+ * bus1_peer_init() - initialize peer
+ * @peer:		peer to operate on
+ * @param:		ioctl arguments
+ *
+ * This initializes a peer that was created by an open() call.
+ *
+ * The caller must not hold any active reference to the peer.
+ *
+ * Return: 0 on success, negative error code on failure.
+ */
+int bus1_peer_init(struct bus1_peer *peer,
+		   struct bus1_cmd_peer_init *param)
 {
 	struct bus1_peer_info *peer_info;
 	unsigned long flags;
 	int r;
 
-	if ((param->flags & ~(BUS1_PEER_CREATE_FLAG_INIT)) ||
-	    param->pool_size == 0 ||
-	    param->handle != BUS1_HANDLE_INVALID ||
-	    param->fd != (u64)-1)
+	if (param->flags ||
+	    param->pool_size == 0)
 		return -EINVAL;
 
 	/*
@@ -400,42 +422,61 @@ static int bus1_peer_connect_init(struct bus1_peer *peer,
 	return r;
 }
 
-static int bus1_peer_connect_reset(struct bus1_peer *peer,
-				   struct bus1_cmd_peer_create *param)
+/**
+ * bus1_peer_reset() - resets the peer
+ * @peer:		peer to operate on
+ * @param:		ioctl arguments
+ *
+ * This resets the peer to a pristine state by dropping all messages, handles
+ * and nodes.
+ *
+ * The caller must not hold any active reference to the peer.
+ *
+ * Return: 0 on success, negative error code on failure.
+ */
+int bus1_peer_reset(struct bus1_peer *peer,
+		    struct bus1_cmd_peer_reset *param)
 {
 	struct bus1_peer_info *peer_info;
 
 	if (bus1_active_is_new(&peer->active))
 		return -ENOTCONN;
-	if ((param->flags & ~(BUS1_PEER_CREATE_FLAG_RESET)) ||
-	    param->pool_size != 0 ||
-	    param->handle != BUS1_HANDLE_INVALID ||
-	    param->fd != (u64)-1)
+	if (param->flags ||
+	    param->handle != BUS1_HANDLE_INVALID)
 		return -EINVAL;
 
 	if (!bus1_peer_acquire(peer))
 		return -ESHUTDOWN;
 
 	peer_info = bus1_peer_dereference(peer);
-	param->pool_size = peer_info->pool.size;
+	/* XXX: do not drop passed in handle */
 	bus1_peer_info_reset(peer_info);
 
 	bus1_peer_release(peer);
 	return 0;
 }
 
-static int bus1_peer_connect_query(struct bus1_peer *peer,
-				   struct bus1_cmd_peer_create *param)
+/**
+ * bus1_peer_query() - get information about peer
+ * @peer:		peer to operate on
+ * @param:		ioctl arguments
+ *
+ * This queries the pool-size of the peer.
+ *
+ * The caller must not hold any active reference to the peer.
+ *
+ * Return: 0 on success, negative error code on failure.
+ */
+int bus1_peer_query(struct bus1_peer *peer,
+		    struct bus1_cmd_peer_init *param)
 {
 	struct bus1_peer_info *peer_info;
 	int r = 0;
 
 	if (bus1_active_is_new(&peer->active))
 		return -ENOTCONN;
-	if ((param->flags & ~(BUS1_PEER_CREATE_FLAG_QUERY)) ||
-	    param->pool_size != 0 ||
-	    param->handle != BUS1_HANDLE_INVALID ||
-	    param->fd != (u64)-1)
+	if (param->flags ||
+	    param->pool_size)
 		return -EINVAL;
 
 	rcu_read_lock();
@@ -447,39 +488,6 @@ static int bus1_peer_connect_query(struct bus1_peer *peer,
 	rcu_read_unlock();
 
 	return r;
-}
-
-/**
- * bus1_peer_connect() - establish new peer
- * @peer:		peer to operate on
- * @peer_file:		underlying file of @peer
- * @arg:		ioctl arguments
- *
- * This performs a peer-connect. Depending on the parameter flags in @arg, the
- * peer is either setup, queried, or reset.
- *
- * The caller must not hold any active reference to the peer.
- *
- * Return: 0 on success, negative error code on failure.
- */
-int bus1_peer_connect(struct bus1_peer *peer,
-		      struct file *peer_file,
-		      struct bus1_cmd_peer_create *param)
-{
-	/* check for validity of all flags */
-	if (param->flags & ~(BUS1_PEER_CREATE_FLAG_QUERY |
-			     BUS1_PEER_CREATE_FLAG_RESET |
-			     BUS1_PEER_CREATE_FLAG_INIT))
-		return -EINVAL;
-
-	if (param->flags & BUS1_PEER_CREATE_FLAG_QUERY)
-		return bus1_peer_connect_query(peer, param);
-	else if (param->flags & BUS1_PEER_CREATE_FLAG_RESET)
-		return bus1_peer_connect_reset(peer, param);
-	else if (param->flags & BUS1_PEER_CREATE_FLAG_INIT)
-		return bus1_peer_connect_init(peer, param);
-	else
-		return bus1_peer_connect_clone(peer, peer_file, param);
 }
 
 static int bus1_peer_ioctl_slice_release(struct bus1_peer *peer,

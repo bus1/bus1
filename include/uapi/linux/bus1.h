@@ -61,13 +61,17 @@ enum {
 	BUS1_NODE_FLAG_ONESHOT		= 1ULL <<  2,
 };
 
-enum {
-	BUS1_PEER_CREATE_FLAG_QUERY		= 1ULL <<  0,
-	BUS1_PEER_CREATE_FLAG_RESET		= 1ULL <<  1,
-	BUS1_PEER_CREATE_FLAG_INIT		= 1ULL <<  2,
-};
+struct bus1_cmd_peer_init {
+	__u64 flags;
+	__u64 pool_size;
+} __attribute__((__aligned__(8)));
 
-struct bus1_cmd_peer_create {
+struct bus1_cmd_peer_reset {
+	__u64 flags;
+	__u64 handle;
+} __attribute__((__aligned__(8)));
+
+struct bus1_cmd_peer_clone {
 	__u64 flags;
 	__u64 pool_size;
 	__u64 handle;
@@ -129,17 +133,23 @@ struct bus1_cmd_recv {
 } __attribute__((__aligned__(8)));
 
 enum {
-	BUS1_CMD_PEER_CREATE		= _IOWR(BUS1_IOCTL_MAGIC, 0x00,
-						struct bus1_cmd_peer_create),
-	BUS1_CMD_NODE_DESTROY		= _IOWR(BUS1_IOCTL_MAGIC, 0x01,
+	BUS1_CMD_PEER_INIT		= _IOWR(BUS1_IOCTL_MAGIC, 0x00,
+						struct bus1_cmd_peer_init),
+	BUS1_CMD_PEER_QUERY		= _IOWR(BUS1_IOCTL_MAGIC, 0x01,
+						struct bus1_cmd_peer_init),
+	BUS1_CMD_PEER_RESET		= _IOWR(BUS1_IOCTL_MAGIC, 0x02,
+						struct bus1_cmd_peer_reset),
+	BUS1_CMD_PEER_CLONE		= _IOWR(BUS1_IOCTL_MAGIC, 0x03,
+						struct bus1_cmd_peer_clone),
+	BUS1_CMD_NODE_DESTROY		= _IOWR(BUS1_IOCTL_MAGIC, 0x04,
 						__u64),
-	BUS1_CMD_HANDLE_RELEASE		= _IOWR(BUS1_IOCTL_MAGIC, 0x02,
+	BUS1_CMD_HANDLE_RELEASE		= _IOWR(BUS1_IOCTL_MAGIC, 0x05,
 						__u64),
-	BUS1_CMD_SLICE_RELEASE		= _IOWR(BUS1_IOCTL_MAGIC, 0x03,
+	BUS1_CMD_SLICE_RELEASE		= _IOWR(BUS1_IOCTL_MAGIC, 0x06,
 						__u64),
-	BUS1_CMD_SEND			= _IOWR(BUS1_IOCTL_MAGIC, 0x04,
+	BUS1_CMD_SEND			= _IOWR(BUS1_IOCTL_MAGIC, 0x07,
 						struct bus1_cmd_send),
-	BUS1_CMD_RECV			= _IOWR(BUS1_IOCTL_MAGIC, 0x05,
+	BUS1_CMD_RECV			= _IOWR(BUS1_IOCTL_MAGIC, 0x08,
 						struct bus1_cmd_recv),
 };
 

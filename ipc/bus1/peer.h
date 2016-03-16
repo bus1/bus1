@@ -90,9 +90,15 @@ struct bus1_peer {
 
 struct bus1_peer *bus1_peer_new(void);
 struct bus1_peer *bus1_peer_free(struct bus1_peer *peer);
-int bus1_peer_connect(struct bus1_peer *peer,
+int bus1_peer_clone(struct bus1_peer *peer,
 		      struct file *peer_file,
-		      struct bus1_cmd_peer_create *param);
+		      struct bus1_cmd_peer_clone *param);
+int bus1_peer_init(struct bus1_peer *peer,
+		   struct bus1_cmd_peer_init *param);
+int bus1_peer_query(struct bus1_peer *peer,
+		    struct bus1_cmd_peer_init *param);
+int bus1_peer_reset(struct bus1_peer *peer,
+		    struct bus1_cmd_peer_reset *param);
 int bus1_peer_disconnect(struct bus1_peer *peer);
 int bus1_peer_ioctl(struct bus1_peer *peer,
 		    unsigned int cmd,
