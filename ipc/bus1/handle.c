@@ -144,6 +144,13 @@ static void bus1_handle_destroy(struct bus1_handle *handle)
 	if (!handle)
 		return;
 
+	/*
+	 * rb_id and rb_node might be stray, as we use them for delayed flush
+	 * on peer destruction. We would have to explicitly lock the peer a
+	 * second time during finalization to reset them. We explicitly avoid
+	 * that, hence, we do *not* verify they are unlinked here.
+	 */
+
 	WARN_ON(atomic_read(&handle->n_inflight) != -1 &&
 		!atomic_read(&handle->n_inflight) !=
 		!atomic_read(&handle->n_user));
