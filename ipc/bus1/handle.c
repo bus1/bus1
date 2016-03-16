@@ -98,7 +98,7 @@ struct bus1_handle {
 struct bus1_handle_node {
 	struct kref ref;			/* object ref-count */
 	struct list_head list_handles;		/* list of handles */
-	u64 transaction_id;			/* last transaction id */
+	u64 timestamp;				/* destruction timestamp */
 	struct bus1_handle owner;		/* handle of node owner */
 };
 
@@ -204,7 +204,7 @@ struct bus1_handle *bus1_handle_new(void)
 
 	kref_init(&node->ref);
 	INIT_LIST_HEAD(&node->list_handles);
-	node->transaction_id = BUS1_HANDLE_INVALID;
+	node->timestamp = 0;
 	bus1_handle_init(&node->owner, node);
 
 	/* node->owner owns a reference to the node, drop the initial one */
@@ -475,15 +475,14 @@ bus1_handle_commit_destruction(struct bus1_handle *handle,
 
 	lockdep_assert_held(&peer_info->lock);
 	WARN_ON(!bus1_handle_is_owner(handle));
-	WARN_ON(handle->node->transaction_id != BUS1_HANDLE_INVALID);
+	WARN_ON(handle->node->timestamp != 0);
 
 	/*
-	 * Set the transaction_id to 0 to prevent multiple contexts destroying
-	 * the handle in parallel.
-	 * No need to lock seqcount since 0 is treated as BUS_HANDLE_INVALID by
-	 * all async readers.
+	 * Set the timestamp to 1 to prevent multiple contexts destroying
+	 * the handle in parallel. No need to lock seqcount since 1 is treated
+	 * as invalid by all async readers.
 	 */
-	handle->node->transaction_id = 0;
+	handle->node->timestamp = 1;
 
 	/*
 	 * Delete owner handle from list, as we don't want it to be part of the
@@ -512,7 +511,7 @@ bus1_handle_commit_destruction(struct bus1_handle *handle,
 
 	write_seqcount_begin(&peer_info->seqcount);
 	/* XXX: allocate and set transaction ID */
-	handle->node->transaction_id = 1;
+	handle->node->timestamp = 2;
 	write_seqcount_end(&peer_info->seqcount);
 
 	rcu_assign_pointer(handle->holder, NULL);
@@ -561,7 +560,7 @@ static void bus1_handle_release_owner(struct bus1_handle *handle,
 
 	WARN_ON(atomic_read(&handle->n_user) > 0);
 
-	if (handle->node->transaction_id == BUS1_HANDLE_INVALID) {
+	if (handle->node->timestamp == 0) {
 		/* just unlink, don't unref; destruction unrefs the owner */
 		list_del_init(&handle->link_node);
 		if (list_empty(&handle->node->list_handles)) {
@@ -608,7 +607,7 @@ static void bus1_handle_release_holder(struct bus1_handle *handle,
 		return;
 
 	remote = bus1_handle_lock_owner(handle, &remote_info);
-	if (remote && handle->node->transaction_id == BUS1_HANDLE_INVALID) {
+	if (remote && handle->node->timestamp == 0) {
 		list_del_init(&handle->link_node);
 		bus1_handle_unref(handle);
 		if (list_empty(&handle->node->list_handles)) {
@@ -1031,24 +1030,29 @@ struct bus1_handle *bus1_handle_install_unlocked(struct bus1_handle *handle)
 /**
  * bus1_handle_commit() - commit an acquired handle
  * @handle:		handle to commit
- * @msg_seq:		sequence number of the committing transaction
+ * @timestamp:		timestamp of the committing transaction
  *
  * This acquires a *real* user visible reference to the passed handle, as part
- * of a transaction. The caller must provide the final transaction sequence
- * number as @msg_seq. It is used to order against node destruction.
+ * of a transaction. The caller must provide the final transaction timestamp
+ * as @timestamp. It is used to order against node destruction.
  *
  * In case the handle references was committed successfully, the handle ID is
  * returned. If the handle was already destroyed, BUS1_HANDLE_INVALID is
  * returned.
  *
+ * This *always* consumes the inflight reference of the caller. On success, it
+ * is converted into a user reference, on failure it is dropped. In any case,
+ * the caller does not own it anymore. The real object reference is left to the
+ * owner, though.
+ *
  * Return: The handle ID to store in the message is returned.
  */
-u64 bus1_handle_commit(struct bus1_handle *handle, u64 msg_seq)
+u64 bus1_handle_commit(struct bus1_handle *handle, u64 timestamp)
 {
 	struct bus1_peer_info *peer_info;
 	struct bus1_peer *peer;
 	unsigned int seq;
-	u64 node_seq, v;
+	u64 ts, v;
 	bool consumed = false;
 
 	rcu_read_lock();
@@ -1060,7 +1064,7 @@ u64 bus1_handle_commit(struct bus1_handle *handle, u64 msg_seq)
 		 * we can safely read the transaction ID and all barriers are
 		 * provided by rcu.
 		 */
-		node_seq = handle->node->transaction_id;
+		ts = handle->node->timestamp;
 	} else {
 		/*
 		 * Try reading the transaction id. We must synchronize via the
@@ -1069,12 +1073,12 @@ u64 bus1_handle_commit(struct bus1_handle *handle, u64 msg_seq)
 		 */
 		do {
 			seq = read_seqcount_begin(&peer_info->seqcount);
-			node_seq = handle->node->transaction_id;
+			ts = handle->node->timestamp;
 		} while (read_seqcount_retry(&peer_info->seqcount, seq));
 	}
 	rcu_read_unlock();
 
-	if (node_seq == 0 || msg_seq < node_seq) {
+	if (ts == 0 || !!(ts & 1) || timestamp < ts) {
 		if (atomic_inc_return(&handle->n_user) == 1)
 			consumed = true;
 		v = handle->id;
@@ -1146,7 +1150,7 @@ int bus1_handle_destroy_by_id(struct bus1_peer_info *peer_info, u64 id)
 	mutex_lock(&peer_info->lock);
 	if (!bus1_handle_is_owner(handle)) {
 		r = -EPERM;
-	} else if (handle->node->transaction_id != BUS1_HANDLE_INVALID) {
+	} else if (handle->node->timestamp != 0) {
 		r = -EINPROGRESS;
 	} else {
 		bus1_handle_commit_destruction(handle, peer_info,
@@ -1254,7 +1258,7 @@ void bus1_handle_finish_all(struct bus1_peer_info *peer_info,
 		if (bus1_handle_is_owner(handle)) {
 			INIT_LIST_HEAD(&list_handles);
 			mutex_lock(&peer_info->lock);
-			if (handle->node->transaction_id == BUS1_HANDLE_INVALID)
+			if (handle->node->timestamp == 0)
 				bus1_handle_commit_destruction(handle,
 							       peer_info,
 							       &list_handles);
