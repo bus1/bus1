@@ -341,7 +341,7 @@ static int bus1_peer_ioctl_clone(struct bus1_peer *peer,
 	bus1_peer_release(clone);
 
 	if (put_user(id, &uparam->handle) ||
-	    put_user((u64)fd, &uparam->fd))
+	    put_user(fd, &uparam->fd))
 		return -EFAULT; /* We don't care, keep what we did */
 
 	return 0;
@@ -462,7 +462,7 @@ static int bus1_peer_ioctl_query(struct bus1_peer *peer, unsigned long arg)
 
 	peer_info = bus1_peer_dereference(peer);
 
-	if (put_user((u64)peer_info->pool.size, &uparam->pool_size))
+	if (put_user(peer_info->pool.size, &uparam->pool_size))
 		return -EFAULT;
 
 	return 0;
