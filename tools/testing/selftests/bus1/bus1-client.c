@@ -122,7 +122,6 @@ _public_ int bus1_client_query(struct bus1_client *client, size_t *pool_sizep)
 	if (r < 0)
 		return r;
 
-	assert(peer_init.flags == 0);
 	assert(peer_init.pool_size != 0);
 
 	*pool_sizep = peer_init.pool_size;
