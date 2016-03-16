@@ -268,18 +268,13 @@ static int bus1_peer_ioctl_clone(struct bus1_peer *peer,
 		goto error;
 	}
 
-	clone_file = alloc_file(&peer_file->f_path,
-				FMODE_READ | FMODE_WRITE,
-				&bus1_fops);
+	clone_file = bus1_clone_file(peer_file);
 	if (IS_ERR(clone_file)) {
 		r = PTR_ERR(clone_file);
 		clone_file = NULL;
 		goto error;
 	}
-	path_get(&peer_file->f_path); /* consumed by alloc_file() */
-	__module_get(bus1_fops.owner); /* consumed by alloc_file() via fops */
 	clone_file->private_data = clone; /* released via f_op->release() */
-	clone_file->f_flags |= O_RDWR | O_LARGEFILE;
 
 	clone_info = bus1_peer_info_new(param.pool_size);
 	if (IS_ERR(clone_info)) {

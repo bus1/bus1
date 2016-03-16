@@ -181,6 +181,28 @@ struct file *bus1_import_fd(const u32 __user *user_fd)
 	return ret;
 }
 
+/*
+ * bus1_clone_file() - clone an existing file
+ *
+ * Return: Pointer to new file, ERR_PTR on failure
+ */
+struct file *bus1_clone_file(struct file *file)
+{
+	struct file *clone;
+
+	clone = alloc_file(&file->f_path,
+			   file->f_mode & (FMODE_READ | FMODE_WRITE),
+			   file->f_op);
+	if (IS_ERR(clone))
+		return clone;
+
+	path_get(&file->f_path); /* consumed by alloc_file() */
+	__module_get(file->f_op->owner); /* consumed by alloc_file() via fops */
+	clone->f_flags |= file->f_flags & (O_RDWR | O_LARGEFILE);
+
+	return clone;
+}
+
 /**
  * bus1_in_compat_syscall() - check whether running in compat syscall
  *
