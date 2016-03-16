@@ -801,7 +801,7 @@ struct bus1_handle *bus1_handle_release_pinned(struct bus1_handle *handle,
  * bus1_handle_pin() - pin a handle
  * @handle:		handle to pin
  *
- * This tries to acquire a handle plus its holding peer. If either cannot be
+ * This tries to acquire a handle plus its owning peer. If either cannot be
  * acquired, NULL is returned.
  *
  * Return: Pointer to acquired peer, NULL on failure.
@@ -811,7 +811,7 @@ struct bus1_peer *bus1_handle_pin(struct bus1_handle *handle)
 	struct bus1_peer *peer;
 
 	rcu_read_lock();
-	peer = bus1_peer_acquire(rcu_dereference(handle->holder));
+	peer = bus1_peer_acquire(rcu_dereference(handle->node->owner.holder));
 	rcu_read_unlock();
 
 	if (peer && !bus1_handle_acquire(handle))
