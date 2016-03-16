@@ -58,7 +58,6 @@
 enum {
 	BUS1_NODE_FLAG_MANAGED		= 1ULL <<  0,
 	BUS1_NODE_FLAG_ALLOCATE		= 1ULL <<  1,
-	BUS1_NODE_FLAG_ONESHOT		= 1ULL <<  2,
 };
 
 struct bus1_cmd_peer_init {
@@ -81,7 +80,6 @@ struct bus1_cmd_peer_clone {
 enum {
 	BUS1_SEND_FLAG_CONTINUE		= 1ULL <<  0,
 	BUS1_SEND_FLAG_SILENT		= 1ULL <<  1,
-	BUS1_SEND_FLAG_RELEASE		= 1ULL <<  2,
 };
 
 struct bus1_cmd_send {

@@ -510,8 +510,7 @@ static int bus1_peer_ioctl_send(struct bus1_peer *peer, unsigned long arg)
 		return r;
 
 	if (unlikely(param.flags & ~(BUS1_SEND_FLAG_CONTINUE |
-				     BUS1_SEND_FLAG_SILENT |
-				     BUS1_SEND_FLAG_RELEASE)))
+				     BUS1_SEND_FLAG_SILENT)))
 		return -EINVAL;
 
 	/* check basic limits; avoids integer-overflows later on */
