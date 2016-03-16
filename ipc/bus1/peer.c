@@ -241,6 +241,8 @@ static int bus1_peer_ioctl_clone(struct bus1_peer *peer,
 
 	lockdep_assert_held(&peer->active);
 
+	BUILD_BUG_ON(_IOC_SIZE(BUS1_CMD_PEER_CLONE) != sizeof(param));
+
 	r = bus1_import_fixed_ioctl(&param, arg, sizeof(param));
 	if (r < 0)
 		return r;
@@ -376,6 +378,8 @@ int bus1_peer_ioctl_init(struct bus1_peer *peer, unsigned long arg)
 	unsigned long flags;
 	int r;
 
+	BUILD_BUG_ON(_IOC_SIZE(BUS1_CMD_PEER_INIT) != sizeof(param));
+
 	r = bus1_import_fixed_ioctl(&param, arg, sizeof(param));
 	if (r < 0)
 		return r;
@@ -422,6 +426,8 @@ static int bus1_peer_ioctl_reset(struct bus1_peer *peer, unsigned long arg)
 
 	lockdep_assert_held(&peer->active);
 
+	BUILD_BUG_ON(_IOC_SIZE(BUS1_CMD_PEER_RESET) != sizeof(param));
+
 	r = bus1_import_fixed_ioctl(&param, arg, sizeof(param));
 	if (r < 0)
 		return r;
@@ -444,6 +450,8 @@ static int bus1_peer_ioctl_query(struct bus1_peer *peer, unsigned long arg)
 	int r;
 
 	lockdep_assert_held(&peer->active);
+
+	BUILD_BUG_ON(_IOC_SIZE(BUS1_CMD_PEER_QUERY) != sizeof(param));
 
 	r = bus1_import_fixed_ioctl(&param, arg, sizeof(param));
 	if (r < 0)
@@ -469,6 +477,8 @@ static int bus1_peer_ioctl_slice_release(struct bus1_peer *peer,
 
 	lockdep_assert_held(&peer->active);
 
+	BUILD_BUG_ON(_IOC_SIZE(BUS1_CMD_SLICE_RELEASE) != sizeof(offset));
+
 	r = bus1_import_fixed_ioctl(&offset, arg, sizeof(offset));
 	if (r < 0)
 		return r;
@@ -492,6 +502,8 @@ static int bus1_peer_ioctl_send(struct bus1_peer *peer, unsigned long arg)
 	int r;
 
 	lockdep_assert_held(&peer->active);
+
+	BUILD_BUG_ON(_IOC_SIZE(BUS1_CMD_SEND) != sizeof(param));
 
 	r = bus1_import_fixed_ioctl(&param, arg, sizeof(param));
 	if (r < 0)
@@ -696,6 +708,8 @@ static int bus1_peer_ioctl_recv(struct bus1_peer *peer, unsigned long arg)
 	int r;
 
 	lockdep_assert_held(&peer->active);
+
+	BUILD_BUG_ON(_IOC_SIZE(BUS1_CMD_RECV) != sizeof(param));
 
 	r = bus1_import_fixed_ioctl(&param, arg, sizeof(param));
 	if (r < 0)

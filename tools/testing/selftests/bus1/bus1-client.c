@@ -118,6 +118,10 @@ _public_ int bus1_client_query(struct bus1_client *client, size_t *pool_sizep)
 
 	peer_init.flags = 0;
 	peer_init.pool_size = 0;
+
+	static_assert(_IOC_SIZE(BUS1_CMD_PEER_QUERY) == sizeof(peer_init),
+		      "ioctl is called with invalid argument size");
+
 	r = bus1_client_ioctl(client, BUS1_CMD_PEER_QUERY, &peer_init);
 	if (r < 0)
 		return r;
@@ -195,6 +199,9 @@ _public_ int bus1_client_init(struct bus1_client *client, size_t pool_size)
 	peer_init.flags = 0;
 	peer_init.pool_size = pool_size;
 
+	static_assert(_IOC_SIZE(BUS1_CMD_PEER_INIT) == sizeof(peer_init),
+		      "ioctl is called with invalid argument size");
+
 	r = bus1_client_ioctl(client, BUS1_CMD_PEER_INIT, &peer_init);
 	if (r < 0)
 		return r;
@@ -220,6 +227,9 @@ _public_ int bus1_client_clone(struct bus1_client *client,
 	peer_clone.handle = BUS1_HANDLE_INVALID;
 	peer_clone.fd = (uint64_t)-1;
 
+	static_assert(_IOC_SIZE(BUS1_CMD_PEER_CLONE) == sizeof(peer_clone),
+		      "ioctl is called with invalid argument size");
+
 	r = bus1_client_ioctl(client, BUS1_CMD_PEER_CLONE, &peer_clone);
 	if (r < 0)
 		return r;
@@ -235,18 +245,27 @@ _public_ int bus1_client_clone(struct bus1_client *client,
 _public_ int bus1_client_node_destroy(struct bus1_client *client,
 				      uint64_t handle)
 {
+	static_assert(_IOC_SIZE(BUS1_CMD_NODE_DESTROY) == sizeof(handle),
+		      "ioctl is called with invalid argument size");
+
 	return bus1_client_ioctl(client, BUS1_CMD_NODE_DESTROY, &handle);
 }
 
 _public_ int bus1_client_handle_release(struct bus1_client *client,
 					uint64_t handle)
 {
+	static_assert(_IOC_SIZE(BUS1_CMD_HANDLE_RELEASE) == sizeof(handle),
+		      "ioctl is called with invalid argument size");
+
 	return bus1_client_ioctl(client, BUS1_CMD_HANDLE_RELEASE, &handle);
 }
 
 _public_ int bus1_client_slice_release(struct bus1_client *client,
 				       uint64_t offset)
 {
+	static_assert(_IOC_SIZE(BUS1_CMD_SLICE_RELEASE) == sizeof(offset),
+		      "ioctl is called with invalid argument size");
+
 	return bus1_client_ioctl(client, BUS1_CMD_SLICE_RELEASE, &offset);
 }
 
