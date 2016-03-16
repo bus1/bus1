@@ -73,6 +73,7 @@
 #include <uapi/linux/bus1.h>
 #include "handle.h"
 #include "peer.h"
+#include "queue.h"
 
 struct bus1_handle {
 	/* static data */
@@ -85,7 +86,7 @@ struct bus1_handle {
 	struct bus1_peer __rcu *holder;		/* holder of this id */
 	union {
 		struct list_head link_node;	/* link into node */
-		struct rcu_head rcu;
+		struct bus1_queue_node qnode;	/* link into queue */
 	};
 
 	/* non-static data */
@@ -109,7 +110,7 @@ static void bus1_handle_node_free(struct kref *ref)
 
 	WARN_ON(rcu_access_pointer(node->owner.holder));
 	WARN_ON(!list_empty(&node->list_handles));
-	kfree_rcu(node, owner.rcu);
+	kfree_rcu(node, owner.qnode.rcu);
 }
 
 static void bus1_handle_node_no_free(struct kref *ref)
@@ -230,7 +231,7 @@ static void bus1_handle_free(struct kref *ref)
 	is_owner = bus1_handle_is_owner(handle);
 	bus1_handle_destroy(handle);
 	if (!is_owner)
-		kfree_rcu(handle, rcu);
+		kfree_rcu(handle, qnode.rcu);
 }
 
 /**
