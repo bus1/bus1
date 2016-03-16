@@ -225,23 +225,12 @@ int bus1_peer_disconnect(struct bus1_peer *peer)
 	return 0;
 }
 
-/**
- * bus1_peer_clone() - create a new peer connected to an existing peer
- * @peer:		peer to operate on
- * @peer_file:		underlying file of @peer
- * @param:		ioctl arguments
- *
- * Creates a new initialized peer with a node and installs a handle to that node
- * in the existing peer.
- *
- * The caller must not hold any active reference to the peer.
- *
- * Return: 0 on success, negative error code on failure.
- */
-int bus1_peer_clone(struct bus1_peer *peer,
-		    struct file *peer_file,
-		    struct bus1_cmd_peer_clone *param)
+static int bus1_peer_ioctl_clone(struct bus1_peer *peer,
+			  struct file *peer_file,
+			  unsigned long arg)
 {
+	struct bus1_cmd_peer_clone __user *uparam = (void __user *) arg;
+	struct bus1_cmd_peer_clone param;
 	struct bus1_peer_info *peer_info;
 	struct bus1_peer_info *clone_info = NULL;
 	struct bus1_handle *t, *root = NULL, *export = NULL;
@@ -250,17 +239,17 @@ int bus1_peer_clone(struct bus1_peer *peer,
 	int r, fd;
 	u64 id;
 
-	if (param->flags ||
-	    param->pool_size == 0 ||
-	    param->handle != BUS1_HANDLE_INVALID ||
-	    param->fd != (u64)-1)
+	lockdep_assert_held(&peer->active);
+
+	r = bus1_import_fixed_ioctl(&param, arg, sizeof(param));
+	if (r < 0)
+		return r;
+
+	if (unlikely(param.flags) ||
+	    unlikely(param.pool_size == 0) ||
+	    unlikely(param.handle != BUS1_HANDLE_INVALID) ||
+	    unlikely(param.fd != (u64)-1))
 		return -EINVAL;
-
-	if (bus1_active_is_new(&peer->active))
-		return -ENOTCONN;
-
-	if (!bus1_peer_acquire(peer))
-		return -ESHUTDOWN;
 
 	peer_info = bus1_peer_dereference(peer);
 
@@ -290,7 +279,7 @@ int bus1_peer_clone(struct bus1_peer *peer,
 	clone_file->private_data = clone; /* released via f_op->release() */
 	clone_file->f_flags |= O_RDWR | O_LARGEFILE;
 
-	clone_info = bus1_peer_info_new(param->pool_size);
+	clone_info = bus1_peer_info_new(param.pool_size);
 	if (IS_ERR(clone_info)) {
 		r = PTR_ERR(clone_info);
 		clone_info = NULL;
@@ -343,14 +332,15 @@ int bus1_peer_clone(struct bus1_peer *peer,
 	id = bus1_handle_commit(export, 0);
 	WARN_ON(id == BUS1_HANDLE_INVALID);
 
-	param->handle = id;
-	param->fd = fd;
 	fd_install(fd, clone_file); /* consumes file reference */
 
 	bus1_handle_unref(export);
 	bus1_handle_unref(root);
 	bus1_peer_release(clone);
-	bus1_peer_release(peer);
+
+	if (put_user(id, &uparam->handle) ||
+	    put_user(fd, &uparam->fd))
+		return -EFAULT; /* We don't care, keep what we did */
 
 	return 0;
 
@@ -365,14 +355,13 @@ error:
 		bus1_peer_free(clone);
 	if (fd >= 0)
 		put_unused_fd(fd);
-	bus1_peer_release(peer);
 	return r;
 }
 
 /**
- * bus1_peer_init() - initialize peer
+ * bus1_peer_ioctl_init() - initialize peer
  * @peer:		peer to operate on
- * @param:		ioctl arguments
+ * @arg:		ioctl argument
  *
  * This initializes a peer that was created by an open() call.
  *
@@ -380,15 +369,18 @@ error:
  *
  * Return: 0 on success, negative error code on failure.
  */
-int bus1_peer_init(struct bus1_peer *peer,
-		   struct bus1_cmd_peer_init *param)
+int bus1_peer_ioctl_init(struct bus1_peer *peer, unsigned long arg)
 {
+	struct bus1_cmd_peer_init param;
 	struct bus1_peer_info *peer_info;
 	unsigned long flags;
 	int r;
 
-	if (param->flags ||
-	    param->pool_size == 0)
+	r = bus1_import_fixed_ioctl(&param, arg, sizeof(param));
+	if (r < 0)
+		return r;
+
+	if (unlikely(param.flags) || unlikely(param.pool_size == 0))
 		return -EINVAL;
 
 	/*
@@ -400,7 +392,7 @@ int bus1_peer_init(struct bus1_peer *peer,
 	 * bus1_active_activate() for details). Hence, borrowing the waitq-lock
 	 * is perfectly fine.
 	 */
-	peer_info = bus1_peer_info_new(param->pool_size);
+	peer_info = bus1_peer_info_new(param.pool_size);
 	if (IS_ERR(peer_info))
 		return PTR_ERR(peer_info);
 
@@ -422,72 +414,50 @@ int bus1_peer_init(struct bus1_peer *peer,
 	return r;
 }
 
-/**
- * bus1_peer_reset() - resets the peer
- * @peer:		peer to operate on
- * @param:		ioctl arguments
- *
- * This resets the peer to a pristine state by dropping all messages, handles
- * and nodes.
- *
- * The caller must not hold any active reference to the peer.
- *
- * Return: 0 on success, negative error code on failure.
- */
-int bus1_peer_reset(struct bus1_peer *peer,
-		    struct bus1_cmd_peer_reset *param)
+static int bus1_peer_ioctl_reset(struct bus1_peer *peer, unsigned long arg)
 {
+	struct bus1_cmd_peer_reset param;
 	struct bus1_peer_info *peer_info;
+	int r;
 
-	if (bus1_active_is_new(&peer->active))
-		return -ENOTCONN;
-	if (param->flags ||
-	    param->handle != BUS1_HANDLE_INVALID)
+	lockdep_assert_held(&peer->active);
+
+	r = bus1_import_fixed_ioctl(&param, arg, sizeof(param));
+	if (r < 0)
+		return r;
+
+	if (unlikely(param.flags))
 		return -EINVAL;
-
-	if (!bus1_peer_acquire(peer))
-		return -ESHUTDOWN;
 
 	peer_info = bus1_peer_dereference(peer);
 	/* XXX: do not drop passed in handle */
 	bus1_peer_info_reset(peer_info);
 
-	bus1_peer_release(peer);
 	return 0;
 }
 
-/**
- * bus1_peer_query() - get information about peer
- * @peer:		peer to operate on
- * @param:		ioctl arguments
- *
- * This queries the pool-size of the peer.
- *
- * The caller must not hold any active reference to the peer.
- *
- * Return: 0 on success, negative error code on failure.
- */
-int bus1_peer_query(struct bus1_peer *peer,
-		    struct bus1_cmd_peer_init *param)
+static int bus1_peer_ioctl_query(struct bus1_peer *peer, unsigned long arg)
 {
+	struct bus1_cmd_peer_init __user *uparam = (void __user  *) arg;
+	struct bus1_cmd_peer_init param;
 	struct bus1_peer_info *peer_info;
-	int r = 0;
+	int r;
 
-	if (bus1_active_is_new(&peer->active))
-		return -ENOTCONN;
-	if (param->flags ||
-	    param->pool_size)
+	lockdep_assert_held(&peer->active);
+
+	r = bus1_import_fixed_ioctl(&param, arg, sizeof(param));
+	if (r < 0)
+		return r;
+
+	if (unlikely(param.flags) || unlikely(param.pool_size))
 		return -EINVAL;
 
-	rcu_read_lock();
-	peer_info = rcu_dereference(peer->info);
-	if (peer_info)
-		param->pool_size = peer_info->pool.size;
-	else
-		r = -ESHUTDOWN;
-	rcu_read_unlock();
+	peer_info = bus1_peer_dereference(peer);
 
-	return r;
+	if (put_user(peer_info->pool.size, &uparam->pool_size))
+		return -EFAULT;
+
+	return 0;
 }
 
 static int bus1_peer_ioctl_slice_release(struct bus1_peer *peer,
@@ -496,6 +466,8 @@ static int bus1_peer_ioctl_slice_release(struct bus1_peer *peer,
 	struct bus1_peer_info *peer_info = bus1_peer_dereference(peer);
 	u64 offset;
 	int r;
+
+	lockdep_assert_held(&peer->active);
 
 	r = bus1_import_fixed_ioctl(&offset, arg, sizeof(offset));
 	if (r < 0)
@@ -723,6 +695,8 @@ static int bus1_peer_ioctl_recv(struct bus1_peer *peer, unsigned long arg)
 	struct bus1_cmd_recv param;
 	int r;
 
+	lockdep_assert_held(&peer->active);
+
 	r = bus1_import_fixed_ioctl(&param, arg, sizeof(param));
 	if (r < 0)
 		return r;
@@ -753,6 +727,7 @@ static int bus1_peer_ioctl_recv(struct bus1_peer *peer, unsigned long arg)
 /**
  * bus1_peer_ioctl() - handle peer ioctl
  * @peer:		peer to work on
+ * @peer_file:		underlying file of @peer
  * @cmd:		ioctl command
  * @arg:		ioctl argument
  *
@@ -767,6 +742,7 @@ static int bus1_peer_ioctl_recv(struct bus1_peer *peer, unsigned long arg)
  * Return: 0 on success, negative error code on failure.
  */
 int bus1_peer_ioctl(struct bus1_peer *peer,
+		    struct file *peer_file,
 		    unsigned int cmd,
 		    unsigned long arg)
 {
@@ -776,6 +752,12 @@ int bus1_peer_ioctl(struct bus1_peer *peer,
 	case BUS1_CMD_NODE_DESTROY:
 	case BUS1_CMD_HANDLE_RELEASE:
 		return -ENOTTY;
+	case BUS1_CMD_PEER_QUERY:
+		return bus1_peer_ioctl_query(peer, arg);
+	case BUS1_CMD_PEER_RESET:
+		return bus1_peer_ioctl_reset(peer, arg);
+	case BUS1_CMD_PEER_CLONE:
+		return bus1_peer_ioctl_clone(peer, peer_file, arg);
 	case BUS1_CMD_SLICE_RELEASE:
 		return bus1_peer_ioctl_slice_release(peer, arg);
 	case BUS1_CMD_SEND:

@@ -126,57 +126,10 @@ static long bus1_fop_ioctl(struct file *file,
 
 	switch (cmd) {
 	case BUS1_CMD_PEER_INIT:
-	case BUS1_CMD_PEER_QUERY: {
-		struct bus1_cmd_peer_init __user *uparam = (void __user *)arg;
-		struct bus1_cmd_peer_init param;
-
-		r = bus1_import_fixed_ioctl(&param, arg, sizeof(param));
-		if (r < 0)
-			return r;
-
-		if (cmd == BUS1_CMD_PEER_INIT)
-			r = bus1_peer_init(peer, &param);
-		else
-			r = bus1_peer_query(peer, &param);
-		if (r < 0)
-			return r;
-
-		if (put_user(param.pool_size, &uparam->pool_size))
-			return -EFAULT; /* Don't care.. keep what we have */
-
-		return 0;
-	}
-	case BUS1_CMD_PEER_RESET: {
-		struct bus1_cmd_peer_reset param;
-
-		r = bus1_import_fixed_ioctl(&param, arg, sizeof(param));
-		if (r < 0)
-			return r;
-
-		r = bus1_peer_reset(peer, &param);
-		if (r < 0)
-			return r;
-
-		return 0;
-	}
-	case BUS1_CMD_PEER_CLONE: {
-		struct bus1_cmd_peer_clone __user *uparam = (void __user *)arg;
-		struct bus1_cmd_peer_clone param;
-
-		r = bus1_import_fixed_ioctl(&param, arg, sizeof(param));
-		if (r < 0)
-			return r;
-
-		r = bus1_peer_clone(peer, file, &param);
-		if (r < 0)
-			return r;
-
-		if (put_user(param.handle, &uparam->handle) ||
-		    put_user(param.fd, &uparam->fd))
-			return -EFAULT; /* Don't care.. keep what we have */
-
-		return 0;
-	}
+		return bus1_peer_ioctl_init(peer, arg);
+	case BUS1_CMD_PEER_QUERY:
+	case BUS1_CMD_PEER_RESET:
+	case BUS1_CMD_PEER_CLONE:
 	case BUS1_CMD_NODE_DESTROY:
 	case BUS1_CMD_HANDLE_RELEASE:
 	case BUS1_CMD_SLICE_RELEASE:
@@ -186,7 +139,7 @@ static long bus1_fop_ioctl(struct file *file,
 			return -ENOTCONN;
 		if (!bus1_peer_acquire(peer))
 			return -ESHUTDOWN;
-		r = bus1_peer_ioctl(peer, cmd, arg);
+		r = bus1_peer_ioctl(peer, file, cmd, arg);
 		bus1_peer_release(peer);
 		return r;
 	}
