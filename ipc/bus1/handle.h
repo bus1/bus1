@@ -224,6 +224,9 @@ void bus1_handle_inflight_install(struct bus1_handle_inflight *inflight,
 				  struct bus1_peer *src);
 void bus1_handle_inflight_commit(struct bus1_handle_inflight *inflight,
 				 u64 seq);
+size_t bus1_handle_inflight_walk(struct bus1_handle_inflight *inflight,
+				 size_t *pos,
+				 u64 **idp);
 
 /**
  * bus1_handle_batch_inline_size() - calculate required inline size

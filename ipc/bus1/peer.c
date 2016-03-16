@@ -570,6 +570,33 @@ exit:
 	return r;
 }
 
+static int bus1_peer_install_handles(struct bus1_peer_info *peer_info,
+				     struct bus1_message *message)
+{
+	size_t pos, n, offset;
+	struct kvec vec;
+	u64 *ids;
+	int r;
+
+	offset = ALIGN(message->data.n_bytes, 8);
+	pos = 0;
+	ids = NULL;
+
+	while ((n = bus1_handle_inflight_walk(&message->handles,
+					      &pos, &ids)) > 0) {
+		vec.iov_base = ids;
+		vec.iov_len = n * sizeof(u64);
+		r = bus1_pool_write_kvec(&peer_info->pool, message->slice,
+					 offset, &vec, 1, vec.iov_len);
+		if (r < 0)
+			return r;
+
+		offset += n * sizeof(u64);
+	}
+
+	return 0;
+}
+
 static int bus1_peer_install_fds(struct bus1_peer_info *peer_info,
 				 struct bus1_message *message)
 {
@@ -622,6 +649,13 @@ static int bus1_peer_dequeue_message(struct bus1_peer_info *peer_info,
 	int r;
 
 	lockdep_assert_held(&peer_info->lock);
+
+	if (message->data.n_handles > 0) {
+		/* similar to fd-install we do this with the peer locked */
+		r = bus1_peer_install_handles(peer_info, message);
+		if (r < 0)
+			return r;
+	}
 
 	if (unlikely(message->data.n_fds > 0)) {
 		/*

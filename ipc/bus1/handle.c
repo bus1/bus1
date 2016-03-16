@@ -1454,6 +1454,35 @@ static int bus1_handle_batch_import(struct bus1_handle_batch *batch,
 	return 0;
 }
 
+static size_t bus1_handle_batch_walk(struct bus1_handle_batch *batch,
+				     size_t *pos,
+				     u64 **idp)
+{
+	union bus1_handle_entry *block;
+	size_t n;
+
+	if (WARN_ON(batch->n_handles > 0))
+		return 0;
+	if (*pos >= batch->n_entries)
+		return 0;
+
+	BUILD_BUG_ON(sizeof(*block) != sizeof(**idp));
+
+	n = batch->n_entries - *pos;
+	if (n > BUS1_HANDLE_BATCH_SIZE)
+		n = BUS1_HANDLE_BATCH_SIZE;
+
+	if (*idp) {
+		block = ((union bus1_handle_entry *)*idp);
+		*idp = (void *)block[BUS1_HANDLE_BATCH_SIZE].next;
+	} else {
+		*idp = (void *)batch->entries;
+	}
+
+	*pos += n;
+	return n;
+}
+
 /**
  * bus1_handle_transfer_init() - initialize handle transfer context
  * @transfer:		transfer context to initialize
@@ -1804,4 +1833,27 @@ void bus1_handle_inflight_commit(struct bus1_handle_inflight *inflight,
 	}
 
 	inflight->batch.n_handles = 0;
+}
+
+/**
+ * bus1_handle_inflight_walk() - walk all handle IDs
+ * @inflight:		inflight context to walk
+ * @pos:		current iterator position
+ * @idp:		current block
+ *
+ * This walks over all stored handle IDs of @inflight, returning them in blocks
+ * to the caller. The caller must initialize @pos to 0, @idp to NULL and
+ * provide both as iterators to this function.
+ *
+ * This function updates @idp to point to the next block of IDs, forwards @pos
+ * to point to the end of the block, and returns the number of IDs in this
+ * block. Once done it returns 0.
+ *
+ * Return: Number of IDs in the next block, 0 if done.
+ */
+size_t bus1_handle_inflight_walk(struct bus1_handle_inflight *inflight,
+				 size_t *pos,
+				 u64 **idp)
+{
+	return bus1_handle_batch_walk(&inflight->batch, pos, idp);
 }
