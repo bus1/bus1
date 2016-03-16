@@ -278,6 +278,9 @@ struct bus1_handle *bus1_handle_unref(struct bus1_handle *handle)
  * found, NULL is returned. Otherwise, a reference is acquired and a pointer to
  * the handle is returned.
  *
+ * This only acquires a normal object reference. The caller must acquire an
+ * inflight reference themself, if required.
+ *
  * Return: Pointer to referenced handle, or NULL if none found.
  */
 struct bus1_handle *bus1_handle_find_by_id(struct bus1_peer_info *peer_info,
@@ -332,23 +335,19 @@ struct bus1_handle *bus1_handle_find_by_id(struct bus1_peer_info *peer_info,
 	return res;
 }
 
-/**
- * bus1_handle_find_by_node() - find handle by its node
- * @peer_info:		peer to operate on
- * @existing:		any existing handle to match on
- *
- * This searches @peer_info for a handle that is linked to the same node as
- * @existing. If none is found, NULL is returned. Otherwise, a reference is
- * acquired and a pointer to the handle is returned.
- *
- * Return: Pointer to referenced handle, or NULL if none found.
- */
-struct bus1_handle *bus1_handle_find_by_node(struct bus1_peer_info *peer_info,
-					     struct bus1_handle *existing)
+static struct bus1_handle *
+bus1_handle_find_by_node(struct bus1_peer_info *peer_info,
+			 struct bus1_handle *existing)
 {
 	struct bus1_handle *handle, *res = NULL;
 	struct rb_node *n;
 	unsigned int seq;
+
+	/*
+	 * This searches @peer_info for a handle that is linked to the same
+	 * node as @existing. If none is found, NULL is returned. Otherwise, a
+	 * normal object reference is acquired and returned.
+	 */
 
 	rcu_read_lock();
 
@@ -683,27 +682,16 @@ static bool bus1_handle_has_id(struct bus1_handle *handle)
 	return handle && handle->id != BUS1_HANDLE_INVALID;
 }
 
-/**
- * bus1_handle_acquire() - try acquiring a handle
- * @handle:		handle to acquire, or NULL
- *
- * This tries to acquire a handle. Unlike object references, this function
- * acquires an actual handle reference. That is, the kind of references that
- * control whether or not the handle is owned (unlike the object references,
- * which just pin the memory and prevent it from being freed).
- *
- * Only public handles can be acquired. It is an error to call this on non
- * public handles.
- *
- * If this returns NULL, then the handle was already destroyed. The caller must
- * allocate a new one, attach it, and install it.
- *
- * If NULL is passed, this is a no-op.
- *
- * Return: @handle is returned on success, NULL on failure.
- */
-struct bus1_handle *bus1_handle_acquire(struct bus1_handle *handle)
+static struct bus1_handle *bus1_handle_acquire(struct bus1_handle *handle)
 {
+	/*
+	 * This tries to acquire an inflight reference to a handle. This might
+	 * fail if no inflight reference exists, anymore. In this case NULL is
+	 * returned and the caller must assume the handle is dead and unlinked.
+	 * In fact, it is guaranteed that the destruction is already done or in
+	 * progress *with* the holder locked. It can thus be used as barrier.
+	 */
+
 	if (!handle || WARN_ON(!bus1_handle_is_public(handle)))
 		return NULL;
 
@@ -832,8 +820,16 @@ struct bus1_peer *bus1_handle_pin(struct bus1_handle *handle)
  * @handle:		handle to attach
  * @holder:		holder of the handle
  *
- * This is the same as bus1_handle_attach(), but expects the caller to already
- * have pinned *and* locked the owning peer of the underlying node of @handle.
+ * This attaches a non-public handle to its linked node. The caller must
+ * provide the peer it wishes to be the holder of the new handle. If the
+ * underlying node is already destroyed, this will fail without touching the
+ * handle or the holder.
+ *
+ * If this function succeeds, it will automatically acquire the handle as well.
+ * See bus1_handle_acquire() for details.
+ *
+ * The caller must have pinned *and* locked the owning peer of @handle (this
+ * *might* match @holder, if this attaches the owner, but usually does not).
  *
  * Return: True if the handle was attached, false if the node is already gone.
  */
@@ -873,27 +869,19 @@ bool bus1_handle_attach_unlocked(struct bus1_handle *handle,
 	return true;
 }
 
-/**
- * bus1_handle_attach() - attach a handle to its node
- * @handle:		handle to attach
- * @holder:		holder of the handle
- *
- * This attaches a non-public handle to its linked node. The caller must
- * provide the peer it wishes to be the holder of the new handle.
- *
- * If the underlying node is already destroyed, this will fail without touching
- * the handle or the holer.
- *
- * If this function succeeds, it will automatically acquire the handle as well.
- * See bus1_handle_acquire() for details.
- *
- * Return: True if the handle was attached, false if the node is already gone.
- */
-bool bus1_handle_attach(struct bus1_handle *handle, struct bus1_peer *holder)
+static bool bus1_handle_attach(struct bus1_handle *handle,
+			       struct bus1_peer *holder)
 {
 	struct bus1_peer_info *owner_info;
 	struct bus1_peer *owner;
 	bool res;
+
+	/*
+	 * This is a wrapper around bus1_handle_attach(), which acquires and
+	 * locks the owner of @handle (or @holder in case this attaches the
+	 * owner). This is the slow-path and only needed if 3rd party handles
+	 * are transmitted.
+	 */
 
 	if (bus1_handle_is_owner(handle)) {
 		owner_info = bus1_peer_dereference(holder);
