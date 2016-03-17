@@ -10,6 +10,7 @@
 #define _GNU_SOURCE
 #include <stdlib.h>
 #include <sys/types.h>
+#include <time.h>
 #include "test.h"
 
 static int client_send(struct bus1_client *client, uint64_t *handles,
@@ -24,7 +25,7 @@ static int client_send(struct bus1_client *client, uint64_t *handles,
 		.ptr_destinations = (uint64_t)handles,
 		.n_destinations = (uint64_t)n_handles,
 		.ptr_vecs = (uint64_t)&vec,
-		.n_vecs = 1,
+		.n_vecs = len ? 1 : 0,
 	};
 
 	return bus1_client_ioctl(client, BUS1_CMD_SEND, &send);
@@ -57,7 +58,7 @@ static int client_slice_release(struct bus1_client *client, void *slice)
 				bus1_client_slice_to_offset(client, slice));
 }
 
-int test_io(void)
+static void test_basic(void)
 {
 	struct bus1_client *sender, *receiver1, *receiver2;
 	uint64_t handles[2];
@@ -132,6 +133,95 @@ int test_io(void)
 	sender = bus1_client_free(sender);
 	receiver1 = bus1_client_free(receiver1);
 	receiver2 = bus1_client_free(receiver2);
+}
+
+static inline uint64_t nsec_from_clock(clockid_t clock)
+{
+	struct timespec ts;
+	int r;
+
+	r = clock_gettime(clock, &ts);
+	assert(r >= 0);
+	return ts.tv_sec * UINT64_C(1000000000) + ts.tv_nsec;
+}
+
+static uint64_t test_iterate(unsigned int iterations,
+			     unsigned int n_destinations,
+			     size_t n_bytes)
+{
+	struct bus1_client *sender, *receivers[n_destinations];
+	uint64_t handles[n_destinations];
+	char payload[n_bytes];
+	char *reply_payload;
+	size_t reply_len;
+	unsigned int j, i;
+	uint64_t time_start, time_end;
+	int r, fd;
+
+	/* create parent */
+	r = bus1_client_new_from_path(&sender, test_path);
+	assert(r >= 0);
+
+	r = bus1_client_init(sender, BUS1_CLIENT_POOL_SIZE);
+	assert(r >= 0);
+
+	/* create children */
+	for (i = 0; i < n_destinations; i++) {
+		r = bus1_client_clone(sender, handles + i,
+				      &fd, BUS1_CLIENT_POOL_SIZE);
+		assert(r >= 0);
+
+		r = bus1_client_new_from_fd(receivers + i, fd);
+		assert(r >= 0);
+
+		r = bus1_client_mmap(receivers[i]);
+		assert(r >= 0);
+	}
+
+	time_start = nsec_from_clock(CLOCK_THREAD_CPUTIME_ID);
+	for (j = 0; j < iterations; j++) {
+		/* send */
+		r = client_send(sender, handles, n_destinations, payload, n_bytes);
+		assert(r >= 0);
+
+		/* receive */
+		for (i = 0; i < n_destinations; i++) {
+			r = client_recv(receivers[i], (void**)&reply_payload,
+					&reply_len);
+			assert(r >= 0);
+
+			r = client_slice_release(receivers[i], reply_payload);
+			assert(r >= 0);
+		}
+	}
+	time_end = nsec_from_clock(CLOCK_THREAD_CPUTIME_ID);
+
+	/* cleanup */
+	sender = bus1_client_free(sender);
+
+	for (i = 0; i < n_destinations; i++)
+		receivers[i] = bus1_client_free(receivers[i]);
+
+	return (time_end - time_start) / iterations;
+}
+
+int test_io(void)
+{
+	test_basic();
+	fprintf(stderr, "it took %lu ns to send nothing to no one\n",
+		test_iterate(10000, 0, 0));
+	fprintf(stderr, "it took %lu ns for no dests\n",
+		test_iterate(10000, 0, 1024));
+	fprintf(stderr, "it took %lu ns for one dest\n",
+		test_iterate(10000, 1, 1024));
+	fprintf(stderr, "it took %lu ns per dest for 32 dests\n",
+		test_iterate(10000, 32, 1024) / 32);
+	fprintf(stderr, "it took %lu ns per dest for 64 dests\n",
+		test_iterate(10000, 64, 1024) / 64);
+	fprintf(stderr, "it took %lu ns per dest for 1000 dests\n",
+		test_iterate(1000, 1000, 1024) / 1000);
+
+	fprintf(stderr, "\n\n");
 
 	return TEST_OK;
 }
