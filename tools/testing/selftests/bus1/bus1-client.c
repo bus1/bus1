@@ -113,8 +113,10 @@ _public_ int bus1_client_query(struct bus1_client *client, size_t *pool_sizep)
 	struct bus1_cmd_peer_init peer_init;
 	int r;
 
-	if (_likely_(client->pool_size > 0))
-		return client->pool_size;
+	if (_likely_(client->pool_size > 0)) {
+		*pool_sizep = client->pool_size;
+		return 0;
+	}
 
 	peer_init.flags = 0;
 	peer_init.pool_size = 0;
