@@ -91,7 +91,7 @@ struct bus1_message *bus1_message_free(struct bus1_message *message)
 	WARN_ON(message->user);
 	WARN_ON(message->transaction.raw_peer);
 	WARN_ON(message->transaction.handle);
-	WARN_ON(!message->transaction.next);
+	WARN_ON(message->transaction.next);
 
 	for (i = 0; i < message->data.n_fds; ++i)
 		if (message->files[i])
