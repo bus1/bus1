@@ -108,7 +108,6 @@ int test_io(void)
 
 	/* multicast */
 	r = client_send(sender, handles, 2, payload, strlen(payload) + 1);
-	fprintf(stderr, "send failed: %s\n", strerror(-r));
 	assert(r >= 0);
 
 	r = client_recv(receiver1, (void**)&reply_payload, &reply_len);
