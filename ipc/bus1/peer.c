@@ -557,6 +557,11 @@ static int bus1_peer_ioctl_send(struct bus1_peer *peer, unsigned long arg)
 	    unlikely(param.n_fds > BUS1_FD_MAX))
 		return -EMSGSIZE;
 
+	/* multicasts must ignore errors */
+	if (param.n_destinations > 1 &&
+	    !(param.flags & BUS1_SEND_FLAG_CONTINUE))
+		return -EINVAL;
+
 	/* 32bit pointer validity checks */
 	if (unlikely(param.ptr_destinations !=
 		     (u64)(unsigned long)param.ptr_destinations) ||
