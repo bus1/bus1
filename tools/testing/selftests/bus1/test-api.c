@@ -54,6 +54,18 @@ static void test_api_client(void)
 	assert(!c);
 }
 
+int client_query(struct bus1_client *client)
+{
+	struct bus1_cmd_peer_init query = {};
+	int r;
+
+	r = bus1_client_ioctl(client, BUS1_CMD_PEER_QUERY, &query);
+	if (r < 0)
+		return r;
+
+	return query.pool_size;
+}
+
 /* make sure basic connect + clone works */
 static void test_api_connect(void)
 {
@@ -73,10 +85,16 @@ static void test_api_connect(void)
 	assert(fd == -1);
 	assert(handle == BUS1_HANDLE_INVALID);
 
+	r = client_query(c1);
+	assert(r == -ENOTCONN);
+
 	/* connect @c1 properly */
 
 	r = bus1_client_init(c1, BUS1_CLIENT_POOL_SIZE);
 	assert(r >= 0);
+
+	r = client_query(c1);
+	assert(r == BUS1_CLIENT_POOL_SIZE);
 
 	/* disconnect and reconnect @c1 */
 
@@ -98,6 +116,9 @@ static void test_api_connect(void)
 
 	r = bus1_client_new_from_fd(&c2, fd);
 	assert(r >= 0);
+
+	r = client_query(c2);
+	assert(r == BUS1_CLIENT_POOL_SIZE);
 
 	c2 = bus1_client_free(c2);
 	assert(!c2);
