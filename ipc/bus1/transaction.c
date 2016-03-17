@@ -427,8 +427,11 @@ void bus1_transaction_commit(struct bus1_transaction *transaction)
 
 	list = transaction->entries;
 	transaction->entries = NULL;
-	timestamp = bus1_queue_tick(&transaction->peer_info->queue);
 	silent = transaction->param->flags & BUS1_SEND_FLAG_SILENT;
+
+	mutex_lock(&transaction->peer_info->lock);
+	timestamp = bus1_queue_tick(&transaction->peer_info->queue);
+	mutex_unlock(&transaction->peer_info->lock);
 
 	/*
 	 * Before queueing a message as staging entry in the destination queue,
@@ -570,7 +573,10 @@ int bus1_transaction_commit_for_id(struct bus1_transaction *transaction,
 		return cont ? 0 : -ENXIO;
 
 	peer_info = bus1_peer_dereference(peer);
+
+	mutex_lock(&transaction->peer_info->lock);
 	timestamp = bus1_queue_tick(&transaction->peer_info->queue);
+	mutex_unlock(&transaction->peer_info->lock);
 
 	message = bus1_transaction_instantiate(transaction, peer_info,
 					       handle, user);
