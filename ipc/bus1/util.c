@@ -8,6 +8,7 @@
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+#include <linux/cdev.h>
 #include <linux/compat.h>
 #include <linux/err.h>
 #include <linux/file.h>
@@ -183,24 +184,75 @@ struct file *bus1_import_fd(const u32 __user *user_fd)
 
 /*
  * bus1_clone_file() - clone an existing file
+ * @file:		file to clone
  *
- * Return: Pointer to new file, ERR_PTR on failure
+ * Allocate a new file given an existing file template. The file will have the
+ * same properties as the existing file, but is not linked to any context. The
+ * caller will get an exclusive reference to the file.
+ *
+ * Note that this does *not* call open() on the file. The caller has to do that
+ * themself. Furthermore, so far we only allow to call this on bus1_fops
+ * character devices. Other file types might have external dependencies which
+ * we cannot predict.
+ *
+ * Return: Pointer to new file, ERR_PTR on failure.
  */
 struct file *bus1_clone_file(struct file *file)
 {
-	struct file *clone;
+	struct inode *inode = file->f_inode;
+	const struct file_operations *fops = NULL;
+	struct file *clone = NULL;
+	struct cdev *cdev = NULL;
+	int r;
+
+	/*
+	 * Make sure this is not called on random files. Some files might
+	 * request random references (like block-devices or pipes), which we
+	 * cannot serve.
+	 */
+	if (WARN_ON(file->f_op != &bus1_fops))
+		return ERR_PTR(-EINVAL);
+
+	fops = fops_get(file->f_op);
+	if (!fops)
+		return ERR_PTR(-ENODEV);
+
+	/*
+	 * Unfortunately, alloc_file() does not take the cdev-reference, but
+	 * fput() drops it. As cdev_get() is non-public, we just copy the logic
+	 * here.
+	 */
+	if (unlikely(S_ISCHR(inode->i_mode) && inode->i_cdev &&
+		     !(file->f_mode & FMODE_PATH))) {
+		if (!try_module_get(inode->i_cdev->owner)) {
+			r = -ENODEV;
+			goto error;
+		}
+		cdev = inode->i_cdev;
+		kobject_get(&cdev->kobj);
+	}
 
 	clone = alloc_file(&file->f_path,
-			   file->f_mode & (FMODE_READ | FMODE_WRITE),
-			   file->f_op);
-	if (IS_ERR(clone))
-		return clone;
+			   file->f_mode & (FMODE_READ | FMODE_WRITE), fops);
+	if (IS_ERR(clone)) {
+		r = PTR_ERR(clone);
+		clone = NULL;
+		goto error;
+	}
 
-	path_get(&file->f_path); /* consumed by alloc_file() */
-	__module_get(file->f_op->owner); /* consumed by alloc_file() via fops */
+	/* alloc_file() consumes references of its arguments */
+	path_get(&file->f_path);
 	clone->f_flags |= file->f_flags & (O_RDWR | O_LARGEFILE);
 
 	return clone;
+
+error:
+	if (cdev) {
+		kobject_put(&cdev->kobj);
+		module_put(cdev->owner);
+	}
+	fops_put(fops);
+	return ERR_PTR(r);
 }
 
 /**
