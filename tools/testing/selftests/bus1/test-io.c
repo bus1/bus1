@@ -12,16 +12,17 @@
 #include <sys/types.h>
 #include "test.h"
 
-static int client_send(struct bus1_client *client, uint64_t handle, void *data,
-		       size_t len)
+static int client_send(struct bus1_client *client, uint64_t *handles,
+		       size_t n_handles, void *data, size_t len)
 {
 	struct iovec vec = {
 		.iov_base = data,
 		.iov_len = len,
 	};
 	struct bus1_cmd_send send = {
-		.ptr_destinations = (uint64_t)&handle,
-		.n_destinations = 1,
+		.flags = n_handles > 1 ? BUS1_SEND_FLAG_CONTINUE : 0,
+		.ptr_destinations = (uint64_t)handles,
+		.n_destinations = (uint64_t)n_handles,
 		.ptr_vecs = (uint64_t)&vec,
 		.n_vecs = 1,
 	};
@@ -58,42 +59,80 @@ static int client_slice_release(struct bus1_client *client, void *slice)
 
 int test_io(void)
 {
-	struct bus1_client *c1, *c2;
-	uint64_t handle;
+	struct bus1_client *sender, *receiver1, *receiver2;
+	uint64_t handles[2];
 	char *payload = "WOOFWOOF";
 	char *reply_payload;
 	size_t reply_len;
 	int r, fd;
 
-	r = bus1_client_new_from_path(&c1, test_path);
+	/* create parent */
+	r = bus1_client_new_from_path(&sender, test_path);
 	assert(r >= 0);
 
-	r = bus1_client_init(c1, BUS1_CLIENT_POOL_SIZE);
+	r = bus1_client_init(sender, BUS1_CLIENT_POOL_SIZE);
 	assert(r >= 0);
 
-	r = bus1_client_clone(c1, &handle, &fd, BUS1_CLIENT_POOL_SIZE);
+	/* create first child */
+	r = bus1_client_clone(sender, handles, &fd, BUS1_CLIENT_POOL_SIZE);
 	assert(r >= 0);
 
-	r = bus1_client_new_from_fd(&c2, fd);
+	r = bus1_client_new_from_fd(&receiver1, fd);
 	assert(r >= 0);
 
-	r = bus1_client_mmap(c2);
+	r = bus1_client_mmap(receiver1);
 	assert(r >= 0);
 
-	r = client_send(c1, handle, payload, strlen(payload) + 1);
+	/* unicast */
+	r = client_send(sender, handles, 1, payload, strlen(payload) + 1);
 	assert(r >= 0);
 
-	r = client_recv(c2, (void**)&reply_payload, &reply_len);
+	r = client_recv(receiver1, (void**)&reply_payload, &reply_len);
 	assert(r >= 0);
 
 	assert(reply_len == strlen(payload) + 1);
 	assert(memcmp(payload, reply_payload, strlen(payload) + 1) == 0);
 
-	r = client_slice_release(c2, reply_payload);
+	r = client_slice_release(receiver1, reply_payload);
 	assert(r >= 0);
 
-	c1 = bus1_client_free(c1);
-	c2 = bus1_client_free(c2);
+	/* create second child */
+	r = bus1_client_clone(sender, handles + 1, &fd, BUS1_CLIENT_POOL_SIZE);
+	assert(r >= 0);
+
+	r = bus1_client_new_from_fd(&receiver2, fd);
+	assert(r >= 0);
+
+	r = bus1_client_mmap(receiver2);
+	assert(r >= 0);
+
+	/* multicast */
+	r = client_send(sender, handles, 2, payload, strlen(payload) + 1);
+	fprintf(stderr, "send failed: %s\n", strerror(-r));
+	assert(r >= 0);
+
+	r = client_recv(receiver1, (void**)&reply_payload, &reply_len);
+	assert(r >= 0);
+
+	assert(reply_len == strlen(payload) + 1);
+	assert(memcmp(payload, reply_payload, strlen(payload) + 1) == 0);
+
+	r = client_slice_release(receiver1, reply_payload);
+	assert(r >= 0);
+
+	r = client_recv(receiver2, (void**)&reply_payload, &reply_len);
+	assert(r >= 0);
+
+	assert(reply_len == strlen(payload) + 1);
+	assert(memcmp(payload, reply_payload, strlen(payload) + 1) == 0);
+
+	r = client_slice_release(receiver2, reply_payload);
+	assert(r >= 0);
+
+	/* cleanup */
+	sender = bus1_client_free(sender);
+	receiver1 = bus1_client_free(receiver1);
+	receiver2 = bus1_client_free(receiver2);
 
 	return TEST_OK;
 }
