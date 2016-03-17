@@ -463,6 +463,32 @@ static int bus1_peer_ioctl_query(struct bus1_peer *peer, unsigned long arg)
 	return 0;
 }
 
+static int bus1_peer_ioctl_node_destroy(struct bus1_peer *peer,
+					unsigned long arg)
+{
+	u64 offset;
+
+	BUILD_BUG_ON(_IOC_SIZE(BUS1_CMD_NODE_DESTROY) != sizeof(offset));
+
+	if (get_user(offset, (const u64 __user *)arg))
+		return -EFAULT;
+
+	return bus1_handle_destroy_by_id(bus1_peer_dereference(peer), offset);
+}
+
+static int bus1_peer_ioctl_handle_release(struct bus1_peer *peer,
+					  unsigned long arg)
+{
+	u64 offset;
+
+	BUILD_BUG_ON(_IOC_SIZE(BUS1_CMD_HANDLE_RELEASE) != sizeof(offset));
+
+	if (get_user(offset, (const u64 __user *)arg))
+		return -EFAULT;
+
+	return bus1_handle_release_by_id(bus1_peer_dereference(peer), offset);
+}
+
 static int bus1_peer_ioctl_slice_release(struct bus1_peer *peer,
 					 unsigned long arg)
 {
@@ -791,15 +817,16 @@ int bus1_peer_ioctl(struct bus1_peer *peer,
 	lockdep_assert_held(&peer->active);
 
 	switch (cmd) {
-	case BUS1_CMD_NODE_DESTROY:
-	case BUS1_CMD_HANDLE_RELEASE:
-		return -ENOTTY;
 	case BUS1_CMD_PEER_QUERY:
 		return bus1_peer_ioctl_query(peer, arg);
 	case BUS1_CMD_PEER_RESET:
 		return bus1_peer_ioctl_reset(peer, arg);
 	case BUS1_CMD_PEER_CLONE:
 		return bus1_peer_ioctl_clone(peer, peer_file, arg);
+	case BUS1_CMD_NODE_DESTROY:
+		return bus1_peer_ioctl_node_destroy(peer, arg);
+	case BUS1_CMD_HANDLE_RELEASE:
+		return bus1_peer_ioctl_handle_release(peer, arg);
 	case BUS1_CMD_SLICE_RELEASE:
 		return bus1_peer_ioctl_slice_release(peer, arg);
 	case BUS1_CMD_SEND:
