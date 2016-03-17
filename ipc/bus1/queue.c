@@ -179,7 +179,7 @@ bool bus1_queue_stage(struct bus1_queue *queue,
 	if (WARN_ON(!ts == !RB_EMPTY_NODE(&node->rb)))
 		return false;
 	/* if stamped, it must be a valid staging timestamp from earlier */
-	if (ts != 0 && WARN_ON(!(ts & 0) || timestamp < ts))
+	if (ts != 0 && WARN_ON(!(ts & 1) || timestamp < ts))
 		return false;
 	/* nothing to do? */
 	if (ts == timestamp)
