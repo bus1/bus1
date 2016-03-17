@@ -1090,7 +1090,8 @@ struct bus1_handle *bus1_handle_install_unlocked(struct bus1_handle *handle)
 	}
 	if (likely(!old)) {
 		kref_get(&handle->ref); /* peer owns a ref until unlinked */
-		handle->id = ++peer_info->handle_ids;
+		handle->id = (++peer_info->handle_ids << 2) |
+						     BUS1_NODE_FLAG_MANAGED;
 
 		/* insert into node-map */
 		rb_link_node_rcu(&handle->rb_node, n, slot);
@@ -1601,10 +1602,20 @@ int bus1_handle_transfer_instantiate(struct bus1_handle_transfer *transfer,
 		return r;
 
 	BUS1_HANDLE_BATCH_FOREACH_ENTRY(entry, pos, &transfer->batch) {
-		if (entry->id == BUS1_HANDLE_INVALID) {
+		if (entry->id & BUS1_NODE_FLAG_ALLOCATE) {
+			/*
+			 * Right now we only support allocating managed nodes.
+			 * All the upper command flags must be unset, as they
+			 * are reserved for the future.
+			 */
+			if ((entry->id & ~BUS1_NODE_FLAG_ALLOCATE) !=
+							BUS1_NODE_FLAG_MANAGED)
+				return -EINVAL;
+
 			handle = bus1_handle_new();
 			if (IS_ERR(handle))
 				return PTR_ERR(handle);
+
 			++transfer->n_new;
 		} else {
 			/*
