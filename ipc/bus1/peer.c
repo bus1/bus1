@@ -383,9 +383,9 @@ static int bus1_peer_handle_pair(struct bus1_peer *peer,
 		export = t;
 	}
 
-	id = bus1_handle_commit(root, 0);
+	id = bus1_handle_release_to_inflight(root, 0);
 	WARN_ON(id == BUS1_HANDLE_INVALID);
-	id = bus1_handle_commit(export, 0);
+	id = bus1_handle_release_to_inflight(export, 0);
 	WARN_ON(id == BUS1_HANDLE_INVALID);
 
 	r = 0;

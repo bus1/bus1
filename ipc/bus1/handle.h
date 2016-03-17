@@ -187,9 +187,11 @@ struct bus1_handle *bus1_handle_find_by_id(struct bus1_peer_info *peer_info,
 bool bus1_handle_is_public(struct bus1_handle *handle);
 u64 bus1_handle_get_id(struct bus1_handle *handle);
 u64 bus1_handle_get_owner_id(struct bus1_handle *handle);
+u64 bus1_handle_get_inorder_id(struct bus1_handle *handle, u64 timestamp);
 struct bus1_handle *bus1_handle_release(struct bus1_handle *handle);
 struct bus1_handle *bus1_handle_release_pinned(struct bus1_handle *handle,
 					struct bus1_peer_info *peer_info);
+u64 bus1_handle_release_to_inflight(struct bus1_handle *handle, u64 timestamp);
 struct bus1_peer *bus1_handle_pin(struct bus1_handle *handle);
 bool bus1_handle_attach_unlocked(struct bus1_handle *handle,
 				 struct bus1_peer *holder);

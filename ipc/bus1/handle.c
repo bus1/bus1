@@ -646,6 +646,12 @@ bool bus1_handle_is_public(struct bus1_handle *handle)
 	return handle && atomic_read(&handle->n_inflight) >= 0;
 }
 
+static bool bus1_handle_has_id(struct bus1_handle *handle)
+{
+	/* true _iff_ the handle has been installed before */
+	return handle && handle->id != BUS1_HANDLE_INVALID;
+}
+
 /**
  * bus1_handle_get_id() - get id of handle
  * @handle:		handle to query
@@ -676,10 +682,66 @@ u64 bus1_handle_get_owner_id(struct bus1_handle *handle)
 	return handle->node->owner.id;
 }
 
-static bool bus1_handle_has_id(struct bus1_handle *handle)
+/**
+ * bus1_handle_get_inorder_id() - get handle ID based on global order
+ * @handle:		handle to query
+ * @timestamp:		timestamp to order against
+ *
+ * This is similar to bus1_handle_get_id(), but only returns the ID if the node
+ * was not destructed, yet. If the node was already destroyed, it will return
+ * BUS1_HANDLE_INVALID.
+ *
+ * Since transactions are asynchronous, there is no global sequence to order
+ * events. Therefore, the caller must provide their commit timestamp as
+ * @timestamp, and it is used to order againts a possible node destruction. In
+ * case it is lower than the node-destruction, the node is still valid
+ * regarding the caller's transaction, and as such the valid handle ID will be
+ * returned.
+ *
+ * Note that the caller *must* include the clock of the owner of the underlying
+ * node in their transaction. Otherwise, the timestamps will be incomparable.
+ *
+ * Return: Handle ID of @handle, or BUS1_HANDLE_INVALID if already destroyed.
+ */
+u64 bus1_handle_get_inorder_id(struct bus1_handle *handle, u64 timestamp)
 {
-	/* true _iff_ the handle has been installed before */
-	return handle && handle->id != BUS1_HANDLE_INVALID;
+	struct bus1_peer_info *peer_info;
+	struct bus1_peer *peer;
+	unsigned int seq;
+	u64 ts;
+
+	rcu_read_lock();
+	peer = rcu_dereference(handle->node->owner.holder);
+	if (!peer || !(peer_info = rcu_dereference(peer->info))) {
+		/*
+		 * Owner handles are reset *after* the transaction id has been
+		 * stored synchronously, and peer-info even after that. Hence,
+		 * we can safely read the transaction ID and all barriers are
+		 * provided by rcu.
+		 */
+		ts = handle->node->timestamp;
+	} else {
+		/*
+		 * Try reading the transaction id. We must synchronize via the
+		 * seqcount to guarantee stability across an invalidation
+		 * transaction.
+		 */
+		do {
+			seq = read_seqcount_begin(&peer_info->seqcount);
+			ts = handle->node->timestamp;
+		} while (read_seqcount_retry(&peer_info->seqcount, seq));
+	}
+	rcu_read_unlock();
+
+	/*
+	 * If the node has a commit timestamp set, and it is smaller than
+	 * @timestamp, it means the node destruction was committed before
+	 * @timestamp, as such the handle is invalid.
+	 */
+	if (ts > 0 && !(ts & 1) && ts <= timestamp)
+		return BUS1_HANDLE_INVALID;
+
+	return handle->id;
 }
 
 static struct bus1_handle *bus1_handle_acquire(struct bus1_handle *handle)
@@ -790,6 +852,40 @@ struct bus1_handle *bus1_handle_release_pinned(struct bus1_handle *handle,
 		bus1_handle_release_last(handle, peer_info);
 
 	return NULL;
+}
+
+/**
+ * bus1_handle_release_to_inflight() - turn inflight ref into user ref
+ * @handle:		handle to operate on
+ * @timestamp:		timestamp to order with, or 0
+ *
+ * This function behaves like bus1_handle_get_inorder_id(), but
+ * additionally turns the caller's inflight reference on @handle into a
+ * user reference. That is, the caller must assume this function calls
+ * bus1_handle_release() (the object reference is not touched, though).
+ *
+ * If bus1_handle_get_inorder_id() tells us that the handle is already
+ * destroyed, we still release the inflight reference, but skip
+ * turning it into a user-reference (as it would not be needed,
+ * anyway). The caller should not care, but can still detect it via the
+ * returned ID.
+ *
+ * If you pass 0 as @timestamp, it will always order before the node
+ * destruction. It is the callers responsibility to guarantee that the result
+ * has valid semantics.
+ *
+ * Return: Handle ID of @handle, or BUS1_HANDLE_INVALID if already destroyed.
+ */
+u64 bus1_handle_release_to_inflight(struct bus1_handle *handle, u64 timestamp)
+{
+	u64 ts;
+
+	ts = bus1_handle_get_inorder_id(handle, timestamp);
+	if (ts == BUS1_HANDLE_INVALID ||
+	    atomic_inc_return(&handle->n_user) != 1)
+		bus1_handle_release(handle);
+
+	return ts;
 }
 
 /**
@@ -1013,71 +1109,6 @@ struct bus1_handle *bus1_handle_install_unlocked(struct bus1_handle *handle)
 	write_seqcount_end(&peer_info->seqcount);
 
 	return handle;
-}
-
-/**
- * bus1_handle_commit() - commit an acquired handle
- * @handle:		handle to commit
- * @timestamp:		timestamp of the committing transaction
- *
- * This acquires a *real* user visible reference to the passed handle, as part
- * of a transaction. The caller must provide the final transaction timestamp
- * as @timestamp. It is used to order against node destruction.
- *
- * In case the handle references was committed successfully, the handle ID is
- * returned. If the handle was already destroyed, BUS1_HANDLE_INVALID is
- * returned.
- *
- * This *always* consumes the inflight reference of the caller. On success, it
- * is converted into a user reference, on failure it is dropped. In any case,
- * the caller does not own it anymore. The real object reference is left to the
- * owner, though.
- *
- * Return: The handle ID to store in the message is returned.
- */
-u64 bus1_handle_commit(struct bus1_handle *handle, u64 timestamp)
-{
-	struct bus1_peer_info *peer_info;
-	struct bus1_peer *peer;
-	unsigned int seq;
-	u64 ts, v;
-	bool consumed = false;
-
-	rcu_read_lock();
-	peer = rcu_dereference(handle->node->owner.holder);
-	if (!peer || !(peer_info = rcu_dereference(peer->info))) {
-		/*
-		 * Owner handles are reset *after* the transaction id has been
-		 * stored synchronously, and peer-info even after that. Hence,
-		 * we can safely read the transaction ID and all barriers are
-		 * provided by rcu.
-		 */
-		ts = handle->node->timestamp;
-	} else {
-		/*
-		 * Try reading the transaction id. We must synchronize via the
-		 * seqcount to guarantee stability across an invalidation
-		 * transaction.
-		 */
-		do {
-			seq = read_seqcount_begin(&peer_info->seqcount);
-			ts = handle->node->timestamp;
-		} while (read_seqcount_retry(&peer_info->seqcount, seq));
-	}
-	rcu_read_unlock();
-
-	if (ts == 0 || !!(ts & 1) || timestamp < ts) {
-		if (atomic_inc_return(&handle->n_user) == 1)
-			consumed = true;
-		v = handle->id;
-	} else {
-		v = BUS1_HANDLE_INVALID;
-	}
-
-	if (!consumed)
-		bus1_handle_release(handle);
-
-	return v;
 }
 
 /**
@@ -1825,7 +1856,7 @@ void bus1_handle_inflight_commit(struct bus1_handle_inflight *inflight,
 	BUS1_HANDLE_BATCH_FOREACH_HANDLE(e, pos, &inflight->batch) {
 		h = e->handle;
 		if (h) {
-			e->id = bus1_handle_commit(h, seq);
+			e->id = bus1_handle_release_to_inflight(h, seq);
 			bus1_handle_unref(h);
 		} else {
 			e->id = BUS1_HANDLE_INVALID;
