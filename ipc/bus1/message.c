@@ -60,6 +60,9 @@ struct bus1_message *bus1_message_new(size_t n_bytes,
 	message->data.n_bytes = n_bytes;
 	message->data.n_handles = n_handles;
 	message->data.n_fds = n_files;
+	message->transaction.next = NULL;
+	message->transaction.handle = NULL;
+	message->transaction.raw_peer = NULL;
 	message->user = NULL;
 	message->slice = NULL;
 	message->files = (void *)((u8 *)message + base_size);
