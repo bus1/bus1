@@ -9,6 +9,7 @@
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 #include <linux/err.h>
+#include <linux/idr.h>
 #include <linux/kernel.h>
 #include <linux/kref.h>
 #include <linux/mutex.h>
@@ -23,8 +24,8 @@
 #define BUS1_INTERNAL_UID_INVALID ((unsigned int) -1)
 
 static DEFINE_MUTEX(bus1_user_lock);
-static DEFINE_IDR(bus1_user_idr);
-static DEFINE_IDA(bus1_user_ida);
+DEFINE_IDR(bus1_user_idr);
+DEFINE_IDA(bus1_user_ida);
 
 static struct bus1_user *bus1_user_new(void)
 {

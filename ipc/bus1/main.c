@@ -12,6 +12,7 @@
 #include <linux/file.h>
 #include <linux/fs.h>
 #include <linux/init.h>
+#include <linux/idr.h>
 #include <linux/miscdevice.h>
 #include <linux/module.h>
 #include <linux/namei.h>
@@ -26,6 +27,7 @@
 #include "peer.h"
 #include "queue.h"
 #include "tests.h"
+#include "user.h"
 #include "util.h"
 
 static int bus1_fop_open(struct inode *inode, struct file *file)
@@ -184,6 +186,8 @@ static int __init bus1_init(void)
 static void __exit bus1_exit(void)
 {
 	misc_deregister(&bus1_misc);
+	ida_destroy(&bus1_user_ida);
+	idr_destroy(&bus1_user_idr);
 }
 
 module_init(bus1_init);
