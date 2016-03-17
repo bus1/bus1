@@ -185,6 +185,9 @@ static int __init bus1_init(void)
 
 static void __exit bus1_exit(void)
 {
+	WARN_ON(!idr_is_empty(&bus1_user_ida.idr));
+	WARN_ON(!idr_is_empty(&bus1_user_idr));
+
 	misc_deregister(&bus1_misc);
 	ida_destroy(&bus1_user_ida);
 	idr_destroy(&bus1_user_idr);
