@@ -897,11 +897,22 @@ u64 bus1_handle_release_to_inflight(struct bus1_handle *handle, u64 timestamp)
  * This tries to acquire a handle plus its owning peer. If either cannot be
  * acquired, NULL is returned.
  *
+ * The caller must own a user-reference for this to succeed.
+ *
  * Return: Pointer to acquired peer, NULL on failure.
  */
 struct bus1_peer *bus1_handle_pin(struct bus1_handle *handle)
 {
 	struct bus1_peer *peer;
+
+	/*
+	 * Check that user-space knows of the handle and owns a reference. This
+	 * looks racy, but we care for none of the races. We just assume that
+	 * at the time we checked for n_user, we also atomically acquired the
+	 * inflight reference. The fact that it is not atomic, does not matter.
+	 */
+	if (atomic_read(&handle->n_user) < 1)
+		return NULL;
 
 	rcu_read_lock();
 	peer = bus1_peer_acquire(rcu_dereference(handle->node->owner.holder));
@@ -1627,9 +1638,15 @@ int bus1_handle_transfer_instantiate(struct bus1_handle_transfer *transfer,
 			 * given the async nature of handle destruction, it
 			 * seems rather unlikely that callers want to handle
 			 * that.
+			 * Note that we require user-space to know the handle
+			 * and own a user reference. The check is not required
+			 * to be atomic, since handles are never re-used. If we
+			 * can acquire an inflight ref, and the user did own a
+			 * user-ref before, we are good to go.
 			 */
 			handle = bus1_handle_find_by_id(peer_info, entry->id);
-			if (handle && !bus1_handle_acquire(handle))
+			if (handle && (atomic_read(&handle->n_user) < 1 ||
+				       !bus1_handle_acquire(handle)))
 				handle = bus1_handle_unref(handle);
 		}
 
