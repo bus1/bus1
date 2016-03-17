@@ -245,10 +245,8 @@ int bus1_peer_ioctl_init(struct bus1_peer *peer, unsigned long arg)
 
 	BUILD_BUG_ON(_IOC_SIZE(BUS1_CMD_PEER_INIT) != sizeof(param));
 
-	r = bus1_import_fixed_ioctl(&param, arg, sizeof(param));
-	if (r < 0)
-		return r;
-
+	if (copy_from_user(&param, (void __user *)arg, sizeof(param)))
+		return -EFAULT;
 	if (unlikely(param.flags) || unlikely(param.pool_size == 0))
 		return -EINVAL;
 
@@ -288,16 +286,13 @@ static int bus1_peer_ioctl_query(struct bus1_peer *peer, unsigned long arg)
 	struct bus1_cmd_peer_init __user *uparam = (void __user  *) arg;
 	struct bus1_cmd_peer_init param;
 	struct bus1_peer_info *peer_info;
-	int r;
 
 	lockdep_assert_held(&peer->active);
 
 	BUILD_BUG_ON(_IOC_SIZE(BUS1_CMD_PEER_QUERY) != sizeof(param));
 
-	r = bus1_import_fixed_ioctl(&param, arg, sizeof(param));
-	if (r < 0)
-		return r;
-
+	if (copy_from_user(&param, (void __user *)arg, sizeof(param)))
+		return -EFAULT;
 	if (unlikely(param.flags) || unlikely(param.pool_size))
 		return -EINVAL;
 
@@ -313,16 +308,13 @@ static int bus1_peer_ioctl_reset(struct bus1_peer *peer, unsigned long arg)
 {
 	struct bus1_cmd_peer_reset param;
 	struct bus1_peer_info *peer_info;
-	int r;
 
 	lockdep_assert_held(&peer->active);
 
 	BUILD_BUG_ON(_IOC_SIZE(BUS1_CMD_PEER_RESET) != sizeof(param));
 
-	r = bus1_import_fixed_ioctl(&param, arg, sizeof(param));
-	if (r < 0)
-		return r;
-
+	if (copy_from_user(&param, (void __user *)arg, sizeof(param)))
+		return -EFAULT;
 	if (unlikely(param.flags))
 		return -EINVAL;
 
@@ -413,10 +405,8 @@ static int bus1_peer_ioctl_clone(struct bus1_peer *peer,
 
 	BUILD_BUG_ON(_IOC_SIZE(BUS1_CMD_PEER_CLONE) != sizeof(param));
 
-	r = bus1_import_fixed_ioctl(&param, arg, sizeof(param));
-	if (r < 0)
-		return r;
-
+	if (copy_from_user(&param, (void __user *)arg, sizeof(param)))
+		return -EFAULT;
 	if (unlikely(param.flags) ||
 	    unlikely(param.pool_size == 0) ||
 	    unlikely(param.handle != BUS1_HANDLE_INVALID) ||
@@ -518,9 +508,8 @@ static int bus1_peer_ioctl_slice_release(struct bus1_peer *peer,
 
 	BUILD_BUG_ON(_IOC_SIZE(BUS1_CMD_SLICE_RELEASE) != sizeof(offset));
 
-	r = bus1_import_fixed_ioctl(&offset, arg, sizeof(offset));
-	if (r < 0)
-		return r;
+	if (get_user(offset, (const u64 __user *)arg))
+		return -EFAULT;
 
 	mutex_lock(&peer_info->lock);
 	r = bus1_pool_release_user(&peer_info->pool, offset);
@@ -544,10 +533,8 @@ static int bus1_peer_ioctl_send(struct bus1_peer *peer, unsigned long arg)
 
 	BUILD_BUG_ON(_IOC_SIZE(BUS1_CMD_SEND) != sizeof(param));
 
-	r = bus1_import_fixed_ioctl(&param, arg, sizeof(param));
-	if (r < 0)
-		return r;
-
+	if (copy_from_user(&param, (void __user *)arg, sizeof(param)))
+		return -EFAULT;
 	if (unlikely(param.flags & ~(BUS1_SEND_FLAG_CONTINUE |
 				     BUS1_SEND_FLAG_SILENT)))
 		return -EINVAL;
@@ -788,10 +775,8 @@ static int bus1_peer_ioctl_recv(struct bus1_peer *peer, unsigned long arg)
 
 	BUILD_BUG_ON(_IOC_SIZE(BUS1_CMD_RECV) != sizeof(param));
 
-	r = bus1_import_fixed_ioctl(&param, arg, sizeof(param));
-	if (r < 0)
-		return r;
-
+	if (copy_from_user(&param, (void __user *)arg, sizeof(param)))
+		return -EFAULT;
 	if (unlikely(param.flags & ~BUS1_RECV_FLAG_PEEK ||
 		     param.type != BUS1_MSG_NONE ||
 		     param.n_dropped != 0))
