@@ -418,7 +418,7 @@ static bool bus1_handle_has_id(struct bus1_handle *handle)
  */
 u64 bus1_handle_get_id(struct bus1_handle *handle)
 {
-	WARN_ON(handle->id == BUS1_HANDLE_INVALID);
+	WARN_ON(!bus1_handle_has_id(handle));
 	return handle->id;
 }
 
@@ -434,7 +434,7 @@ u64 bus1_handle_get_id(struct bus1_handle *handle)
  */
 u64 bus1_handle_get_owner_id(struct bus1_handle *handle)
 {
-	WARN_ON(handle->node->owner.id == BUS1_HANDLE_INVALID);
+	WARN_ON(!bus1_handle_has_id(&handle->node->owner));
 	return handle->node->owner.id;
 }
 
@@ -465,6 +465,8 @@ u64 bus1_handle_get_inorder_id(struct bus1_handle *handle, u64 timestamp)
 	struct bus1_peer *peer;
 	unsigned int seq;
 	u64 ts;
+
+	WARN_ON(!bus1_handle_has_id(handle));
 
 	rcu_read_lock();
 	peer = rcu_dereference(handle->node->owner.holder);
