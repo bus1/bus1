@@ -1082,7 +1082,7 @@ struct bus1_handle *bus1_handle_install_unlocked(struct bus1_handle *handle)
 
 			old = handle;
 			handle = bus1_handle_ref(iter);
-			WARN_ON(!bus1_handle_acquire(handle));
+			WARN_ON(atomic_inc_return(&handle->n_inflight) == 1);
 			break;
 		} else if (handle->node < iter->node) {
 			slot = &n->rb_left;
