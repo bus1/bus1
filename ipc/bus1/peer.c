@@ -225,6 +225,114 @@ int bus1_peer_disconnect(struct bus1_peer *peer)
 	return 0;
 }
 
+/**
+ * bus1_peer_ioctl_init() - initialize peer
+ * @peer:		peer to operate on
+ * @arg:		ioctl argument
+ *
+ * This initializes a peer that was created by an open() call.
+ *
+ * The caller must not hold any active reference to the peer.
+ *
+ * Return: 0 on success, negative error code on failure.
+ */
+int bus1_peer_ioctl_init(struct bus1_peer *peer, unsigned long arg)
+{
+	struct bus1_cmd_peer_init param;
+	struct bus1_peer_info *peer_info;
+	unsigned long flags;
+	int r;
+
+	BUILD_BUG_ON(_IOC_SIZE(BUS1_CMD_PEER_INIT) != sizeof(param));
+
+	r = bus1_import_fixed_ioctl(&param, arg, sizeof(param));
+	if (r < 0)
+		return r;
+
+	if (unlikely(param.flags) || unlikely(param.pool_size == 0))
+		return -EINVAL;
+
+	/*
+	 * To connect the peer, we have to set @peer_info on @peer->info *and*
+	 * mark the active counter as active. Since this call is fully unlocked
+	 * we borrow @peer->waitq.lock to synchronize against parallel
+	 * connects *and* disconnects. The critical section just swaps the
+	 * pointer and performs a *single* attempt of an atomic cmpxchg (see
+	 * bus1_active_activate() for details). Hence, borrowing the waitq-lock
+	 * is perfectly fine.
+	 */
+	peer_info = bus1_peer_info_new(param.pool_size);
+	if (IS_ERR(peer_info))
+		return PTR_ERR(peer_info);
+
+	spin_lock_irqsave(&peer->waitq.lock, flags);
+	if (bus1_active_is_deactivated(&peer->active)) {
+		r = -ESHUTDOWN;
+	} else if (!rcu_access_pointer(peer->info)) {
+		rcu_assign_pointer(peer->info, peer_info);
+		bus1_active_activate(&peer->active);
+		peer_info = NULL; /* mark as consumed */
+		r = 0;
+	} else {
+		r = -EISCONN;
+	}
+	spin_unlock_irqrestore(&peer->waitq.lock, flags);
+
+	bus1_peer_info_free(peer_info);
+
+	return r;
+}
+
+static int bus1_peer_ioctl_query(struct bus1_peer *peer, unsigned long arg)
+{
+	struct bus1_cmd_peer_init __user *uparam = (void __user  *) arg;
+	struct bus1_cmd_peer_init param;
+	struct bus1_peer_info *peer_info;
+	int r;
+
+	lockdep_assert_held(&peer->active);
+
+	BUILD_BUG_ON(_IOC_SIZE(BUS1_CMD_PEER_QUERY) != sizeof(param));
+
+	r = bus1_import_fixed_ioctl(&param, arg, sizeof(param));
+	if (r < 0)
+		return r;
+
+	if (unlikely(param.flags) || unlikely(param.pool_size))
+		return -EINVAL;
+
+	peer_info = bus1_peer_dereference(peer);
+
+	if (put_user(peer_info->pool.size, &uparam->pool_size))
+		return -EFAULT;
+
+	return 0;
+}
+
+static int bus1_peer_ioctl_reset(struct bus1_peer *peer, unsigned long arg)
+{
+	struct bus1_cmd_peer_reset param;
+	struct bus1_peer_info *peer_info;
+	int r;
+
+	lockdep_assert_held(&peer->active);
+
+	BUILD_BUG_ON(_IOC_SIZE(BUS1_CMD_PEER_RESET) != sizeof(param));
+
+	r = bus1_import_fixed_ioctl(&param, arg, sizeof(param));
+	if (r < 0)
+		return r;
+
+	if (unlikely(param.flags))
+		return -EINVAL;
+
+	peer_info = bus1_peer_dereference(peer);
+	/* XXX: do not drop passed in handle */
+	bus1_peer_info_reset(peer_info);
+
+	return 0;
+}
+
 static int bus1_peer_ioctl_clone(struct bus1_peer *peer,
 			  struct file *peer_file,
 			  unsigned long arg)
@@ -353,114 +461,6 @@ error:
 	if (fd >= 0)
 		put_unused_fd(fd);
 	return r;
-}
-
-/**
- * bus1_peer_ioctl_init() - initialize peer
- * @peer:		peer to operate on
- * @arg:		ioctl argument
- *
- * This initializes a peer that was created by an open() call.
- *
- * The caller must not hold any active reference to the peer.
- *
- * Return: 0 on success, negative error code on failure.
- */
-int bus1_peer_ioctl_init(struct bus1_peer *peer, unsigned long arg)
-{
-	struct bus1_cmd_peer_init param;
-	struct bus1_peer_info *peer_info;
-	unsigned long flags;
-	int r;
-
-	BUILD_BUG_ON(_IOC_SIZE(BUS1_CMD_PEER_INIT) != sizeof(param));
-
-	r = bus1_import_fixed_ioctl(&param, arg, sizeof(param));
-	if (r < 0)
-		return r;
-
-	if (unlikely(param.flags) || unlikely(param.pool_size == 0))
-		return -EINVAL;
-
-	/*
-	 * To connect the peer, we have to set @peer_info on @peer->info *and*
-	 * mark the active counter as active. Since this call is fully unlocked
-	 * we borrow @peer->waitq.lock to synchronize against parallel
-	 * connects *and* disconnects. The critical section just swaps the
-	 * pointer and performs a *single* attempt of an atomic cmpxchg (see
-	 * bus1_active_activate() for details). Hence, borrowing the waitq-lock
-	 * is perfectly fine.
-	 */
-	peer_info = bus1_peer_info_new(param.pool_size);
-	if (IS_ERR(peer_info))
-		return PTR_ERR(peer_info);
-
-	spin_lock_irqsave(&peer->waitq.lock, flags);
-	if (bus1_active_is_deactivated(&peer->active)) {
-		r = -ESHUTDOWN;
-	} else if (!rcu_access_pointer(peer->info)) {
-		rcu_assign_pointer(peer->info, peer_info);
-		bus1_active_activate(&peer->active);
-		peer_info = NULL; /* mark as consumed */
-		r = 0;
-	} else {
-		r = -EISCONN;
-	}
-	spin_unlock_irqrestore(&peer->waitq.lock, flags);
-
-	bus1_peer_info_free(peer_info);
-
-	return r;
-}
-
-static int bus1_peer_ioctl_reset(struct bus1_peer *peer, unsigned long arg)
-{
-	struct bus1_cmd_peer_reset param;
-	struct bus1_peer_info *peer_info;
-	int r;
-
-	lockdep_assert_held(&peer->active);
-
-	BUILD_BUG_ON(_IOC_SIZE(BUS1_CMD_PEER_RESET) != sizeof(param));
-
-	r = bus1_import_fixed_ioctl(&param, arg, sizeof(param));
-	if (r < 0)
-		return r;
-
-	if (unlikely(param.flags))
-		return -EINVAL;
-
-	peer_info = bus1_peer_dereference(peer);
-	/* XXX: do not drop passed in handle */
-	bus1_peer_info_reset(peer_info);
-
-	return 0;
-}
-
-static int bus1_peer_ioctl_query(struct bus1_peer *peer, unsigned long arg)
-{
-	struct bus1_cmd_peer_init __user *uparam = (void __user  *) arg;
-	struct bus1_cmd_peer_init param;
-	struct bus1_peer_info *peer_info;
-	int r;
-
-	lockdep_assert_held(&peer->active);
-
-	BUILD_BUG_ON(_IOC_SIZE(BUS1_CMD_PEER_QUERY) != sizeof(param));
-
-	r = bus1_import_fixed_ioctl(&param, arg, sizeof(param));
-	if (r < 0)
-		return r;
-
-	if (unlikely(param.flags) || unlikely(param.pool_size))
-		return -EINVAL;
-
-	peer_info = bus1_peer_dereference(peer);
-
-	if (put_user(peer_info->pool.size, &uparam->pool_size))
-		return -EFAULT;
-
-	return 0;
 }
 
 static int bus1_peer_ioctl_node_destroy(struct bus1_peer *peer,
