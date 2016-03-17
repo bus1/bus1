@@ -333,15 +333,77 @@ static int bus1_peer_ioctl_reset(struct bus1_peer *peer, unsigned long arg)
 	return 0;
 }
 
+static int bus1_peer_handle_pair(struct bus1_peer *peer,
+				 struct bus1_peer *clone,
+				 u64 *idp)
+{
+	struct bus1_peer_info *peer_info = bus1_peer_dereference(peer);
+	struct bus1_peer_info *clone_info = bus1_peer_dereference(clone);
+	struct bus1_handle *t, *root = NULL, *export = NULL;
+	u64 id;
+	int r;
+
+	/*
+	 * This allocates a new node on @clone and imports a handle to it into
+	 * @peer. The ID of this handle is then returned via @idp.
+	 */
+
+	root = bus1_handle_new();
+	if (IS_ERR(root))
+		return PTR_ERR(root);
+
+	export = bus1_handle_new_copy(root);
+	if (IS_ERR(export)) {
+		r = PTR_ERR(export);
+		export = NULL;
+		goto exit;
+	}
+
+	mutex_lock(&clone_info->lock);
+	WARN_ON(!bus1_handle_attach_unlocked(root, clone));
+	WARN_ON(root != bus1_handle_install_unlocked(root));
+	WARN_ON(!bus1_handle_attach_unlocked(export, peer));
+	mutex_unlock(&clone_info->lock);
+
+	mutex_lock(&peer_info->lock);
+	t = bus1_handle_install_unlocked(export);
+	mutex_unlock(&peer_info->lock);
+
+	if (!t) {
+		bus1_handle_release_pinned(export, peer_info);
+		bus1_handle_release_pinned(root, clone_info);
+		r = -ESHUTDOWN;
+		goto exit;
+	}
+
+	if (t != export) {
+		/* conflict: switch over to @t */
+		bus1_handle_release_pinned(export, peer_info);
+		bus1_handle_unref(export);
+		export = t;
+	}
+
+	id = bus1_handle_commit(root, 0);
+	WARN_ON(id == BUS1_HANDLE_INVALID);
+	id = bus1_handle_commit(export, 0);
+	WARN_ON(id == BUS1_HANDLE_INVALID);
+
+	r = 0;
+	*idp = id;
+
+exit:
+	bus1_handle_unref(export);
+	bus1_handle_unref(root);
+	return r;
+}
+
 static int bus1_peer_ioctl_clone(struct bus1_peer *peer,
 			  struct file *peer_file,
 			  unsigned long arg)
 {
 	struct bus1_cmd_peer_clone __user *uparam = (void __user *) arg;
 	struct bus1_cmd_peer_clone param;
-	struct bus1_peer_info *peer_info;
-	struct bus1_peer_info *clone_info = NULL;
-	struct bus1_handle *t, *root = NULL, *export = NULL;
+	struct bus1_peer_info *peer_info, *clone_info = NULL;
 	struct bus1_peer *clone = NULL;
 	struct file *clone_file = NULL;
 	int r, fd;
@@ -394,53 +456,11 @@ static int bus1_peer_ioctl_clone(struct bus1_peer *peer,
 	bus1_active_activate(&clone->active);
 	WARN_ON(!bus1_peer_acquire(clone));
 
-	root = bus1_handle_new();
-	if (IS_ERR(root)) {
-		r = PTR_ERR(root);
-		root = NULL;
+	r = bus1_peer_handle_pair(peer, clone, &id);
+	if (r < 0)
 		goto error;
-	}
-
-	export = bus1_handle_new_copy(root);
-	if (IS_ERR(export)) {
-		r = PTR_ERR(export);
-		export = NULL;
-		goto error;
-	}
-
-	mutex_lock(&clone_info->lock);
-	WARN_ON(!bus1_handle_attach_unlocked(root, clone));
-	WARN_ON(root != bus1_handle_install_unlocked(root));
-	WARN_ON(!bus1_handle_attach_unlocked(export, peer));
-	mutex_unlock(&clone_info->lock);
-
-	mutex_lock(&peer_info->lock);
-	t = bus1_handle_install_unlocked(export);
-	mutex_unlock(&peer_info->lock);
-
-	if (!t) {
-		bus1_handle_release_pinned(export, peer_info);
-		bus1_handle_release_pinned(root, clone_info);
-		r = -ESHUTDOWN;
-		goto error;
-	}
-
-	if (t != export) {
-		/* conflict: switch over to @t */
-		bus1_handle_release_pinned(export, peer_info);
-		bus1_handle_unref(export);
-		export = t;
-	}
-
-	id = bus1_handle_commit(root, 0);
-	WARN_ON(id == BUS1_HANDLE_INVALID);
-	id = bus1_handle_commit(export, 0);
-	WARN_ON(id == BUS1_HANDLE_INVALID);
 
 	fd_install(fd, clone_file); /* consumes file reference */
-
-	bus1_handle_unref(export);
-	bus1_handle_unref(root);
 	bus1_peer_release(clone);
 
 	if (put_user(id, &uparam->handle) ||
@@ -450,8 +470,6 @@ static int bus1_peer_ioctl_clone(struct bus1_peer *peer,
 	return 0;
 
 error:
-	bus1_handle_unref(export);
-	bus1_handle_unref(root);
 	if (clone_info)
 		bus1_peer_release(clone);
 	if (clone_file)
