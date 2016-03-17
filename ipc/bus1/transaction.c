@@ -392,6 +392,51 @@ error:
 	return r;
 }
 
+static void bus1_transaction_commit_one(struct bus1_transaction *transaction,
+					struct bus1_message *message,
+					u64 timestamp)
+{
+	struct bus1_peer_info *peer_info;
+	struct bus1_handle *handle;
+	struct bus1_peer *peer;
+	u64 id;
+
+	handle = message->transaction.handle;
+	peer = message->transaction.raw_peer;
+	bus1_active_lockdep_acquired(&peer->active);
+	peer_info = bus1_peer_dereference(peer);
+
+	message->transaction.handle = NULL;
+	message->transaction.raw_peer = NULL;
+
+	bus1_handle_inflight_install(&message->handles, peer,
+				     &transaction->handles, transaction->peer);
+
+	mutex_lock(&peer_info->lock);
+	if (bus1_queue_node_is_queued(&message->qnode)) {
+		id = bus1_handle_get_inorder_id(handle, timestamp);
+		if (id == BUS1_HANDLE_INVALID) {
+			bus1_message_deallocate_locked(message, peer_info);
+		} else {
+			bus1_handle_inflight_commit(&message->handles,
+						    timestamp);
+			/* this transfers ownerhip of @message to the queue */
+			if (bus1_queue_stage(&peer_info->queue,
+					     &message->qnode, timestamp))
+				bus1_peer_wake(peer);
+			message = NULL;
+		}
+	} else {
+		bus1_message_deallocate_locked(message, peer_info);
+	}
+	mutex_unlock(&peer_info->lock);
+
+	bus1_message_free(message);
+	bus1_handle_release_pinned(handle, peer_info);
+	bus1_handle_unref(handle);
+	bus1_peer_release(peer);
+}
+
 /**
  * bus1_transaction_commit() - commit a transaction
  * @transaction:	transaction to commit
@@ -416,10 +461,9 @@ void bus1_transaction_commit(struct bus1_transaction *transaction)
 {
 	struct bus1_peer_info *peer_info;
 	struct bus1_message *message, *list;
-	struct bus1_handle *handle;
 	struct bus1_peer *peer;
-	bool wake, silent;
 	u64 timestamp;
+	bool silent;
 
 	/* nothing to do for empty destination sets */
 	if (!transaction->entries)
@@ -453,17 +497,13 @@ void bus1_transaction_commit(struct bus1_transaction *transaction)
 		mutex_lock(&peer_info->lock);
 		timestamp = bus1_queue_sync(&peer_info->queue, timestamp);
 		timestamp = bus1_queue_tick(&peer_info->queue);
-		wake = bus1_queue_stage(&peer_info->queue, &message->qnode,
-					timestamp - 1);
-		mutex_unlock(&peer_info->lock);
-
-		if (wake)
+		if (bus1_queue_stage(&peer_info->queue, &message->qnode,
+				     timestamp - 1))
 			bus1_peer_wake(peer);
+		mutex_unlock(&peer_info->lock);
 
 		bus1_active_lockdep_released(&peer->active);
 	}
-
-	/* XXX: @timestamp vs handle->node->timestamp */
 
 	/*
 	 * We now queued our message on all destinations, and we're guaranteed
@@ -503,39 +543,8 @@ void bus1_transaction_commit(struct bus1_transaction *transaction)
 	 */
 	while ((message = list)) {
 		list = message->transaction.next;
-		handle = message->transaction.handle;
-		peer = message->transaction.raw_peer;
-		bus1_active_lockdep_acquired(&peer->active);
-		peer_info = bus1_peer_dereference(peer);
-
 		message->transaction.next = NULL;
-		message->transaction.handle = NULL;
-		message->transaction.raw_peer = NULL;
-
-		bus1_handle_inflight_install(&message->handles, peer,
-					     &transaction->handles,
-					     transaction->peer);
-		bus1_handle_inflight_commit(&message->handles, timestamp);
-
-		mutex_lock(&peer_info->lock);
-		if (bus1_queue_node_is_queued(&message->qnode)) {
-			/* this transfers ownerhip of @message to the queue */
-			wake = bus1_queue_stage(&peer_info->queue,
-						&message->qnode, timestamp);
-			message = NULL;
-		} else {
-			wake = false;
-			bus1_message_deallocate_locked(message, peer_info);
-		}
-		mutex_unlock(&peer_info->lock);
-
-		if (wake)
-			bus1_peer_wake(peer);
-
-		bus1_message_free(message);
-		bus1_handle_release_pinned(handle, peer_info);
-		bus1_handle_unref(handle);
-		bus1_peer_release(peer);
+		bus1_transaction_commit_one(transaction, message, timestamp);
 	}
 }
 
@@ -557,8 +566,8 @@ int bus1_transaction_commit_for_id(struct bus1_transaction *transaction,
 	struct bus1_message *message;
 	struct bus1_handle *handle;
 	struct bus1_peer *peer;
-	bool wake, cont;
-	u64 timestamp;
+	u64 timestamp, id;
+	bool cont;
 	int r;
 
 	cont = transaction->param->flags & BUS1_SEND_FLAG_CONTINUE;
@@ -593,16 +602,20 @@ int bus1_transaction_commit_for_id(struct bus1_transaction *transaction,
 	mutex_lock(&peer_info->lock);
 	timestamp = bus1_queue_sync(&peer_info->queue, timestamp);
 	timestamp = bus1_queue_tick(&peer_info->queue);
-	/* XXX: @timestamp vs. @handle->node->timestamp */
-	bus1_handle_inflight_commit(&message->handles, timestamp);
-	/* transfers message ownership to the queue */
-	wake = bus1_queue_stage(&peer_info->queue, &message->qnode, timestamp);
+	id = bus1_handle_get_inorder_id(handle, timestamp);
+	if (id == BUS1_HANDLE_INVALID) {
+		bus1_message_deallocate_locked(message, peer_info);
+		r = -ENXIO;
+	} else {
+		bus1_handle_inflight_commit(&message->handles, timestamp);
+		/* transfers message ownership to the queue */
+		if (bus1_queue_stage(&peer_info->queue, &message->qnode,
+				     timestamp))
+			bus1_peer_wake(peer);
+		message = NULL;
+		r = 0;
+	}
 	mutex_unlock(&peer_info->lock);
-
-	if (wake)
-		bus1_peer_wake(peer);
-
-	r = 0;
 
 exit:
 	if (r < 0 && cont) {
@@ -610,6 +623,7 @@ exit:
 			bus1_peer_wake(peer);
 		r = 0;
 	}
+	bus1_message_free(message);
 	bus1_handle_release_pinned(handle, peer_info);
 	bus1_handle_unref(handle);
 	bus1_peer_release(peer);
