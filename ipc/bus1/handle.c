@@ -387,6 +387,119 @@ bus1_handle_find_by_node(struct bus1_peer_info *peer_info,
 	return res;
 }
 
+/**
+ * bus1_handle_is_public() - check whether a handle is public
+ * @handle:		handle to check, or NULL
+ *
+ * A handle is considered public as soon as it was attached to its node. It
+ * will never leave that state again.
+ *
+ * Return: True if the node is public, false if not (or if NULL is passed).
+ */
+bool bus1_handle_is_public(struct bus1_handle *handle)
+{
+	/* private handles have: n_inflight == -1 */
+	return handle && atomic_read(&handle->n_inflight) >= 0;
+}
+
+static bool bus1_handle_has_id(struct bus1_handle *handle)
+{
+	/* true _iff_ the handle has been installed before */
+	return handle && handle->id != BUS1_HANDLE_INVALID;
+}
+
+/**
+ * bus1_handle_get_id() - get id of handle
+ * @handle:		handle to query
+ *
+ * This returns the ID of the handle @handle.
+ *
+ * Return: ID of @handle.
+ */
+u64 bus1_handle_get_id(struct bus1_handle *handle)
+{
+	WARN_ON(handle->id == BUS1_HANDLE_INVALID);
+	return handle->id;
+}
+
+/**
+ * bus1_handle_get_owner_id() - get id of node owner
+ * @handle:		handle to query
+ *
+ * This returns the ID of the owner of the underlying node that @handle is
+ * linked to. If @handle is the actualy owner handle, the ID is equivalent to
+ * the handle id.
+ *
+ * Return: ID of node owner @handle is linked to.
+ */
+u64 bus1_handle_get_owner_id(struct bus1_handle *handle)
+{
+	WARN_ON(handle->node->owner.id == BUS1_HANDLE_INVALID);
+	return handle->node->owner.id;
+}
+
+/**
+ * bus1_handle_get_inorder_id() - get handle ID based on global order
+ * @handle:		handle to query
+ * @timestamp:		timestamp to order against
+ *
+ * This is similar to bus1_handle_get_id(), but only returns the ID if the node
+ * was not destructed, yet. If the node was already destroyed, it will return
+ * BUS1_HANDLE_INVALID.
+ *
+ * Since transactions are asynchronous, there is no global sequence to order
+ * events. Therefore, the caller must provide their commit timestamp as
+ * @timestamp, and it is used to order againts a possible node destruction. In
+ * case it is lower than the node-destruction, the node is still valid
+ * regarding the caller's transaction, and as such the valid handle ID will be
+ * returned.
+ *
+ * Note that the caller *must* include the clock of the owner of the underlying
+ * node in their transaction. Otherwise, the timestamps will be incomparable.
+ *
+ * Return: Handle ID of @handle, or BUS1_HANDLE_INVALID if already destroyed.
+ */
+u64 bus1_handle_get_inorder_id(struct bus1_handle *handle, u64 timestamp)
+{
+	struct bus1_peer_info *peer_info;
+	struct bus1_peer *peer;
+	unsigned int seq;
+	u64 ts;
+
+	rcu_read_lock();
+	peer = rcu_dereference(handle->node->owner.holder);
+	if (!peer || !(peer_info = rcu_dereference(peer->info))) {
+		/*
+		 * Owner handles are reset *after* the transaction id has been
+		 * stored synchronously, and peer-info even after that. Hence,
+		 * we can safely read the transaction ID and all barriers are
+		 * provided by rcu.
+		 */
+		ts = handle->node->timestamp;
+	} else {
+		/*
+		 * Try reading the transaction id. We must synchronize via the
+		 * seqcount to guarantee stability across an invalidation
+		 * transaction.
+		 */
+		do {
+			seq = read_seqcount_begin(&peer_info->seqcount);
+			ts = handle->node->timestamp;
+		} while (read_seqcount_retry(&peer_info->seqcount, seq));
+	}
+	rcu_read_unlock();
+
+	/*
+	 * If the node has a commit timestamp set, and it is smaller than
+	 * @timestamp, it means the node destruction was committed before
+	 * @timestamp, as such the handle is invalid.
+	 */
+	if (ts > 0 && !(ts & 1) && ts <= timestamp)
+		return BUS1_HANDLE_INVALID;
+
+	return handle->id;
+}
+
 static struct bus1_peer *
 bus1_handle_lock_holder(struct bus1_handle *handle,
 			struct bus1_peer_info **infop)
@@ -629,119 +742,6 @@ static void bus1_handle_release_last(struct bus1_handle *handle,
 		bus1_handle_release_owner(handle, peer_info);
 	else
 		bus1_handle_release_holder(handle, peer_info);
-}
-
-/**
- * bus1_handle_is_public() - check whether a handle is public
- * @handle:		handle to check, or NULL
- *
- * A handle is considered public as soon as it was attached to its node. It
- * will never leave that state again.
- *
- * Return: True if the node is public, false if not (or if NULL is passed).
- */
-bool bus1_handle_is_public(struct bus1_handle *handle)
-{
-	/* private handles have: n_inflight == -1 */
-	return handle && atomic_read(&handle->n_inflight) >= 0;
-}
-
-static bool bus1_handle_has_id(struct bus1_handle *handle)
-{
-	/* true _iff_ the handle has been installed before */
-	return handle && handle->id != BUS1_HANDLE_INVALID;
-}
-
-/**
- * bus1_handle_get_id() - get id of handle
- * @handle:		handle to query
- *
- * This returns the ID of the handle @handle.
- *
- * Return: ID of @handle.
- */
-u64 bus1_handle_get_id(struct bus1_handle *handle)
-{
-	WARN_ON(handle->id == BUS1_HANDLE_INVALID);
-	return handle->id;
-}
-
-/**
- * bus1_handle_get_owner_id() - get id of node owner
- * @handle:		handle to query
- *
- * This returns the ID of the owner of the underlying node that @handle is
- * linked to. If @handle is the actualy owner handle, the ID is equivalent to
- * the handle id.
- *
- * Return: ID of node owner @handle is linked to.
- */
-u64 bus1_handle_get_owner_id(struct bus1_handle *handle)
-{
-	WARN_ON(handle->node->owner.id == BUS1_HANDLE_INVALID);
-	return handle->node->owner.id;
-}
-
-/**
- * bus1_handle_get_inorder_id() - get handle ID based on global order
- * @handle:		handle to query
- * @timestamp:		timestamp to order against
- *
- * This is similar to bus1_handle_get_id(), but only returns the ID if the node
- * was not destructed, yet. If the node was already destroyed, it will return
- * BUS1_HANDLE_INVALID.
- *
- * Since transactions are asynchronous, there is no global sequence to order
- * events. Therefore, the caller must provide their commit timestamp as
- * @timestamp, and it is used to order againts a possible node destruction. In
- * case it is lower than the node-destruction, the node is still valid
- * regarding the caller's transaction, and as such the valid handle ID will be
- * returned.
- *
- * Note that the caller *must* include the clock of the owner of the underlying
- * node in their transaction. Otherwise, the timestamps will be incomparable.
- *
- * Return: Handle ID of @handle, or BUS1_HANDLE_INVALID if already destroyed.
- */
-u64 bus1_handle_get_inorder_id(struct bus1_handle *handle, u64 timestamp)
-{
-	struct bus1_peer_info *peer_info;
-	struct bus1_peer *peer;
-	unsigned int seq;
-	u64 ts;
-
-	rcu_read_lock();
-	peer = rcu_dereference(handle->node->owner.holder);
-	if (!peer || !(peer_info = rcu_dereference(peer->info))) {
-		/*
-		 * Owner handles are reset *after* the transaction id has been
-		 * stored synchronously, and peer-info even after that. Hence,
-		 * we can safely read the transaction ID and all barriers are
-		 * provided by rcu.
-		 */
-		ts = handle->node->timestamp;
-	} else {
-		/*
-		 * Try reading the transaction id. We must synchronize via the
-		 * seqcount to guarantee stability across an invalidation
-		 * transaction.
-		 */
-		do {
-			seq = read_seqcount_begin(&peer_info->seqcount);
-			ts = handle->node->timestamp;
-		} while (read_seqcount_retry(&peer_info->seqcount, seq));
-	}
-	rcu_read_unlock();
-
-	/*
-	 * If the node has a commit timestamp set, and it is smaller than
-	 * @timestamp, it means the node destruction was committed before
-	 * @timestamp, as such the handle is invalid.
-	 */
-	if (ts > 0 && !(ts & 1) && ts <= timestamp)
-		return BUS1_HANDLE_INVALID;
-
-	return handle->id;
 }
 
 static struct bus1_handle *bus1_handle_acquire(struct bus1_handle *handle)
