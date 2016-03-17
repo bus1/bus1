@@ -43,10 +43,12 @@ struct test {
 };
 
 int test_api(void);
+int test_io(void);
 int test_peer(void);
 
 static const struct test tests[] = {
 	{ .name = "api", .main = test_api },
+	{ .name = "io", .main = test_io },
 	{ .name = "peer", .main = test_peer },
 };
 
