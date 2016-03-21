@@ -1,0 +1,282 @@
+<?xml version='1.0'?> <!--*-nxml-*-->
+<!DOCTYPE refentry PUBLIC "-//OASIS//DTD DocBook XML V4.2//EN"
+        "http://www.oasis-open.org/docbook/xml/4.2/docbookx.dtd">
+
+<refentry id="bus1.peer">
+
+  <refentryinfo>
+    <title>bus1.peer</title>
+    <productname>bus1.peer</productname>
+  </refentryinfo>
+
+  <refmeta>
+    <refentrytitle>bus1.peer</refentrytitle>
+    <manvolnum>7</manvolnum>
+  </refmeta>
+
+  <refnamediv>
+    <refname>bus1.peer</refname>
+    <refpurpose>bus1 peer</refpurpose>
+  </refnamediv>
+
+  <refsect1>
+    <title>Description</title>
+    <para>
+    </para>
+  </refsect1>
+
+  <refsect1>
+    <title>Initializing a peer</title>
+    <para>
+      A peer created by calling <function>open()</function> on
+      <filename>/dev/bus1</filename> needs to be initialized using the
+      <constant>BUS1_CMD_PEER_INIT</constant> ioctl. The ioctl takes a
+      <type>struct bus1_cmd_peer_init</type> struct as argument.
+    </para>
+
+    <programlisting>
+struct bus1_cmd_peer_init {
+  __u64 flags;
+  __u64 pool_size;
+};
+    </programlisting>
+
+    <para>The fields in this structure are described below</para>
+
+    <variablelist>
+      <varlistentry>
+        <term><varname>flags</varname></term>
+        <listitem><para>
+          Flags to apply to this peer. This must be set to
+          <constant>0</constant>.
+        </para></listitem>
+      </varlistentry>
+
+      <varlistentry>
+        <term><varname>pool_size</varname></term>
+        <listitem><para>
+          The size of the pool in bytes to create for this peer.
+        </para></listitem>
+      </varlistentry>
+
+    </variablelist>
+  </refsect1>
+
+  <refsect1>
+    <title>Querying a peer</title>
+    <para>
+      The parameters of an existing peer can be queried by calling the
+      <constant>BUS1_CMD_PEER_QUERY</constant> ioctl. The ioctl takes a
+      <type>struct bus1_cmd_peer_init</type> struct as argument.
+    </para>
+
+    <programlisting>
+struct bus1_cmd_peer_init {
+  __u64 flags;
+  __u64 pool_size;
+};
+    </programlisting>
+
+    <para>The fields in this structure are described below</para>
+
+    <variablelist>
+      <varlistentry>
+        <term><varname>flags</varname></term>
+        <listitem><para>
+          Flags to apply to this peer. This must be set to
+          <constant>0</constant>.
+        </para></listitem>
+      </varlistentry>
+
+      <varlistentry>
+        <term><varname>pool_size</varname></term>
+        <listitem><para>
+          The size of the pool in bytes to create for this peer. This must be
+          set to <constant>0</constant> and is set to the existing pool size on
+          return.
+        </para></listitem>
+      </varlistentry>
+
+    </variablelist>
+  </refsect1>
+
+  <refsect1>
+    <title>Resetting a peer</title>
+    <para>
+      An existing peer can be reset to a pristine state by calling the
+      <constant>BUS1_CMD_PEER_RESET</constant> ioctl. All slices, handles, nodes
+      and pending messages are dropped. The ioctl takes a
+      <type>struct bus1_cmd_peer_reset</type> struct as argument.
+    </para>
+
+    <programlisting>
+struct bus1_cmd_peer_reset {
+  __u64 flags;
+  __u64 handle;
+};
+    </programlisting>
+
+    <para>The fields in this structure are described below</para>
+
+    <variablelist>
+      <varlistentry>
+        <term><varname>flags</varname></term>
+        <listitem><para>
+          Flags to apply to this peer. This must be set to
+          <constant>0</constant>.
+        </para></listitem>
+      </varlistentry>
+
+      <varlistentry>
+        <term><varname>handle</varname></term>
+        <listitem><para>
+          The handle to a node to preserve during reset. This may be set to
+          <constant>BUS1_HANDLE_INVALID</constant> if all handles should be
+          dropped.
+        </para></listitem>
+      </varlistentry>
+
+    </variablelist>
+  </refsect1>
+
+
+  <refsect1>
+    <title>Cloning a peer</title>
+    <para>
+      A new peer can be created from an existing one by calling the
+      <constant>BUS1_CMD_PEER_CLONE</constant> ioctl on a file-descriptor
+      representing the existing peer. A root node is created for the new peer
+      and a handle to this node is installed in both the new and the existing
+      peer. The ioctl takes a <type>struct bus1_cmd_peer_clone</type> struct as
+      argument.
+    </para>
+
+    <programlisting>
+struct bus1_cmd_peer_clone {
+  __u64 flags;
+  __u64 pool_size;
+  __u64 handle;
+  __u64 fd;
+};
+    </programlisting>
+
+    <para>The fields in this structure are described below</para>
+
+    <variablelist>
+      <varlistentry>
+        <term><varname>flags</varname></term>
+        <listitem><para>
+          Flags to apply to the new peer. This must be set to
+          <constant>0</constant>.
+        </para></listitem>
+      </varlistentry>
+
+      <varlistentry>
+        <term><varname>pool_size</varname></term>
+        <listitem><para>
+          The size of the pool in bytes to create for the new peer.
+        </para></listitem>
+      </varlistentry>
+
+      <varlistentry>
+        <term><varname>handle</varname></term>
+        <listitem><para>
+          The handle installed in the existing peer for the root node in the new
+          peer. This must be set to <constant>BUS1_HANDLE_INVALID</constant> and
+          is set to the new handle on return.
+        </para></listitem>
+      </varlistentry>
+
+      <varlistentry>
+        <term><varname>fd</varname></term>
+        <listitem><para>
+          The file-descriptor representing the new peer. This must be set to
+          <constant>-1</constant> and is set to the new file-descriptor on
+          return.
+        </para></listitem>
+      </varlistentry>
+
+    </variablelist>
+  </refsect1>
+
+  <refsect1>
+    <title>Return value</title>
+    <para>
+      On success, all mentioned ioctl commands return <errorcode>0</errorcode>;
+      on error, <errorcode>-1</errorcode> is returned, and
+      <varname>errno</varname> is set to indicate the error.
+      If the issued ioctl is illegal for the file descriptor used,
+      <varname>errno</varname> will be set to <constant>ENOTTY</constant>.
+    </para>
+
+<!-- XXX
+    <refsect2>
+      <title>
+        <constant>KDBUS_CMD_FREE</constant> may fail with the following
+        errors
+      </title>
+
+      <variablelist>
+        <varlistentry>
+          <term><constant>ENXIO</constant></term>
+          <listitem><para>
+            No peer slice found at given offset.
+          </para></listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><constant>EINVAL</constant></term>
+          <listitem><para>
+            Invalid flags provided.
+          </para></listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><constant>EINVAL</constant></term>
+          <listitem><para>
+            The offset is valid, but the user is not allowed to free the slice.
+            This happens, for example, if the offset was retrieved with
+            <constant>KDBUS_RECV_PEEK</constant>.
+          </para></listitem>
+        </varlistentry>
+      </variablelist>
+    </refsect2>
+-->
+  </refsect1>
+
+  <refsect1>
+    <title>See Also</title>
+    <simplelist type="inline">
+      <member>
+        <citerefentry>
+          <refentrytitle>bus1</refentrytitle>
+          <manvolnum>7</manvolnum>
+        </citerefentry>
+      </member>
+      <member>
+        <citerefentry>
+          <refentrytitle>bus1.peer</refentrytitle>
+          <manvolnum>7</manvolnum>
+        </citerefentry>
+      </member>
+      <member>
+        <citerefentry>
+          <refentrytitle>bus1.message</refentrytitle>
+          <manvolnum>7</manvolnum>
+        </citerefentry>
+      </member>
+      <member>
+        <citerefentry>
+          <refentrytitle>mmap</refentrytitle>
+            <manvolnum>2</manvolnum>
+          </citerefentry>
+        </member>
+      <member>
+        <citerefentry>
+          <refentrytitle>munmap</refentrytitle>
+          <manvolnum>2</manvolnum>
+        </citerefentry>
+      </member>
+    </simplelist>
+  </refsect1>
+</refentry>

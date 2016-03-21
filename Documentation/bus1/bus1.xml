@@ -24,16 +24,16 @@
     <para>
       bus1 is an inter-process communication bus system controlled by the
       kernel. It provides user-space with an API to create peers and send
-      unicast and multicast messages to one, or many, peers. It does not enforce
-      any layout on the transmitted data, but only provides the transport layer
-      used for message interchange between peers.
+      unicast and multicast messages between them. It does not enforce any
+      layout on the transmitted data, but only provides the transport layer used
+      for message interchange between peers.
     </para>
     <para>
       This set of man-pages gives a comprehensive overview of the kernel-level
       API, with all ioctl commands, associated structs and bit masks. However,
       most people will not use this API level directly, but rather let one of
-      the high-level abstraction libraries help them integrate bus
-      functionality into their applications.
+      the high-level abstraction libraries help them integrate bus functionality
+      into their applications.
     </para>
   </refsect1>
 
@@ -53,11 +53,9 @@
     <refsect2>
       <title>Peer</title>
       <para>
-        A peer is created by opening <filename>/dev/bus1</filename> or by
-        inheriting from an existing file descriptor. Every peer has potentially
-        several nodes and handles to nodes owned by other peers. A peer can
-        address messages to handles it has and will receive messages addressed
-        to handles of nodes it created. See
+        A peer is a client on the bus that can send or receive messages. A peer
+        is represented by a file-descriptor created by opening
+        <filename>/dev/bus1</filename> or by cloning an existing peer. See
         <citerefentry>
           <refentrytitle>bus1.peer</refentrytitle>
           <manvolnum>7</manvolnum>
@@ -69,12 +67,9 @@
     <refsect2>
       <title>Node</title>
       <para>
-        A peer may create nodes. Any message is addressed to nodes, and the peer
-        that owns a node receives all the messages destined to that node. Nodes
-        are referenced by their handles, and when a node no longer has any
-        handles it is destroyed and the owner is notified. A node can also be
-        destroyed explicitly by its owner, in which case all the owners of
-        handles to the node are notified and the handles dropped. See
+        A node is a representation of a generic object owend by a peer. A peer
+        may own several nodes and their primary function is to be the recipient
+        of messages. See
         <citerefentry>
           <refentrytitle>bus1.node</refentrytitle>
           <manvolnum>7</manvolnum>
@@ -86,12 +81,14 @@
     <refsect2>
       <title>Handle</title>
       <para>
-        A handle is a reference to a node. When creating a node, a handle to
-        that node is automatically created and installed in the owner peer.
-        Handles are local to each peer, and they are referenced by handle
-        numbers which are local to a given peer. Handles can be copied from one
-        peer to another, by sending them with regular bus messages. Note that
-        this may imply a trust relationship to the new owner. See
+        A handle is a reference to a node. A peer may hold several handles, both
+        to nodes owned by itself and nodes owned by other peers. The destination
+        of a message is always a handle, meaning the message will be delivered
+        to the owner of the node the handle is referencing. A handle is local to
+        its holder, but a copy of a handle may be passed from one peer to
+        another along with a message. A handle is the only means by which to
+        reference a node and it is only possible for a peer to send a message
+        to another if it holds a handle to one of the other's peers. See
         <citerefentry>
           <refentrytitle>bus1.node</refentrytitle>
           <manvolnum>7</manvolnum>
@@ -103,10 +100,10 @@
     <refsect2>
       <title>Pool</title>
       <para>
-        Each peer allocates a piece of shmem-backed memory that is
-        used to receive messages. It is never used for sending. In order to
-        access that memory, an application must <function>mmap()</function> it
-        into its address space. See
+        Each peer allocates a piece of shmem-backed memory that is used to
+        receive messages. It is never used for sending. In order to access that
+        memory, an application must <function>mmap()</function> it into its
+        address space. See
         <citerefentry>
           <refentrytitle>bus1.pool</refentrytitle>
           <manvolnum>7</manvolnum>
@@ -134,21 +131,12 @@
   </refsect1>
 
   <refsect1>
-    <title>Metadata</title>
-    <para>
-      Each message comes with the uid, gid, pid and tid of the sending peer. The
-      uid and gid is collected when the file is opened and pid and tid is
-      collected when the message is sent.
-    </para>
-  </refsect1>
-
-  <refsect1>
     <title>The ioctl interface</title>
 
     <para>
-      As stated in the 'synopsis' section above, application developers are
-      strongly encouraged to use bus1 through a the high-level abstraction
-      library, rather than using the low-level API directly.
+       As stated in the 'synopsis' section above, application developers are
+       strongly encouraged to use bus1 through a the high-level abstraction
+       library, rather than using the low-level API directly.
     </para>
 
     <para>
@@ -162,11 +150,13 @@
         <refentrytitle>open</refentrytitle>
         <manvolnum>2</manvolnum>
       </citerefentry>
-      on <filename>/dev/bus1</filename>.
+      on <filename>/dev/bus1</filename> or by the
+      <constant>BUS1_CMD_PEER_CLONE</constant> ioctl described below.
     </para>
+
     <para>
-      Following is a list of all the ioctls, along with the command structs
-      they must be used with.
+      Following is a list of all the ioctls, along with the command structs they
+      must be used with.
     </para>
 
     <informaltable frame="none">
@@ -180,9 +170,49 @@
         </thead>
         <tbody>
           <row>
-            <entry><constant>0x40189500</constant></entry>
+            <entry><constant>0x0</constant></entry> <!-- XXX -->
+            <entry><constant>BUS1_CMD_PEER_INIT</constant></entry>
+            <entry><type>struct bus1_cmd_peer_init *</type></entry>
+          </row>
+          <row>
+            <entry><constant>0x0</constant></entry>
+            <entry><constant>BUS1_CMD_PEER_QUERY</constant></entry>
+            <entry><type>struct bus1_cmd_peer_init *</type></entry>
+          </row>
+          <row>
+            <entry><constant>0x0</constant></entry>
+            <entry><constant>BUS1_CMD_PEER_RESET</constant></entry>
+            <entry><type>struct bus1_cmd_peer_reset *</type></entry>
+          </row>
+          <row>
+            <entry><constant>0x0</constant></entry>
+            <entry><constant>BUS1_CMD_PEER_CLONE</constant></entry>
+            <entry><type>struct bus1_cmd_peer_clone *</type></entry>
+          </row>
+          <row>
+            <entry><constant>0x0</constant></entry>
+            <entry><constant>BUS1_CMD_NODE_DESTROY</constant></entry>
+            <entry><type>__u64</type></entry>
+          </row>
+          <row>
+            <entry><constant>0x0</constant></entry>
+            <entry><constant>BUS1_CMD_HANDLE_RELEASE</constant></entry>
+            <entry><type>__u64</type></entry>
+          </row>
+          <row>
+            <entry><constant>0x0</constant></entry>
+            <entry><constant>BUS1_CMD_SLICE_RELEASE</constant></entry>
+            <entry><type>__u64</type></entry>
+          </row>
+          <row>
+            <entry><constant>0x0</constant></entry>
             <entry><constant>BUS1_CMD_SEND</constant></entry>
             <entry><type>struct bus1_cmd_send *</type></entry>
+          </row>
+          <row>
+            <entry><constant>0x0</constant></entry>
+            <entry><constant>BUS1_CMD_RECV</constant></entry>
+            <entry><type>struct bus1_cmd_recv *</type></entry>
           </row>
         </tbody>
       </tgroup>
@@ -195,11 +225,164 @@
   </refsect1>
 
   <refsect1>
+    <title>Return values</title>
+
+    <para>
+      On success all bus1 ioctls return <errorcode>0</errorcode>; on failure,
+      <errorcode>-1</errorcode> is returned and <varname>errno</varname> set to
+      indicate the error.
+    </para>
+
+    <refsect2>
+      <title>
+        The following error codes are well defined and used throughout
+      </title>
+
+<!-- XXX: move the non-generic error-codes into their respective man-pages -->
+
+      <variablelist>
+        <varlistentry>
+          <term><constant>ENOMEM</constant></term>
+          <listitem><para>
+            Out of kernel memory.
+          </para></listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><constant>EFAULT</constant></term>
+          <listitem><para>
+            Cannot acces ioctl parameters.
+          </para></listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><constant>EINVAL</constant></term>
+          <listitem><para>
+            Invalid parameters.
+          </para></listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><constant>EMSGSIZE</constant></term>
+          <listitem><para>
+            Parameters are too large or too small.
+          </para></listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><constant>ENOTTY</constant></term>
+          <listitem><para>
+            Unknown ioctl.
+          </para></listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><constant>ENXIO</constant></term>
+          <listitem><para>
+            Destination handle does not exist.
+          </para></listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><constant>ESHUTDOWN</constant></term>
+          <listitem><para>
+            Local peer was already disconnected.
+          </para></listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><constant>ENOTCONN</constant></term>
+          <listitem><para>
+            Local peer is not initialized.
+          </para></listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><constant>EISCONN</constant></term>
+          <listitem><para>
+            Local peer is already initialized.
+          </para></listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><constant>EXFULL</constant></term>
+          <listitem><para>
+            Target memory pool is full.
+          </para></listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><constant>ESTALE</constant></term>
+          <listitem><para>
+            Referenced node has no local handles.
+          </para></listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><constant>EINPROGRESS</constant></term>
+          <listitem><para>
+            Node destruction already in progress.
+          </para></listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><constant>EDQUOT</constant></term>
+          <listitem><para>
+            Quota exceeded.
+          </para></listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><constant>EBADFD</constant></term>
+          <listitem><para>
+            Invalid file-descriptor.
+          </para></listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><constant>EPERM</constant></term>
+          <listitem><para>
+            Permission denied.
+          </para></listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><constant>EAGAIN</constant></term>
+          <listitem><para>
+            No messages ready to be dequeued.
+          </para></listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><constant>ETOOMANYREFS</constant></term>
+          <listitem><para>
+            User has too many in-flight file-descriptors.
+          </para></listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><constant>EOPNOTSUPP</constant></term>
+          <listitem><para>
+            Could not pass file-descriptor of unsupported type.
+          </para></listitem>
+        </varlistentry>
+
+      </variablelist>
+    </refsect2>
+  </refsect1>
+
+  <refsect1>
     <title>See Also</title>
     <simplelist type="inline">
       <member>
         <citerefentry>
           <refentrytitle>bus1.peer</refentrytitle>
+          <manvolnum>7</manvolnum>
+        </citerefentry>
+      </member>
+      <member>
+        <citerefentry>
+          <refentrytitle>bus1.node</refentrytitle>
           <manvolnum>7</manvolnum>
         </citerefentry>
       </member>

@@ -1,5 +1,9 @@
 DOCS :=	\
-	bus1.xml
+	bus1.xml		\
+	bus1.message.xml	\
+	bus1.node.xml		\
+	bus1.peer.xml		\
+	bus1.pool.xml
 
 XMLFILES := $(addprefix $(obj)/,$(DOCS))
 MANFILES := $(patsubst %.xml, %.7, $(XMLFILES))

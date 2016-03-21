@@ -21,7 +21,7 @@
 /**
  * Error Codes
  *
- * All operations performed on bus1 handles return negative error codes. The
+ * All operations performed on bus1 fds return negative error codes. The
  * following error codes are well-defined and used all over the place:
  *
  *   ENOMEM:            out of kernel memory
@@ -30,19 +30,18 @@
  *   EMSGSIZE:          ioctl parameters are too small/large
  *   ENOTTY:            unknown ioctl
  *   ENXIO:             destination handle does not exist
- *   ESHUTDOWN:         local client was already disconnected
- *   ENOTCONN:          local client is not connected, yet
- *   EISCONN:           local client is already connected
+ *   ESHUTDOWN:         local peer was already disconnected
+ *   ENOTCONN:          local peer is not initialized, yet
+ *   EISCONN:           local peer is already initialized
  *   EXFULL:            target memory pool is full
- *   ENOTUNIQ:          argument is not unique
  *   ESTALE:            referenced node has no local handles
  *   EINPROGRESS:       node destruction already in progress
  *   EDQUOT:            quota exceeded
  *   EBADF:             invalid file-descriptor
  *   EPERM:             permission denied
  *   EAGAIN:            no messages ready to be dequeued
- *   ETOOMANYREFS:      user has too many in-flight file-descriptor
- *   EOPNOTSUPP:        failed to pass invalid file-descriptor type
+ *   ETOOMANYREFS:      user has too many in-flight file-descriptors
+ *   EOPNOTSUPP:        could not pass file-descriptor of unsupported type
  */
 
 #include <linux/ioctl.h>

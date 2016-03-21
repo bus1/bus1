@@ -1,0 +1,240 @@
+<?xml version='1.0'?> <!--*-nxml-*-->
+<!DOCTYPE refentry PUBLIC "-//OASIS//DTD DocBook XML V4.2//EN"
+        "http://www.oasis-open.org/docbook/xml/4.2/docbookx.dtd">
+
+<refentry id="bus1.pool">
+
+  <refentryinfo>
+    <title>bus1.pool</title>
+    <productname>bus1.pool</productname>
+  </refentryinfo>
+
+  <refmeta>
+    <refentrytitle>bus1.pool</refentrytitle>
+    <manvolnum>7</manvolnum>
+  </refmeta>
+
+  <refnamediv>
+    <refname>bus1.pool</refname>
+    <refpurpose>bus1 pool</refpurpose>
+  </refnamediv>
+
+  <refsect1>
+    <title>Description</title>
+    <para>
+      A pool for received message payloads is installed for every
+      <emphasis>peer</emphasis>, and is sized according to the information
+      stored in the <varname>pool_size</varname> member of
+      <type>struct bus_cmd_peer_init</type> or
+      <type>struct bus1_cmd_peer_clone</type>
+      when calling <constant>BUS1_CMD_PEER_INIT</constant> or
+      <constant>BUS1_CMD_PEER_CLONE</constant>, respectively. Internally, the
+      pool is segmented into <emphasis>slices</emphasis>, each referenced by its
+      <emphasis>offset</emphasis> in the pool, expressed in <type>bytes</type>.
+      See
+      <citerefentry>
+        <refentrytitle>bus1.peer</refentrytitle>
+        <manvolnum>7</manvolnum>
+      </citerefentry>
+      for more information about <constant>BUS1_CMD_PEER_INIT</constant> and
+      <constant>BUS1_CMD_PEER_CLONE</constant>.
+    </para>
+
+    <para>
+      The pool is written to by the kernel when one of the following
+      <emphasis>ioctls</emphasis> is issued:
+
+      <variablelist>
+        <varlistentry>
+          <term><constant>BUS1_CMD_SEND</constant></term>
+          <listitem><para>
+            ... to instantiate the message payload
+          </para></listitem>
+        </varlistentry>
+        <varlistentry>
+          <term><constant>BUS1_CMD_RECV</constant></term>
+          <listitem><para>
+            ... to instantiate the file-descriptor and handle numbers passed
+            with a message
+          </para></listitem>
+        </varlistentry>
+      </variablelist>
+
+    </para>
+    <para>
+      The <varname>offset</varname> field returned by
+      <constant>BUS1_CMD_RECV</constant> describes the offset inside the pool.
+      In order to make the slice available for subsequent calls,
+      <constant>BUS1_CMD_SLICE_RELEASE</constant> has to be called on that
+      offset (see below). Otherwise, the pool will fill up, and the peer will
+      not be able to receive any more information through its pool.
+    </para>
+  </refsect1>
+
+  <refsect1>
+    <title>Pool slice allocation</title>
+    <para>
+      Pool slices are allocated by the kernel in order to deliver messages to a
+      peer. Allocation of pool slices cannot be initiated by userspace.
+    </para>
+    <para>
+      In order to protect against peers filling up each other's pools, a
+      per-user quota is applied to the slice allocation. Once a slice has been
+      returned to userspace from a <constant>BUS1_CMD_RECV</constant> call, the
+      slice is owned by the receiving peer and as such is not subject to any
+      quota. The remaning space in the pool is partitioned up by considering
+      that at any point in time a given user may use up to half the available
+      space in the pool not used by any other user.
+    </para>
+  </refsect1>
+
+  <refsect1>
+    <title>Accessing the pool memory</title>
+    <para>
+      Memory in the pool is read-only for userspace and may only be written
+      to by the kernel. To read from the pool memory, the caller is expected to
+      <citerefentry>
+        <refentrytitle>mmap</refentrytitle>
+        <manvolnum>2</manvolnum>
+      </citerefentry>
+      the buffer into its task, like this:
+    </para>
+    <programlisting>
+uint8_t *buf = mmap(NULL, size, PROT_READ, MAP_SHARED, peer_fd, 0);
+    </programlisting>
+
+    <para>
+      In order to map the entire pool, the <varname>size</varname> parameter in
+      the example above should be set to the value of the
+      <varname>pool_size</varname> member of
+      <type>struct bus1_cmd_peer_init</type> or
+      <type>struct bus1_cmd_peer_clone</type> when
+      <constant>BUS1_CMD_PEER_INIT</constant> or
+      <constant>BUS1_CMD_PEER_CLONE</constant> was employed to create the peer
+      (see above).
+    </para>
+
+    <para>
+      The <emphasis>file descriptor</emphasis> used to map the memory must be
+      the one that was used to create the <emphasis>peer</emphasis>.
+      In other words, the one that was used to call
+      <constant>BUS1_CMD_PEER_INIT</constant>, or the one returned as the
+      <varname>fd</varname> member of <type>struct bus1_cmd_peer_clone</type>
+      when <constant>BUS1_CMD_PEER_CLONE</constant> was used to create the peer.
+      See
+      <citerefentry>
+        <refentrytitle>bus1.peer</refentrytitle>
+        <manvolnum>7</manvolnum>
+      </citerefentry>
+      for more details.
+    </para>
+
+    <para>
+      Alternatively, instead of mapping the entire pool buffer, only parts
+      of it can be mapped. Every bus1 command that returns an
+      <emphasis>offset</emphasis> (see above) also reports a
+      <emphasis>size</emphasis> along with it, so programs can be written
+      in a way that it only maps portions of the pool to access a specific
+      <emphasis>slice</emphasis>.
+    </para>
+
+    <para>
+      When access to the pool memory is no longer needed, programs should
+      call <function>munmap()</function> on the pointer returned by
+      <function>mmap()</function>.
+    </para>
+  </refsect1>
+
+  <refsect1>
+    <title>Freeing pool slices</title>
+    <para>
+      The <constant>BUS1_CMD_SLICE_RELEASE</constant> ioctl is used to free a
+      slice inside the pool, describing an offset that was returned in an
+      <varname>offset</varname> field of another ioctl struct.
+      The <constant>BUS1_CMD_SLICE_RELEASE</constant> command takes a
+      <type>__u64</type> as argument, which is the offset to the slice being
+      freed.
+    </para>
+  </refsect1>
+
+  <refsect1>
+    <title>Return value</title>
+    <para>
+      On success, all mentioned ioctl commands return <errorcode>0</errorcode>;
+      on error, <errorcode>-1</errorcode> is returned, and
+      <varname>errno</varname> is set to indicate the error.
+      If the issued ioctl is illegal for the file descriptor used,
+      <varname>errno</varname> will be set to <constant>ENOTTY</constant>.
+    </para>
+
+<!-- XXX
+    <refsect2>
+      <title>
+        <constant>KDBUS_CMD_FREE</constant> may fail with the following
+        errors
+      </title>
+
+      <variablelist>
+        <varlistentry>
+          <term><constant>ENXIO</constant></term>
+          <listitem><para>
+            No pool slice found at given offset.
+          </para></listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><constant>EINVAL</constant></term>
+          <listitem><para>
+            Invalid flags provided.
+          </para></listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><constant>EINVAL</constant></term>
+          <listitem><para>
+            The offset is valid, but the user is not allowed to free the slice.
+            This happens, for example, if the offset was retrieved with
+            <constant>KDBUS_RECV_PEEK</constant>.
+          </para></listitem>
+        </varlistentry>
+      </variablelist>
+    </refsect2>
+-->
+  </refsect1>
+
+  <refsect1>
+    <title>See Also</title>
+    <simplelist type="inline">
+      <member>
+        <citerefentry>
+          <refentrytitle>bus1</refentrytitle>
+          <manvolnum>7</manvolnum>
+        </citerefentry>
+      </member>
+      <member>
+        <citerefentry>
+          <refentrytitle>bus1.peer</refentrytitle>
+          <manvolnum>7</manvolnum>
+        </citerefentry>
+      </member>
+      <member>
+        <citerefentry>
+          <refentrytitle>bus1.message</refentrytitle>
+          <manvolnum>7</manvolnum>
+        </citerefentry>
+      </member>
+      <member>
+        <citerefentry>
+          <refentrytitle>mmap</refentrytitle>
+            <manvolnum>2</manvolnum>
+          </citerefentry>
+        </member>
+      <member>
+        <citerefentry>
+          <refentrytitle>munmap</refentrytitle>
+          <manvolnum>2</manvolnum>
+        </citerefentry>
+      </member>
+    </simplelist>
+  </refsect1>
+</refentry>
