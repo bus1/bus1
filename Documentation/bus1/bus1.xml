@@ -86,9 +86,7 @@
         of a message is always a handle, meaning the message will be delivered
         to the owner of the node the handle is referencing. A handle is local to
         its holder, but a copy of a handle may be passed from one peer to
-        another along with a message. A handle is the only means by which to
-        reference a node and it is only possible for a peer to send a message
-        to another if it holds a handle to one of the other's peers. See
+        another along with a message. See
         <citerefentry>
           <refentrytitle>bus1.node</refentrytitle>
           <manvolnum>7</manvolnum>

@@ -22,19 +22,422 @@
   <refsect1>
     <title>Description</title>
     <para>
+      A bus1 message is used to send data or notifications between peers. A data
+      message consists of payload of a logical byte stream of arbitrary size,
+      potentially along with handles and file descriptors. No restriction is
+      placed on the format of the payload.
+    </para>
+  </refsect1>
+
+  <refsect1>
+    <title>Message order</title>
+    <para>
+      Messages are globally ordered to ensure that the order of received
+      messages are consistent between peers and that causality is respected.
+      Consistency means that any two peers that receive any pair of the same two
+      messages are guaranteed to receive them in the same order. Causality
+      means that any message is ordered after any event that may have caused the
+      message to be sent. E.g., if one message is sent before another, they are
+      ordered accordingly, or if one message is received before another is sent
+      they are also ordered accordingly.
+    </para>
+
+    <para>
+      Note, however, that whilst a message order is guaranteed, messages are not
+      delivered instantaneously. I.e., there is no guarantee that a message can
+      be received the moment it has been sent. The time between send and receive
+      is guaranteed to be finite and in practice will be very short.
+    </para>
+  </refsect1>
+
+  <refsect1>
+    <title>Metadata</title>
+    <para>
+      The kernel ammends all data messages with the <varname>uid</varname>,
+      <varname>gid</varname>, <varname>pid</varname> and <varname>tid</varname>
+      of the sending peer. The two former were collected when the sending peer
+      was created and the two latter were collected from the sending peer when
+      the message was sent.
+    </para>
+  </refsect1>
+
+  <refsect1>
+    <title>Quotas</title>
+    <para>
+      Any resources used by in-flight messages are subject to per-user quotas,
+      accounted on the sending user. The number of in-flight file descriptors
+      are subject to a global per-user quota, irrespective of the destination,
+      but the other quotas apply per pair of sending user and destination peer.
+    </para>
+
+    <para>
+      In-flight file descriptors are limited in the same way as they are for
+      UDS, though the accounting is distinct: A user is allowed the same number
+      of in-flight file descriptors as it is allowed open file descriptors.
+    </para>
+
+    <para>
+      The total number of in-flight messages as well as in-flight handles
+      destined to a given peer are both limited by constants. The total amount
+      of available pool-space for in-flight messages is simply the amount of
+      pool-space not used by received messages.
+    </para>
+
+    <para>
+      For both messages, handles and pool-size the amount of the resource a
+      given user may consume is taken to be half of what is not used by anyone
+      else. By way of example, if the receiveng peer has a pool-size of 1024kB,
+      and 128kB is currently used by messages that are already received, and
+      four users have used 128kB each, that means that from the point of view
+      of each of the users the ammount of pool-space not used by anyone else is
+      512kB so they are allowed to consume up to 256kB, or in other words they
+      have 128kB left of their quota. Note however, that the moment a user uses
+      more of the pool the computation changes, so whilst the next user to send
+      a message is guaranteed to be allowed to send a 128kB message, it is not
+      the case that each user is guaranteed the same (in this example that would
+      require more space than the pool has available).
     </para>
   </refsect1>
 
   <refsect1>
     <title>Sending messages</title>
     <para>
+      Messages are passed to the kernel with the
+      <constant>BUS1_CMD_SEND</constant> ioctl. The kernel delivers the message
+      to the owners of the nodes referenced by the destination handles. Sending
+      messages without holding a handle to a node owned by the destination peer
+      is not possible. The payload of messages are queued in the pool of the
+      destination peer (see above).
     </para>
+
+    <para>
+      The <constant>BUS1_CMD_SEND</constant> ioctl uses a
+      <type>struct bus1_cmd_send</type> to describe the message
+      transfer.
+    </para>
+    <programlisting>
+struct bus1_cmd_send {
+  __u64 flags;
+  __u64 ptr_destinations;
+  __u64 n_destinations;
+  __u64 ptr_vecs;
+  __u64 n_vecs;
+  __u64 ptr_handles;
+  __u64 n_handles;
+  __u64 ptr_fds;
+  __u64 n_fds;
+};
+    </programlisting>
+
+    <para>The fields in this struct are described below.</para>
+
+    <variablelist>
+      <varlistentry>
+        <term><varname>flags</varname></term>
+        <listitem><para>Flags for message delivery</para>
+          <variablelist>
+            <varlistentry>
+              <term><constant>BUS1_SEND_FLAG_CONTINUE</constant></term>
+              <listitem>
+                <para>
+                  Continue delivering messages even if delivery to one peer
+                  failed. Report the dropped message to the receiver, but do not
+                  retrun an error to the sender. This flag must be set for
+                  multicast messages.
+                </para>
+              </listitem>
+            </varlistentry>
+            <varlistentry>
+              <term><constant>BUS1_SEND_FLAG_SILENT</constant></term>
+              <listitem>
+                <para>
+                  Do not wake up the destination peers. See below.
+                </para>
+              </listitem>
+            </varlistentry>
+          </variablelist>
+        </listitem>
+      </varlistentry>
+      <varlistentry>
+        <term>
+          <varname>ptr_destinations</varname> and
+          <varname>n_destinations</varname>
+        </term>
+        <listitem>
+          <para>
+            Pointer to array of <type>__u64</type> handle ids. The peer must
+            hold a reference to each handle id. The message will be delivered
+            to the peers owning each of the nodes referenced by these handles.
+          </para>
+        </listitem>
+      </varlistentry>
+      <varlistentry>
+        <term><varname>ptr_vecs</varname> and <varname>n_vecs</varname></term>
+        <listitem>
+          <para>
+            Pointer to array of <type>struct iovec</type> and its number of
+            elements. This is the payload of the message.
+          </para>
+        </listitem>
+      </varlistentry>
+      <varlistentry>
+        <term>
+          <varname>ptr_handles</varname> and <varname>n_handles</varname>
+        </term>
+        <listitem>
+          <para>
+            Pointer to array of <type>__u64</type> handle ids and its number of
+            elements. The peer must hold a reference to each handle id. Each of
+            these handles will be passed to each destination peer.
+          </para>
+        </listitem>
+      </varlistentry>
+      <varlistentry>
+        <term>
+          <varname>ptr_fds</varname> and <varname>n_fds</varname>
+        </term>
+        <listitem>
+          <para>
+            Pointer to array of <type>int</type>file descriptor numbers and its
+            number of elements. Each file descriptor number must refer to an
+            open file descriptor. Each of these file descriptors will be passed
+            to each destination peer.
+          </para>
+        </listitem>
+      </varlistentry>
+    </variablelist>
   </refsect1>
 
   <refsect1>
     <title>Receiving messages</title>
     <para>
+      Messages are received by the peer with the
+      <constant>BUS1_CMD_RECV</constant> ioctl. The bus file descriptor supports
+      <function>poll()/epoll()/select()</function>; when new messages
+      are available to be recevied, <constant>POLLIN</constant> is reported.
+      However, if only silent messages are queued the peer is not woken up. For
+      compatibility reasons, <constant>POLLOUT</constant> is always reported as
+      well. Note, however, that the latter does not guarantee that a message
+      can in fact be sent, as that depends on the available quota.
     </para>
+
+    <para>
+      With the <constant>BUS1_CMD_RECV</constant> ioctl, a
+      <type>struct bus1_cmd_recv</type> is used.
+    </para>
+
+    <programlisting>
+struct bus1_cmd_recv {
+  __u64 flags;
+  __u64 type;
+  __u64 n_dropped;
+  union {
+    struct bus1_msg_data data;
+    struct bus1_msg_node_destroy node_destroy;
+  };
+};
+    </programlisting>
+
+    <para>The fields in this struct are described below.</para>
+
+    <variablelist>
+      <varlistentry>
+        <term><varname>flags</varname></term>
+        <listitem><para>Flags to control the receive command.</para>
+          <variablelist>
+            <varlistentry>
+              <term><constant>BUS1_RECV_FLAG_PEEK</constant></term>
+              <listitem>
+                <para>
+                  Just return the location of the next message. Do not install
+                  file descriptors or handles.
+                </para>
+              </listitem>
+            </varlistentry>
+          </variablelist>
+        </listitem>
+      </varlistentry>
+
+      <varlistentry>
+        <term><varname>type</varname></term>
+        <listitem><para>Type of embedded message.</para>
+          <variablelist>
+            <varlistentry>
+              <term><constant>BUS1_MSG_NONE</constant></term>
+              <listitem>
+                <para>
+                  The field must be initialized to this value, and it will never
+                  be returned.
+                </para>
+              </listitem>
+            </varlistentry>
+            <varlistentry>
+              <term><constant>BUS1_MSG_DATA</constant></term>
+              <listitem>
+                <para>
+                  The embedded message is a <type>struct bus1_msg_data</type>
+                  (see below).
+                </para>
+              </listitem>
+            </varlistentry>
+            <varlistentry>
+              <term><constant>BUS1_MSG_NODE_DESTROY</constant></term>
+              <listitem>
+                <para>
+                  The embedded message is a
+                  <type>struct bus1_msg_node_destroy</type> (see below).
+                </para>
+              </listitem>
+            </varlistentry>
+          </variablelist>
+        </listitem>
+      </varlistentry>
+
+      <varlistentry>
+        <term><varname>n_dropped</varname></term>
+        <listitem><para>
+          Whenever a message with the
+          <constant>BUS1_SEND_FLAG_CONTINUE</constant> flag is sent but cannot
+          be queued on a peer the 'n_dropped' counter of the peer is
+          incremented. On the next RECV ioctl, the 'n_dropped' field is copied
+          into the ioctl struct and cleared on the peer.
+          <!-- XXX Note that this will only happen
+          if the ioctl succeeded or failed with <constant>EAGAIN</constant>. In
+          other error cases, the 'dropped_msgs' field of the peer is left
+          untouched.-->
+        </para></listitem>
+      </varlistentry>
+
+      <varlistentry>
+        <term><varname>data</varname></term>
+        <listitem>
+          <para>
+            Embedded struct containing information about the received message.
+          </para>
+          <programlisting>
+struct bus1_msg_data {
+  __u64 destination;
+  __u32 uid;
+  __u32 gid;
+  __u32 pid;
+  __u32 tid;
+  __u64 offset;
+  __u64 n_bytes;
+  __u64 n_handles;
+  __u64 n_fds;
+};
+          </programlisting>
+          <para>The fields in this structure are described below</para>
+          <variablelist>
+            <varlistentry>
+              <term><varname>destination</varname></term>
+              <listitem>
+                <para>
+                  The handle id referencing the destination node. Note that
+                  this is always the handle id given when first creating the
+                  node, even if that has since been released.
+                </para>
+              </listitem>
+            </varlistentry>
+            <varlistentry>
+              <term><varname>uid</varname></term>
+              <listitem>
+                <para>
+                  The <varname>uid</varname> of the sending peer, at the time of
+                  creation.
+                </para>
+              </listitem>
+            </varlistentry>
+            <varlistentry>
+              <term><varname>gid</varname></term>
+              <listitem>
+                <para>
+                  The <varname>gid</varname> of the sending peer, at the time of
+                  creation.
+                </para>
+              </listitem>
+            </varlistentry>
+            <varlistentry>
+              <term><varname>pid</varname></term>
+              <listitem>
+                <para>
+                  The <varname>pid</varname> of the sending peer, at the time of
+                  sending.
+                </para>
+              </listitem>
+            </varlistentry>
+            <varlistentry>
+              <term><varname>tid</varname></term>
+              <listitem>
+                <para>
+                  The <varname>tid</varname> of the sending peer, at the time of
+                  sending.
+                </para>
+              </listitem>
+            </varlistentry>
+            <varlistentry>
+              <term><varname>offset</varname></term>
+              <listitem>
+                <para>
+                  The offset into the pool in bytes. The backing memory should
+                  be released back to the pool by passing the offset to
+                  <constant>BUS1_CMD_SLICE_RELEASE</constant>.
+                </para>
+              </listitem>
+            </varlistentry>
+            <varlistentry>
+              <term><varname>n_bytes</varname></term>
+              <listitem>
+                <para>
+                  The size of the payload in bytes.
+                </para>
+              </listitem>
+            </varlistentry>
+            <varlistentry>
+              <term><varname>n_handles</varname></term>
+              <listitem>
+                <para>
+                  The number of passed handles. The <type>u64</type> array of
+                  handle ids are found in the pool after the payload (aligned to
+                  the next eight byte boundary). When dequeueing this message
+                  the handles become valid if they were not already, and their
+                  reference count is increased. Handles to nodes whose
+                  destruction notification were ordered before this message are
+                  replaced by the special
+                  <constant>BUS1_HANDLE_INVALID</constant> handle id.
+                </para>
+              </listitem>
+            </varlistentry>
+            <varlistentry>
+              <term><varname>n_fds</varname></term>
+              <listitem>
+                <para>
+                  The number of passed file descriptors. The array of
+                  <type>int</type> file descriptor numbers are found in the pool
+                  after the handle ids (aligned to the next eight byte
+                  boundary). When dequeuing this message, the file descriptors
+                  are installed.
+                </para>
+              </listitem>
+            </varlistentry>
+          </variablelist>
+        </listitem>
+      </varlistentry>
+      <varlistentry>
+        <term><varname>node_destroy</varname></term>
+        <listitem>
+          <para>
+            Embedded struct containing the handle number to a node that was
+            destroyed. When dequeueing this message the handle becomes invalid.
+          </para>
+          <programlisting>
+struct bus1_msg_node_destroy {
+  __u64 handle;
+};
+          </programlisting>
+        </listitem>
+      </varlistentry>
+    </variablelist>
   </refsect1>
 
   <refsect1>
