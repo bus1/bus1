@@ -45,8 +45,8 @@
     <para>
       Note, however, that whilst a message order is guaranteed, messages are not
       delivered instantaneously. I.e., there is no guarantee that a message can
-      be received the moment it has been sent. The time between send and receive
-      is guaranteed to be finite and in practice will be very short.
+      be received the moment it has been sent. That said, the time between send
+      and receive is guaranteed to be finite and in practice will be very brief.
     </para>
   </refsect1>
 
@@ -198,7 +198,7 @@ struct bus1_cmd_send {
         </term>
         <listitem>
           <para>
-            Pointer to array of <type>int</type>file descriptor numbers and its
+            Pointer to array of <type>int</type> file descriptor numbers and its
             number of elements. Each file descriptor number must refer to an
             open file descriptor. Each of these file descriptors will be passed
             to each destination peer.
@@ -397,7 +397,7 @@ struct bus1_msg_data {
               <term><varname>n_handles</varname></term>
               <listitem>
                 <para>
-                  The number of passed handles. The <type>u64</type> array of
+                  The number of passed handles. The <type>__u64</type> array of
                   handle ids are found in the pool after the payload (aligned to
                   the next eight byte boundary). When dequeueing this message
                   the handles become valid if they were not already, and their
