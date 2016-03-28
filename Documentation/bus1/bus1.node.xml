@@ -6,7 +6,7 @@
 
   <refentryinfo>
     <title>bus1.node</title>
-    <productname>bus1.node</productname>
+    <productname>bus1</productname>
   </refentryinfo>
 
   <refmeta>
@@ -16,7 +16,7 @@
 
   <refnamediv>
     <refname>bus1.node</refname>
-    <refpurpose>bus1 node</refpurpose>
+    <refpurpose>Bus Node</refpurpose>
   </refnamediv>
 
   <refsect1>

@@ -6,7 +6,7 @@
 
   <refentryinfo>
     <title>bus1.message</title>
-    <productname>bus1.message</productname>
+    <productname>bus1</productname>
   </refentryinfo>
 
   <refmeta>
@@ -16,7 +16,7 @@
 
   <refnamediv>
     <refname>bus1.message</refname>
-    <refpurpose>bus1.message</refpurpose>
+    <refpurpose>Bus Message</refpurpose>
   </refnamediv>
 
   <refsect1>
@@ -53,7 +53,7 @@
   <refsect1>
     <title>Metadata</title>
     <para>
-      The kernel ammends all data messages with the <varname>uid</varname>,
+      The kernel amends all data messages with the <varname>uid</varname>,
       <varname>gid</varname>, <varname>pid</varname> and <varname>tid</varname>
       of the sending peer. The two former were collected when the sending peer
       was created and the two latter were collected from the sending peer when
@@ -142,7 +142,7 @@ struct bus1_cmd_send {
                 <para>
                   Continue delivering messages even if delivery to one peer
                   failed. Report the dropped message to the receiver, but do not
-                  retrun an error to the sender. This flag must be set for
+                  return an error to the sender. This flag must be set for
                   multicast messages.
                 </para>
               </listitem>

@@ -6,7 +6,7 @@
 
   <refentryinfo>
     <title>bus1.pool</title>
-    <productname>bus1.pool</productname>
+    <productname>bus1</productname>
   </refentryinfo>
 
   <refmeta>
@@ -16,7 +16,7 @@
 
   <refnamediv>
     <refname>bus1.pool</refname>
-    <refpurpose>bus1 pool</refpurpose>
+    <refpurpose>Bus Pool</refpurpose>
   </refnamediv>
 
   <refsect1>
