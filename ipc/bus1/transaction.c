@@ -330,6 +330,7 @@ error:
 /**
  * bus1_transaction_instantiate_for_id() - instantiate a message
  * @transaction:	transaction to work with
+ * @user:		sending user
  * @destination:	destination
  *
  * Instantiate the message from the given transaction for the peer given as
@@ -551,6 +552,7 @@ void bus1_transaction_commit(struct bus1_transaction *transaction)
 /**
  * bus1_transaction_commit_for_id() - instantiate and commit unicast
  * @transaction:	transaction to use
+ * @user:		sending user
  * @destination:	destination ID
  *
  * This is a fast-path for unicast messages. It is equivalent to calling
