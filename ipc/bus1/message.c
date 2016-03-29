@@ -108,7 +108,16 @@ struct bus1_message *bus1_message_free(struct bus1_message *message)
 }
 
 /**
- * XXX
+ * bus1_message_allocate_locked() - allocate pool slice for message payload
+ * @message:		message to allocate slice for
+ * @peer_info:		destination peer
+ * @user:		user to account in-flight resources on
+ * @slice_size:		size of the slice to allocate
+ *
+ * Allocate a pool slice for the given message, and charge the quota of the
+ * given user for all the associated in-flight resources.
+ *
+ * Return: 0 on success, negative error code on failure.
  */
 int bus1_message_allocate_locked(struct bus1_message *message,
 				 struct bus1_peer_info *peer_info,
@@ -146,7 +155,12 @@ int bus1_message_allocate_locked(struct bus1_message *message,
 }
 
 /**
- * XXX
+ * bus1_message_deallocate_locked() - deallocate pool slice for message payload
+ * @message:		message to deallocate slice for
+ * @peer_info:		destination peer
+ *
+ * If allocated, deallocate a slice for the given peer and discharge the
+ * associated user quota.
  */
 void bus1_message_deallocate_locked(struct bus1_message *message,
 				    struct bus1_peer_info *peer_info)
