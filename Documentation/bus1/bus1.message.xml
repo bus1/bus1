@@ -56,7 +56,8 @@
       The kernel amends all data messages with the <varname>uid</varname>,
       <varname>gid</varname>, <varname>pid</varname>, and <varname>tid</varname>
       of the sending peer. The information is collected from the sending peer
-      when the message is sent.
+      when the message is sent and translated into the namespaces of the
+      receiving peer (which was pinned when the peer was initialized).
     </para>
   </refsect1>
 
@@ -343,7 +344,7 @@ struct bus1_msg_data {
               <listitem>
                 <para>
                   The <varname>uid</varname> of the sending peer, at the time of
-                  creation.
+                  sending.
                 </para>
               </listitem>
             </varlistentry>
@@ -352,7 +353,7 @@ struct bus1_msg_data {
               <listitem>
                 <para>
                   The <varname>gid</varname> of the sending peer, at the time of
-                  creation.
+                  sending.
                 </para>
               </listitem>
             </varlistentry>
