@@ -65,10 +65,13 @@ struct bus1_message *bus1_message_new(size_t n_bytes,
 struct bus1_message *bus1_message_free(struct bus1_message *message);
 int bus1_message_allocate_locked(struct bus1_message *message,
 				 struct bus1_peer_info *peer_info,
-				 struct bus1_user *user,
-				 size_t slice_size);
+				 struct bus1_user *user);
 void bus1_message_deallocate_locked(struct bus1_message *message,
 				    struct bus1_peer_info *peer_info);
+int bus1_message_install_handles(struct bus1_message *message,
+				 struct bus1_peer_info *peer_info);
+int bus1_message_install_fds(struct bus1_message *message,
+			     struct bus1_peer_info *peer_info);
 
 /**
  * bus1_message_from_node - get parent message of a queue node

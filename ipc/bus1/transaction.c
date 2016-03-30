@@ -267,7 +267,7 @@ bus1_transaction_instantiate(struct bus1_transaction *transaction,
 			     struct bus1_user *user)
 {
 	struct bus1_message *message;
-	size_t i, slice_size;
+	size_t i;
 	bool silent;
 	int r;
 
@@ -279,11 +279,6 @@ bus1_transaction_instantiate(struct bus1_transaction *transaction,
 				   silent);
 	if (IS_ERR(message))
 		return ERR_CAST(message);
-
-	/* cannot overflow as all of those are limited */
-	slice_size = ALIGN(transaction->length_vecs, 8) +
-		     ALIGN(transaction->param->n_handles * sizeof(u64), 8) +
-		     ALIGN(transaction->param->n_fds * sizeof(int), 8);
 
 	message->data.destination = bus1_handle_get_owner_id(handle);
 	message->data.uid = from_kuid_munged(peer_info->cred->user_ns,
@@ -302,7 +297,7 @@ bus1_transaction_instantiate(struct bus1_transaction *transaction,
 		goto error;
 
 	mutex_lock(&peer_info->lock);
-	r = bus1_message_allocate_locked(message, peer_info, user, slice_size);
+	r = bus1_message_allocate_locked(message, peer_info, user);
 	mutex_unlock(&peer_info->lock);
 	if (r < 0)
 		goto error;

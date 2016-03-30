@@ -112,7 +112,6 @@ struct bus1_message *bus1_message_free(struct bus1_message *message)
  * @message:		message to allocate slice for
  * @peer_info:		destination peer
  * @user:		user to account in-flight resources on
- * @slice_size:		size of the slice to allocate
  *
  * Allocate a pool slice for the given message, and charge the quota of the
  * given user for all the associated in-flight resources.
@@ -121,10 +120,10 @@ struct bus1_message *bus1_message_free(struct bus1_message *message)
  */
 int bus1_message_allocate_locked(struct bus1_message *message,
 				 struct bus1_peer_info *peer_info,
-				 struct bus1_user *user,
-				 size_t slice_size)
+				 struct bus1_user *user)
 {
 	struct bus1_pool_slice *slice;
+	size_t slice_size;
 	int r;
 
 	lockdep_assert_held(&peer_info->lock);
@@ -138,6 +137,11 @@ int bus1_message_allocate_locked(struct bus1_message *message,
 				   message->data.n_fds);
 	if (r < 0)
 		return r;
+
+	/* cannot overflow as all of those are limited */
+	slice_size = ALIGN(message->data.n_bytes, 8) +
+		     ALIGN(message->data.n_handles * sizeof(u64), 8) +
+		     ALIGN(message->data.n_fds + sizeof(int), 8);
 
 	slice = bus1_pool_alloc(&peer_info->pool, slice_size);
 	if (IS_ERR(slice)) {
@@ -177,4 +181,96 @@ void bus1_message_deallocate_locked(struct bus1_message *message,
 	}
 
 	message->user = bus1_user_unref(message->user);
+}
+
+/**
+ * bus1_message_install_handles() - install handles into destination peer
+ * @message:		message carrying handles
+ * @peer_info:		destination peer
+ *
+ * Write out the handle ids of the handles carried in @message into the
+ * destination slice.
+ *
+ * Return: 0 on success, negative error code on failure.
+ */
+int bus1_message_install_handles(struct bus1_message *message,
+				 struct bus1_peer_info *peer_info)
+{
+	size_t pos, n, offset;
+	struct kvec vec;
+	u64 *ids;
+	int r;
+
+	offset = ALIGN(message->data.n_bytes, 8);
+	pos = 0;
+	ids = NULL;
+
+	while ((n = bus1_handle_inflight_walk(&message->handles,
+					      &pos, &ids)) > 0) {
+		vec.iov_base = ids;
+		vec.iov_len = n * sizeof(u64);
+		r = bus1_pool_write_kvec(&peer_info->pool, message->slice,
+					 offset, &vec, 1, vec.iov_len);
+		if (r < 0)
+			return r;
+
+		offset += n * sizeof(u64);
+	}
+
+	return 0;
+}
+
+/**
+ * bus1_message_install_fds() - install fds into destination peer
+ * @message:		message carrying fds
+ * @peer_info:		destination peer
+ *
+ * Install all the fds carried in @message into the destination peer, and write
+ * out the fd numbers into the corresponding slice.
+ *
+ * Return: 0 on success, negative error code on failure.
+ */
+int bus1_message_install_fds(struct bus1_message *message,
+			  struct bus1_peer_info *peer_info)
+{
+	size_t i, offset;
+	struct kvec vec;
+	int r, *fds;
+
+	fds = kmalloc(message->data.n_fds * sizeof(*fds), GFP_TEMPORARY);
+	if (!fds)
+		return -ENOMEM;
+
+	for (i = 0; i < message->data.n_fds; ++i) {
+		r = get_unused_fd_flags(O_CLOEXEC);
+		if (r < 0) {
+			while (i--)
+				put_unused_fd(fds[i]);
+			kfree(fds);
+			return r;
+		}
+		fds[i] = r;
+	}
+
+	vec.iov_base = fds;
+	vec.iov_len = message->data.n_fds * sizeof(int);
+	offset = ALIGN(message->data.n_bytes, 8) +
+		 ALIGN(message->data.n_handles * sizeof(u64), 8);
+
+	r = bus1_pool_write_kvec(&peer_info->pool, message->slice,
+				 offset, &vec, 1, vec.iov_len);
+	if (r < 0)
+		goto error;
+
+	for (i = 0; i < message->data.n_fds; ++i)
+		fd_install(fds[i], get_file(message->files[i]));
+
+	kfree(fds);
+	return 0;
+
+error:
+	for (i = 0; i < message->data.n_fds; ++i)
+		put_unused_fd(fds[i]);
+	kfree(fds);
+	return r;
 }

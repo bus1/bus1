@@ -601,78 +601,6 @@ exit:
 	return r;
 }
 
-static int bus1_peer_install_handles(struct bus1_peer_info *peer_info,
-				     struct bus1_message *message)
-{
-	size_t pos, n, offset;
-	struct kvec vec;
-	u64 *ids;
-	int r;
-
-	offset = ALIGN(message->data.n_bytes, 8);
-	pos = 0;
-	ids = NULL;
-
-	while ((n = bus1_handle_inflight_walk(&message->handles,
-					      &pos, &ids)) > 0) {
-		vec.iov_base = ids;
-		vec.iov_len = n * sizeof(u64);
-		r = bus1_pool_write_kvec(&peer_info->pool, message->slice,
-					 offset, &vec, 1, vec.iov_len);
-		if (r < 0)
-			return r;
-
-		offset += n * sizeof(u64);
-	}
-
-	return 0;
-}
-
-static int bus1_peer_install_fds(struct bus1_peer_info *peer_info,
-				 struct bus1_message *message)
-{
-	size_t i, offset;
-	struct kvec vec;
-	int r, *fds;
-
-	fds = kmalloc(message->data.n_fds * sizeof(*fds), GFP_TEMPORARY);
-	if (!fds)
-		return -ENOMEM;
-
-	for (i = 0; i < message->data.n_fds; ++i) {
-		r = get_unused_fd_flags(O_CLOEXEC);
-		if (r < 0) {
-			while (i--)
-				put_unused_fd(fds[i]);
-			kfree(fds);
-			return r;
-		}
-		fds[i] = r;
-	}
-
-	vec.iov_base = fds;
-	vec.iov_len = message->data.n_fds * sizeof(int);
-	offset = ALIGN(message->data.n_bytes, 8) +
-		 ALIGN(message->data.n_handles * sizeof(u64), 8);
-
-	r = bus1_pool_write_kvec(&peer_info->pool, message->slice,
-				 offset, &vec, 1, vec.iov_len);
-	if (r < 0)
-		goto error;
-
-	for (i = 0; i < message->data.n_fds; ++i)
-		fd_install(fds[i], get_file(message->files[i]));
-
-	kfree(fds);
-	return 0;
-
-error:
-	for (i = 0; i < message->data.n_fds; ++i)
-		put_unused_fd(fds[i]);
-	kfree(fds);
-	return r;
-}
-
 static int bus1_peer_dequeue_message(struct bus1_peer_info *peer_info,
 				     struct bus1_cmd_recv *param,
 				     struct bus1_message *message)
@@ -683,7 +611,7 @@ static int bus1_peer_dequeue_message(struct bus1_peer_info *peer_info,
 
 	if (message->data.n_handles > 0) {
 		/* similar to fd-install we do this with the peer locked */
-		r = bus1_peer_install_handles(peer_info, message);
+		r = bus1_message_install_handles(message, peer_info);
 		if (r < 0)
 			return r;
 	}
@@ -696,7 +624,7 @@ static int bus1_peer_dequeue_message(struct bus1_peer_info *peer_info,
 		 * parallel readers, which seems overkill. If you receive many
 		 * FDs, you better be able to deal with it.
 		 */
-		r = bus1_peer_install_fds(peer_info, message);
+		r = bus1_message_install_fds(message, peer_info);
 		if (r < 0)
 			return r;
 	}
