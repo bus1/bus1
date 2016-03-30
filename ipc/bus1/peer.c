@@ -137,8 +137,8 @@ error:
 /**
  * bus1_peer_new() - allocate new peer
  *
- * Allocate a new peer handle. The handle is *not* activated, nor linked into
- * any context. The caller owns the only pointer to the new peer.
+ * Allocate a new peer. The peer is *not* activated, nor linked into any
+ * context. The caller owns the only pointer to the new peer.
  *
  * Return: Pointer to peer, ERR_PTR on failure.
  */
@@ -202,9 +202,9 @@ static void bus1_peer_cleanup(struct bus1_active *active, void *userdata)
  * bus1_peer_disconnect() - disconnect peer
  * @peer:		peer to operate on
  *
- * This tears down a peer synchronously. It first marks the peer as
- * deactivated, waits for all outstanding operations to finish, and eventually
- * releases the linked peer_info object.
+ * This tears down a peer synchronously. It first marks the peer as deactivated,
+ * waits for all outstanding operations to finish, and eventually releases the
+ * linked peer_info object.
  *
  * It is perfectly safe to call this function multiple times, even in parallel.
  * It is guaranteed to block *until* the peer is fully torn down, regardless
@@ -230,7 +230,8 @@ int bus1_peer_disconnect(struct bus1_peer *peer)
  * @peer:		peer to operate on
  * @arg:		ioctl argument
  *
- * This initializes a peer that was created by an open() call.
+ * This initializes a peer that was created by an open() call, by creating a
+ * peer_info object and linking it into the peer.
  *
  * The caller must not hold any active reference to the peer.
  *

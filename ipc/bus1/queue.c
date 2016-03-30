@@ -78,11 +78,10 @@ static bool bus1_queue_node_is_silent(struct bus1_queue_node *node)
  * This initializes a new queue. The queue memory is considered uninitialized,
  * any previous content is lost unrecoverably.
  *
- * NOTE: All queues must be embedded into a parent bus1_peer_info object. The
- *       code works fine, if you don't, but the lockdep-annotations will fail
- *       horribly. They rely on container_of() to be valid on every queue. Use
- *       the bus1_queue_init_for_peer() macro to make sure you never violate
- *       this rule.
+ * Note that all queues must be embedded into a parent bus1_peer_info object.
+ * The code works fine, if you don't, but the lockdep-annotations will fail
+ * horribly. They rely on container_of() to be valid on every queue. Use the
+ * bus1_queue_init_for_peer() macro to make sure you never violate this rule.
  */
 void bus1_queue_init_internal(struct bus1_queue *queue)
 {

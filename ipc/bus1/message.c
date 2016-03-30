@@ -28,7 +28,9 @@
  * @silent:		is this a silent message?
  *
  * This allocates a new, unused message for free use to the caller. Storage for
- * files and handles is (partially) pre-allocated.
+ * files and handles is (partially) pre-allocated. The number of embedded
+ * handles is capped, so in case many handles are passed more memory will have
+ * to be allocated later.
  *
  * Return: Pointer to new message, ERR_PTR on failure.
  */
@@ -114,7 +116,8 @@ struct bus1_message *bus1_message_free(struct bus1_message *message)
  * @user:		user to account in-flight resources on
  *
  * Allocate a pool slice for the given message, and charge the quota of the
- * given user for all the associated in-flight resources.
+ * given user for all the associated in-flight resources. The peer_info lock
+ * must be held.
  *
  * Return: 0 on success, negative error code on failure.
  */
@@ -164,7 +167,7 @@ int bus1_message_allocate_locked(struct bus1_message *message,
  * @peer_info:		destination peer
  *
  * If allocated, deallocate a slice for the given peer and discharge the
- * associated user quota.
+ * associated user quota. The peer_info lock must be held.
  */
 void bus1_message_deallocate_locked(struct bus1_message *message,
 				    struct bus1_peer_info *peer_info)
@@ -184,7 +187,7 @@ void bus1_message_deallocate_locked(struct bus1_message *message,
 }
 
 /**
- * bus1_message_install_handles() - install handles into destination peer
+ * bus1_message_install_handles() - write handle ids to destination pool
  * @message:		message carrying handles
  * @peer_info:		destination peer
  *

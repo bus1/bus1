@@ -186,9 +186,9 @@ static int bus1_transaction_import_files(struct bus1_transaction *transaction)
  * Note that the transaction object relies on being local to the current task.
  * That is, its lifetime must be limited to your own function lifetime. You
  * must not pass pointers to transaction objects to contexts outside of this
- * lifetime.
- * This allows to optimize access to 'current' (and its properties like creds
- * and pids), and to place the transaction on the stack, if possible.
+ * lifetime. This makes it possible to optimize access to 'current' (and its
+ * properties like creds and pids), and to place the transaction on the stack,
+ * when it fits.
  *
  * Return: Pointer to transaction object, or ERR_PTR on failure.
  */
@@ -326,10 +326,10 @@ error:
  * bus1_transaction_instantiate_for_id() - instantiate a message
  * @transaction:	transaction to work with
  * @user:		sending user
- * @destination:	destination
+ * @destination:	destination handle id
  *
- * Instantiate the message from the given transaction for the peer given as
- * @peer_id. A new pool-slice is allocated, a queue entry is created and the
+ * Instantiate the message from the given transaction for the handle id
+ * @destination. A new pool-slice is allocated, a queue entry is created and the
  * message is queued as in-flight message on the transaction object. The
  * message is not linked on the destination, yet. You need to commit the
  * transaction to actually link it on the destination queue.
@@ -442,7 +442,7 @@ static void bus1_transaction_commit_one(struct bus1_transaction *transaction,
  * respective destination queues and committed. This function makes sure to
  * adhere to global-order restrictions, hence, the caller *must* instantiate
  * the message for each destination before committing the whole transaction.
- * Otherwise, ordering might not be guaranteed.
+ * Otherwise, ordering would not be guaranteed.
  *
  * This function flushes the entire transaction. Technically, you can
  * instantiate further entries once this call returns and commit them again.
@@ -551,7 +551,7 @@ void bus1_transaction_commit(struct bus1_transaction *transaction)
  * @destination:	destination ID
  *
  * This is a fast-path for unicast messages. It is equivalent to calling
- * bus1_transaction_instantiate_for_id(), followed by a commit.
+ * bus1_transaction_instantiate_for_id(), followed by bus1_transaction_commit().
  *
  * Return: 0 on success, negative error code on failure.
  */
