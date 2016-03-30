@@ -11,7 +11,7 @@
  */
 
 /**
- * Users
+ * DOC: Users
  *
  * XXX
  */

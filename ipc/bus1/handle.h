@@ -11,7 +11,7 @@
  */
 
 /**
- * Handles
+ * DOC: Handles
  *
  * The object system on a bus is based on nodes and handles. Any peer can
  * allocate new, local objects at any time. They automatically become the sole

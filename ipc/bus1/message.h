@@ -11,7 +11,7 @@
  */
 
 /**
- * Messages
+ * DOC: Messages
  *
  * XXX
  */

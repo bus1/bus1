@@ -11,7 +11,7 @@
  */
 
 /**
- * Message Queue
+ * DOC: Message Queue
  *
  * (You are highly encouraged to read up on 'Lamport Timestamps', the
  *  concept of 'happened-before', and 'causal ordering'. The queue

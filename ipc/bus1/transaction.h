@@ -11,7 +11,7 @@
  */
 
 /**
- * Message Transactions
+ * DOC: Message Transactions
  *
  * XXX
  */

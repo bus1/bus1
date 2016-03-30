@@ -11,7 +11,7 @@
  */
 
 /**
- * Bus1 Overview
+ * DOC: Bus1 Overview
  *
  * XXX
  */

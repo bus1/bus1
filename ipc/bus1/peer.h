@@ -11,7 +11,7 @@
  */
 
 /**
- * Peers
+ * DOC: Peers
  *
  * XXX
  */

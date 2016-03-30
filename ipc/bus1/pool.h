@@ -11,7 +11,7 @@
  */
 
 /**
- * Client Pools
+ * DOC: Pools
  *
  * Each connected peer has its own memory pool associated with the
  * file-descriptor. This pool can be mapped read-only by the client. The pool
