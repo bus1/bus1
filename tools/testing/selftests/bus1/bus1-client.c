@@ -290,3 +290,32 @@ _public_ uint64_t bus1_client_slice_to_offset(struct bus1_client *client,
 
 	return (uint8_t *)slice - (uint8_t *)client->pool;
 }
+
+_public_ int bus1_client_send(struct bus1_client *client,
+			      uint64_t *destinations, size_t n_destinations,
+			      struct iovec *vecs, size_t n_vecs,
+			      uint64_t *handles, size_t n_handles,
+			      int *fds, size_t n_fds)
+{
+	struct bus1_cmd_send send = {
+		.flags = n_destinations > 1 ? BUS1_SEND_FLAG_CONTINUE : 0,
+		.ptr_destinations = (uint64_t)destinations,
+		.n_destinations = n_destinations,
+		.ptr_vecs = (uint64_t)vecs,
+		.n_vecs = n_vecs,
+		.ptr_handles = (uint64_t)handles,
+		.n_handles = n_handles,
+		.ptr_fds = (uint64_t)fds,
+		.n_fds = n_fds,
+	};
+	int r;
+
+	static_assert(_IOC_SIZE(BUS1_CMD_SEND) == sizeof(send),
+		      "ioctl is called with invalid argument size");
+
+	r = bus1_client_ioctl(client, BUS1_CMD_SEND, &send);
+	if (r < 0)
+		return r;
+
+	return 0;
+}

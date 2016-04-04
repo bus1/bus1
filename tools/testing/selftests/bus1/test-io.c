@@ -20,15 +20,9 @@ static int client_send(struct bus1_client *client, uint64_t *handles,
 		.iov_base = data,
 		.iov_len = len,
 	};
-	struct bus1_cmd_send send = {
-		.flags = n_handles > 1 ? BUS1_SEND_FLAG_CONTINUE : 0,
-		.ptr_destinations = (uint64_t)handles,
-		.n_destinations = (uint64_t)n_handles,
-		.ptr_vecs = (uint64_t)&vec,
-		.n_vecs = len ? 1 : 0,
-	};
 
-	return bus1_client_ioctl(client, BUS1_CMD_SEND, &send);
+	return bus1_client_send(client, handles, n_handles, &vec, 1, NULL, 0,
+				NULL, 0);
 }
 
 static int client_recv(struct bus1_client *client, void **datap, size_t *lenp)
