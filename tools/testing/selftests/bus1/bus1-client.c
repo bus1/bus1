@@ -164,7 +164,6 @@ _public_ int bus1_client_mmap(struct bus1_client *client)
 	 */
 
 	assert(pool_size > 0);
-	assert(pool_size < (uint64_t)-1);
 
 	/* fastpath: sync'ed with atomic exchange (__ATOMIC_RELEASE) */
 	if (__atomic_load_n(&client->pool, __ATOMIC_ACQUIRE)) {
@@ -299,13 +298,13 @@ _public_ int bus1_client_send(struct bus1_client *client,
 {
 	struct bus1_cmd_send send = {
 		.flags = n_destinations > 1 ? BUS1_SEND_FLAG_CONTINUE : 0,
-		.ptr_destinations = (uint64_t)destinations,
+		.ptr_destinations = (uintptr_t)destinations,
 		.n_destinations = n_destinations,
-		.ptr_vecs = (uint64_t)vecs,
+		.ptr_vecs = (uintptr_t)vecs,
 		.n_vecs = n_vecs,
-		.ptr_handles = (uint64_t)handles,
+		.ptr_handles = (uintptr_t)handles,
 		.n_handles = n_handles,
-		.ptr_fds = (uint64_t)fds,
+		.ptr_fds = (uintptr_t)fds,
 		.n_fds = n_fds,
 	};
 	int r;
