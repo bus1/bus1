@@ -19,8 +19,12 @@
  * some of them are our own.
  */
 
+#include <linux/err.h>
 #include <linux/kernel.h>
 #include <linux/uio.h>
+
+/* tell gcc that PTR_ERR() always returns negative integers */
+#define BUS1_ERR(_r) (WARN_ON((_r) >= 0) ? -EINVAL : (_r))
 
 int bus1_import_vecs(struct iovec *out_vecs,
 		     size_t *out_length,

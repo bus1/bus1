@@ -342,12 +342,15 @@ static int bus1_peer_handle_pair(struct bus1_peer *peer,
 	 */
 
 	root = bus1_handle_new();
-	if (IS_ERR(root))
-		return PTR_ERR(root);
+	if (IS_ERR(root)) {
+		r = PTR_ERR(root);
+		return BUS1_ERR(r); /* silence gcc */
+	}
 
 	export = bus1_handle_new_copy(root);
 	if (IS_ERR(export)) {
 		r = PTR_ERR(export);
+		r = BUS1_ERR(r); /* silence gcc */
 		export = NULL;
 		goto exit;
 	}
