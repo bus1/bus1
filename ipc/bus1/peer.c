@@ -341,7 +341,7 @@ static int bus1_peer_handle_pair(struct bus1_peer *peer,
 	 * @peer. The ID of this handle is then returned via @idp.
 	 */
 
-	root = bus1_handle_new();
+	root = bus1_handle_new_node();
 	if (IS_ERR(root)) {
 		r = PTR_ERR(root);
 		return BUS1_ERR(r); /* silence gcc */

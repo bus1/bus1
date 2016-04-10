@@ -179,7 +179,7 @@ struct bus1_handle_inflight {
 
 /* handles */
 struct bus1_handle *bus1_handle_new_copy(struct bus1_handle *existing);
-struct bus1_handle *bus1_handle_new(void);
+struct bus1_handle *bus1_handle_new_node(void);
 struct bus1_handle *bus1_handle_ref(struct bus1_handle *handle);
 struct bus1_handle *bus1_handle_unref(struct bus1_handle *handle);
 struct bus1_handle *bus1_handle_find_by_id(struct bus1_peer_info *peer_info,

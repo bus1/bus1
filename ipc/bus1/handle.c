@@ -186,7 +186,7 @@ struct bus1_handle *bus1_handle_new_copy(struct bus1_handle *existing)
 }
 
 /**
- * bus1_handle_new() - allocate new handle for new node
+ * bus1_handle_new_node() - allocate new handle for new node
  *
  * This allocates a new, unlinked, detached handle, together with a new, unused
  * node. No-one but this handle will have access to the node, until it is
@@ -194,7 +194,7 @@ struct bus1_handle *bus1_handle_new_copy(struct bus1_handle *existing)
  *
  * Return: Pointer to new handle, ERR_PTR on failure.
  */
-struct bus1_handle *bus1_handle_new(void)
+struct bus1_handle *bus1_handle_new_node(void)
 {
 	struct bus1_handle_node *node;
 
@@ -1625,7 +1625,7 @@ int bus1_handle_transfer_instantiate(struct bus1_handle_transfer *transfer,
 							BUS1_NODE_FLAG_MANAGED)
 				return -EINVAL;
 
-			handle = bus1_handle_new();
+			handle = bus1_handle_new_node();
 			if (IS_ERR(handle))
 				return PTR_ERR(handle);
 
