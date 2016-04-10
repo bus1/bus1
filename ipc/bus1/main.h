@@ -23,7 +23,9 @@
  * ordered. Not all orders are explicitly defined (e.g., they might define
  * orthogonal hierarchies), but this list tries to give a rough overview:
  *
- * XXX
+ *   b1_peer.active
+ *     b1_peer_info.lock
+ *       b1_peer_info.seqcount
  */
 
 #define BUS1_MESSAGES_MAX (1024)
