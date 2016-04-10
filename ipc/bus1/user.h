@@ -13,7 +13,33 @@
 /**
  * DOC: Users
  *
- * XXX
+ * Different users can communicate via bus1, and many resources are shared
+ * between multiple users. The bus1_user object represents the UID of a user,
+ * like "struct user_struct" does in the kernel core. It is used to account
+ * global resources, apply limits, and calculate quotas if different UIDs
+ * communicate with each other.
+ *
+ * All dynamic resources have global per-user limits, which cannot be exceeded
+ * by a user. They prevent a single user from exhausting local resources. Each
+ * peer that is created is always owned by the user that initialized it. All
+ * resources allocated on that peer are accounted on that pinned user.
+ * Additionally to global resources, there are local limits per peer, that can
+ * be controlled by each peer individually (e.g., specifying a maximum pool
+ * size). Those local limits allow a user to distribute the globally available
+ * resources across its peer instances.
+ *
+ * Since bus1 allows communication across UID boundaries, any such transmission
+ * of resources must be properly accounted. Bus1 employs dynamic quotas to
+ * fairly distribute available resources. That is, each transmission is seen by
+ * bus1 as a transmission of resources from a UID to a peer. Any transmitted
+ * resources are thus limited by a quota object that represents the combination
+ * of the sending UID and the receiving peer. This means, regardless how many
+ * different peers a possibly malicious user creates, they are accounted to the
+ * same limits. So whenever a UID transmits resources to a peer, it gets access
+ * to a dynamically calculated subset of the receiver's resource limits. But it
+ * never gets access to the entire resource space, so it cannot exhaust the
+ * resource limits of the receiver, but only its own quota on those resource
+ * limits.
  */
 
 #include <linux/atomic.h>
