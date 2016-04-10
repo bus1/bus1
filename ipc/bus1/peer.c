@@ -686,10 +686,23 @@ static void bus1_peer_peek(struct bus1_peer_info *peer_info,
 	mutex_lock(&peer_info->lock);
 	node = bus1_queue_peek(&peer_info->queue);
 	if (node) {
-		message = bus1_message_from_node(node);
-		bus1_pool_publish(&peer_info->pool, message->slice);
-		param->type = BUS1_MSG_DATA;
-		memcpy(&param->data, &message->data, sizeof(param->data));
+		switch (bus1_queue_node_get_type(node)) {
+		case BUS1_QUEUE_NODE_MESSAGE_NORMAL:
+		case BUS1_QUEUE_NODE_MESSAGE_SILENT:
+			message = bus1_message_from_node(node);
+			bus1_pool_publish(&peer_info->pool, message->slice);
+			param->type = BUS1_MSG_DATA;
+			memcpy(&param->data, &message->data,
+			       sizeof(param->data));
+			break;
+		case BUS1_QUEUE_NODE_HANDLE_DESTRUCTION:
+			param->type = BUS1_MSG_NODE_DESTROY;
+			/* XXX: copy payload */
+			break;
+		default:
+			WARN(1, "Invalid queue-node type");
+			break;
+		}
 	}
 	mutex_unlock(&peer_info->lock);
 }
