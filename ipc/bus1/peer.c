@@ -634,9 +634,6 @@ static int bus1_peer_dequeue_message(struct bus1_peer_info *peer_info,
 	bus1_pool_publish(&peer_info->pool, message->slice);
 	bus1_message_deallocate_locked(message, peer_info);
 
-	param->type = BUS1_MSG_DATA;
-	memcpy(&param->data, &message->data, sizeof(param->data));
-
 	return 0;
 }
 
@@ -661,6 +658,10 @@ static int bus1_peer_dequeue(struct bus1_peer_info *peer_info,
 
 			if (r < 0)
 				return r;
+
+			param->type = BUS1_MSG_DATA;
+			memcpy(&param->data, &message->data,
+			       sizeof(param->data));
 
 			bus1_message_free(message);
 			return 0;
