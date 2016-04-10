@@ -26,7 +26,6 @@
  * XXX
  */
 
-#define BUS1_IOCTL_MAX_SIZE (4096)
 #define BUS1_MESSAGES_MAX (1024)
 #define BUS1_HANDLES_MAX (16384)
 
