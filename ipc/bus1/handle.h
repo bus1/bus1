@@ -80,6 +80,7 @@
 struct bus1_handle;
 struct bus1_peer;
 struct bus1_peer_info;
+struct bus1_queue_node;
 
 /**
  * BUS1_HANDLE_BATCH_SIZE - number of handles per set in a batch
@@ -182,6 +183,7 @@ struct bus1_handle *bus1_handle_new_copy(struct bus1_handle *existing);
 struct bus1_handle *bus1_handle_new_node(void);
 struct bus1_handle *bus1_handle_ref(struct bus1_handle *handle);
 struct bus1_handle *bus1_handle_unref(struct bus1_handle *handle);
+struct bus1_handle *bus1_handle_from_node(struct bus1_queue_node *node);
 struct bus1_handle *bus1_handle_find_by_id(struct bus1_peer_info *peer_info,
 					   u64 id);
 bool bus1_handle_is_public(struct bus1_handle *handle);

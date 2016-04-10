@@ -219,6 +219,25 @@ struct bus1_handle *bus1_handle_unref(struct bus1_handle *handle)
 }
 
 /**
+ * bus1_handle_from_node() - get parent handle of a queue node
+ * @node:		node to get parent of
+ *
+ * This turns a queue node into a handle. The caller must verify that the
+ * passed node is actually a handle.
+ *
+ * Return: Pointer to handle is returned.
+ */
+struct bus1_handle *bus1_handle_from_node(struct bus1_queue_node *node)
+{
+	unsigned int type = bus1_queue_node_get_type(node);
+
+	if (WARN_ON(type != BUS1_QUEUE_NODE_HANDLE_DESTRUCTION))
+		return NULL;
+
+	return container_of(node, struct bus1_handle, qnode);
+}
+
+/**
  * bus1_handle_find_by_id() - find handle by its ID
  * @peer_info:		peer to operate on
  * @id:			ID to search for

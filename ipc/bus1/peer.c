@@ -37,20 +37,40 @@
 static void bus1_peer_info_reset(struct bus1_peer_info *peer_info)
 {
 	struct bus1_queue_node *node, *t;
-	struct bus1_message *message;
 	struct rb_root handles = RB_ROOT;
 
 	mutex_lock(&peer_info->lock);
 
 	rbtree_postorder_for_each_entry_safe(node, t,
 					     &peer_info->queue.messages, rb) {
-		message = bus1_message_from_node(node);
-		RB_CLEAR_NODE(&node->rb);
-		if (bus1_queue_node_is_committed(node)) {
-			bus1_message_deallocate_locked(message, peer_info);
-			bus1_message_free(message);
+		switch (bus1_queue_node_get_type(node)) {
+		case BUS1_QUEUE_NODE_MESSAGE_NORMAL:
+		case BUS1_QUEUE_NODE_MESSAGE_SILENT: {
+			struct bus1_message *message;
+
+			message = bus1_message_from_node(node);
+			RB_CLEAR_NODE(&node->rb); /* mark as dropped */
+			if (bus1_queue_node_is_committed(node)) {
+				bus1_message_deallocate_locked(message,
+							       peer_info);
+				bus1_message_free(message);
+			}
+
+			break;
 		}
-		/* if uncommitted, the unlink serves as removal marker */
+		case BUS1_QUEUE_NODE_HANDLE_DESTRUCTION: {
+			struct bus1_handle *handle;
+
+			handle = bus1_handle_from_node(node);
+			RB_CLEAR_NODE(&node->rb);
+			bus1_handle_unref(handle);
+
+			break;
+		}
+		default:
+			WARN(1, "Invalid queue-node type");
+			break;
+		}
 	}
 	bus1_queue_post_flush(&peer_info->queue);
 
@@ -669,6 +689,19 @@ static int bus1_peer_dequeue(struct bus1_peer_info *peer_info,
 			bus1_message_free(message);
 			return 0;
 		}
+		case BUS1_QUEUE_NODE_HANDLE_DESTRUCTION: {
+			struct bus1_handle *handle;
+
+			handle = bus1_handle_from_node(node);
+			bus1_queue_remove(&peer_info->queue, node);
+			mutex_unlock(&peer_info->lock);
+
+			param->type = BUS1_MSG_NODE_DESTROY;
+			param->node_destroy.handle = bus1_handle_get_id(handle);
+
+			bus1_handle_unref(handle);
+			return 0;
+		}
 		default:
 			mutex_unlock(&peer_info->lock);
 
@@ -686,6 +719,7 @@ static void bus1_peer_peek(struct bus1_peer_info *peer_info,
 {
 	struct bus1_queue_node *node;
 	struct bus1_message *message;
+	struct bus1_handle *handle;
 
 	mutex_lock(&peer_info->lock);
 	node = bus1_queue_peek(&peer_info->queue);
@@ -700,8 +734,9 @@ static void bus1_peer_peek(struct bus1_peer_info *peer_info,
 			       sizeof(param->data));
 			break;
 		case BUS1_QUEUE_NODE_HANDLE_DESTRUCTION:
+			handle = bus1_handle_from_node(node);
 			param->type = BUS1_MSG_NODE_DESTROY;
-			/* XXX: copy payload */
+			param->node_destroy.handle = bus1_handle_get_id(handle);
 			break;
 		default:
 			WARN(1, "Invalid queue-node type");
