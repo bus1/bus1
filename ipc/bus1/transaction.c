@@ -132,8 +132,7 @@ static int bus1_transaction_import_vecs(struct bus1_transaction *transaction)
 
 	ptr_vecs = (const struct iovec __user *)(unsigned long)param->ptr_vecs;
 	return bus1_import_vecs(transaction->vecs, &transaction->length_vecs,
-				ptr_vecs, param->n_vecs,
-				bus1_in_compat_syscall());
+				ptr_vecs, param->n_vecs);
 }
 
 static int bus1_transaction_import_handles(struct bus1_transaction *transaction)

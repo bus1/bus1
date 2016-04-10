@@ -25,10 +25,8 @@
 int bus1_import_vecs(struct iovec *out_vecs,
 		     size_t *out_length,
 		     const void __user *vecs,
-		     size_t n_vecs,
-		     bool is_compat);
+		     size_t n_vecs);
 struct file *bus1_import_fd(const u32 __user *user_fd);
 struct file *bus1_clone_file(struct file *file);
-bool bus1_in_compat_syscall(void);
 
 #endif /* __BUS1_UTIL_H */
