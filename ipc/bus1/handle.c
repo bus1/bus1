@@ -7,57 +7,6 @@
  * your option) any later version.
  */
 
-/*
- * Node/Handles - Implementation Details
- *
- * (See header for high-level details, this is just about the implementation)
- *
- * Details about underlying nodes are entirely hidden in this implementation.
- * Any outside caller will only ever deal with handles!
- *
- * Both owning and non-owning handles are represented as `bus1_handle`. They
- * always have `node` pointing to the underlying node as long as they exist.
- * The node object itself `bus1_handle_node` is completely dumb. It just
- * contains a list of all linked handles (which is controlled by the owner) and
- * the transaction-id to synchronize its destruction.
- *
- * Whenever a new node is allocated, the owning handle is embedded in it. This
- * guarantees that the node owner always stays allocated until the node is
- * entirely unused. However, from the caller's perspective, the owning node and
- * non-owning node are indistinguishable. Both should be considered reference
- * counted dynamic objects.
- *
- * In the implementation, the owning handle is always considered to be part of
- * a node. Whenever you have access to a node, you can also access the owning
- * handle. As such, the node and its owning handle provide the link to the
- * owning peer. Every other handle provides the link to the respective handle
- * holder.
- *
- * Both types of links, the owner link and non-owner link, are locked by their
- * respective peer lock. They can only be access or modified by locking the
- * peer. Use RCU to pin a peer in case you don't own a reference, yet.
- * Links can be removed by their owning peer. This way, any peer can remove all
- * backlinks to itself at any time. This guarantees that the peer can be shut
- * down safely, without any dangling references. However, whenever a link is
- * shut down, the remote link needs to be released afterwards as well. This is
- * async as the remote peer (the possible other side of the handle/node
- * relationship) might unlink itself in parallel.
- *
- * For each handle, @ref represents the actual object ref-count. It must be
- * used to pin the actual memory of the handle. @n_inflight describes the
- * number of real references to this handle. Once it drops to 0, the handle
- * will be released (though stay accessible until @ref drops to 0 as well).
- * @n_user is a sub-counter of @n_inflight and is used to count the references
- * that were actually reported to the user. Users can only drop references from
- * @n_user, but not directly from @n_inflight. @n_inflight is kernel-protected
- * and used during message transactions, etc.
- *
- * All handles on a node are linked into the node. This link is protected by
- * the lock of the node-owner (handle->node->owner.holder->info->lock).
- * Additionally, all handles are linked into the rb-tree of holding peer. This
- * is obviously protected by the peer lock of the respective peer.
- */
-
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 #include <linux/atomic.h>
 #include <linux/err.h>
