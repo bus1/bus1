@@ -106,6 +106,7 @@ static void bus1_transaction_destroy(struct bus1_transaction *transaction)
 		message->transaction.next = NULL;
 		message->transaction.handle = NULL;
 		message->transaction.raw_peer = NULL;
+		message->transaction.userid = NULL;
 
 		mutex_lock(&peer_info->lock);
 		WARN_ON(bus1_queue_node_is_queued(&message->qnode));
@@ -266,11 +267,12 @@ bus1_transaction_instantiate(struct bus1_transaction *transaction,
 			     struct bus1_user *user)
 {
 	struct bus1_message *message;
+	bool silent, cont;
 	size_t i;
-	bool silent;
 	int r;
 
 	silent = transaction->param->flags & BUS1_SEND_FLAG_SILENT;
+	cont = transaction->param->flags & BUS1_SEND_FLAG_CONTINUE;
 
 	message = bus1_message_new(transaction->length_vecs,
 				   transaction->param->n_fds,
@@ -278,21 +280,6 @@ bus1_transaction_instantiate(struct bus1_transaction *transaction,
 				   silent);
 	if (IS_ERR(message))
 		return ERR_CAST(message);
-
-	message->data.uid = from_kuid_munged(peer_info->cred->user_ns,
-					     transaction->cred->uid);
-	message->data.gid = from_kgid_munged(peer_info->cred->user_ns,
-					     transaction->cred->gid);
-	message->data.pid = pid_nr_ns(transaction->pid, peer_info->pid_ns);
-	message->data.tid = pid_nr_ns(transaction->tid, peer_info->pid_ns);
-
-	for (i = 0; i < transaction->param->n_fds; ++i)
-		message->files[i] = get_file(transaction->files[i]);
-
-	r = bus1_handle_inflight_instantiate(&message->handles, peer_info,
-					     &transaction->handles);
-	if (r < 0)
-		goto error;
 
 	mutex_lock(&peer_info->lock);
 	r = bus1_message_allocate(message, peer_info, user);
@@ -309,6 +296,21 @@ bus1_transaction_instantiate(struct bus1_transaction *transaction,
 	if (r < 0)
 		goto error;
 
+	r = bus1_handle_inflight_instantiate(&message->handles, peer_info,
+					     &transaction->handles);
+	if (r < 0)
+		goto error;
+
+	message->data.uid = from_kuid_munged(peer_info->cred->user_ns,
+					     transaction->cred->uid);
+	message->data.gid = from_kgid_munged(peer_info->cred->user_ns,
+					     transaction->cred->gid);
+	message->data.pid = pid_nr_ns(transaction->pid, peer_info->pid_ns);
+	message->data.tid = pid_nr_ns(transaction->tid, peer_info->pid_ns);
+
+	for (i = 0; i < transaction->param->n_fds; ++i)
+		message->files[i] = get_file(transaction->files[i]);
+
 	return message;
 
 error:
@@ -316,15 +318,25 @@ error:
 	bus1_message_deallocate(message, peer_info);
 	mutex_unlock(&peer_info->lock);
 
-	bus1_message_free(message);
-	return ERR_PTR(r);
+	/*
+	 * If BUS1_SEND_FLAG_CONTINUE is specified, target errors are ignored.
+	 * That is, any error that is caused by the *target*, rather than the
+	 * sender, will not cause an abort of the transaction. Instead, we keep
+	 * the erroneous message and will signal the target during commit.
+	 */
+	if (cont) {
+		return message;
+	} else {
+		bus1_message_free(message);
+		return ERR_PTR(r);
+	}
 }
 
 /**
  * bus1_transaction_instantiate_for_id() - instantiate a message
  * @transaction:	transaction to work with
  * @user:		sending user
- * @destination:	destination handle id
+ * @idp:		user-space pointer with destination ID
  *
  * Instantiate the message from the given transaction for the handle id
  * @destination. A new pool-slice is allocated, a queue entry is created and the
@@ -336,21 +348,22 @@ error:
  */
 int bus1_transaction_instantiate_for_id(struct bus1_transaction *transaction,
 					struct bus1_user *user,
-					u64 destination)
+					u64 __user *idp)
 {
 	struct bus1_peer_info *peer_info;
 	struct bus1_message *message;
 	struct bus1_handle *handle;
 	struct bus1_peer *peer;
-	bool cont;
+	u64 destination;
 	int r;
 
-	cont = transaction->param->flags & BUS1_SEND_FLAG_CONTINUE;
+	if (get_user(destination, idp))
+		return -EFAULT;
 
 	r = bus1_handle_pin_destination(transaction->peer, destination,
 					&handle, &peer);
 	if (r < 0)
-		return cont ? 0 : r;
+		return r;
 
 	peer_info = bus1_peer_dereference(peer);
 
@@ -365,65 +378,93 @@ int bus1_transaction_instantiate_for_id(struct bus1_transaction *transaction,
 	message->transaction.next = transaction->entries;
 	message->transaction.handle = handle;
 	message->transaction.raw_peer = peer;
+	if (destination & BUS1_NODE_FLAG_ALLOCATE)
+		message->transaction.userid = idp;
 	transaction->entries = message;
 	bus1_active_lockdep_released(&peer->active);
 
 	return 0;
 
 error:
-	if (r < 0 && cont) {
-		if (atomic_inc_return(&peer_info->n_dropped) == 1)
-			bus1_peer_wake(peer);
-		r = 0;
-	}
 	bus1_handle_release(handle, peer_info);
 	bus1_handle_unref(handle);
 	bus1_peer_release(peer);
 	return r;
 }
 
-static void bus1_transaction_commit_one(struct bus1_transaction *transaction,
-					struct bus1_message *message,
-					u64 timestamp)
+static int
+bus1_transaction_consume(struct bus1_transaction *transaction,
+			 struct bus1_message *message,
+			 struct bus1_handle *handle,
+			 struct bus1_peer *peer,
+			 u64 __user *userid,
+			 u64 timestamp)
 {
-	struct bus1_peer_info *peer_info;
-	struct bus1_handle *handle;
-	struct bus1_peer *peer;
-	u64 id;
+	struct bus1_peer_info *peer_info = bus1_peer_dereference(peer);
+	bool faulted = false;
+	u64 id, ts;
+	int r;
 
-	handle = message->transaction.handle;
-	peer = message->transaction.raw_peer;
-	bus1_active_lockdep_acquired(&peer->active);
-	peer_info = bus1_peer_dereference(peer);
+	if (!message->slice) {
+		/*
+		 * If this is an erroneous message, all we have to do is signal
+		 * the destination that it couldn't receive the message. If
+		 * that itself was a newly created node, we rather tell the
+		 * caller about the error than waking itself up.
+		 */
+		if (userid)
+			faulted = !!put_user(-1, userid);
+		else if (atomic_inc_return(&peer_info->n_dropped) == 1)
+			bus1_peer_wake(peer);
+		r = 0;
+		goto exit;
+	}
 
-	message->transaction.handle = NULL;
-	message->transaction.raw_peer = NULL;
+	if (!timestamp) {
+		mutex_lock(&transaction->peer_info->lock);
+		ts = bus1_queue_tick(&transaction->peer_info->queue);
+		mutex_unlock(&transaction->peer_info->lock);
+	}
 
 	bus1_handle_inflight_install(&message->handles, peer,
-				     &transaction->handles, transaction->peer);
+				     &transaction->handles,
+				     transaction->peer);
 
 	mutex_lock(&peer_info->lock);
-	if (bus1_queue_node_is_queued(&message->qnode)) {
-		id = bus1_handle_order_destination(handle, timestamp);
-		if (id == BUS1_HANDLE_INVALID) {
-			bus1_message_deallocate(message, peer_info);
-		} else {
-			message->data.destination = id;
-			/* this transfers ownerhip of @message to the queue */
-			if (bus1_queue_stage(&peer_info->queue,
-					     &message->qnode, timestamp))
-				bus1_peer_wake(peer);
-			message = NULL;
-		}
+	if (timestamp) {
+		ts = timestamp;
+	} else {
+		ts = bus1_queue_sync(&peer_info->queue, ts);
+		ts = bus1_queue_tick(&peer_info->queue);
+	}
+	if (!bus1_queue_node_is_queued(&message->qnode)) {
+		id = BUS1_HANDLE_INVALID;
+	} else if (userid) {
+		/* publishing the handle consumes our inflight reference */
+		id = bus1_handle_publish_destination(handle, peer_info, ts);
+		handle = bus1_handle_unref(handle);
+		if (put_user(id, userid))
+			faulted = true;
+	} else {
+		id = bus1_handle_order_destination(handle, ts);
+	}
+	if (id != BUS1_HANDLE_INVALID) {
+		message->data.destination = id;
+		if (bus1_queue_stage(&peer_info->queue, &message->qnode, ts))
+			bus1_peer_wake(peer);
+		message = NULL;
+		r = 0;
 	} else {
 		bus1_message_deallocate(message, peer_info);
+		r = -ENXIO;
 	}
 	mutex_unlock(&peer_info->lock);
 
+exit:
 	bus1_message_free(message);
 	bus1_handle_release(handle, peer_info);
 	bus1_handle_unref(handle);
-	bus1_peer_release(peer);
+	return faulted ? -EFAULT : r;
 }
 
 /**
@@ -445,18 +486,23 @@ static void bus1_transaction_commit_one(struct bus1_transaction *transaction,
  *
  * This function never fails. If you successfully instantiated all your
  * entries, they will always be correctly committed without failure.
+ *
+ * Return: 0 on success, negative error code on failure.
  */
-void bus1_transaction_commit(struct bus1_transaction *transaction)
+int bus1_transaction_commit(struct bus1_transaction *transaction)
 {
 	struct bus1_peer_info *peer_info;
 	struct bus1_message *message, *list;
+	struct bus1_handle *handle;
 	struct bus1_peer *peer;
+	u64 __user *userid;
 	u64 timestamp;
 	bool silent;
+	int r, res = 0;
 
 	/* nothing to do for empty destination sets */
 	if (!transaction->entries)
-		return;
+		return 0;
 
 	list = transaction->entries;
 	transaction->entries = NULL;
@@ -532,16 +578,44 @@ void bus1_transaction_commit(struct bus1_transaction *transaction)
 	 */
 	while ((message = list)) {
 		list = message->transaction.next;
+		handle = message->transaction.handle;
+		peer = message->transaction.raw_peer;
+		userid = message->transaction.userid;
+		bus1_active_lockdep_acquired(&peer->active);
+
 		message->transaction.next = NULL;
-		bus1_transaction_commit_one(transaction, message, timestamp);
+		message->transaction.handle = NULL;
+		message->transaction.raw_peer = NULL;
+		message->transaction.userid = NULL;
+
+		r = bus1_transaction_consume(transaction, message, handle, peer,
+					     userid, timestamp);
+		bus1_peer_release(peer);
+
+		/*
+		 * A final commit can fail for two reasons: We either couldn't
+		 * copy the ID back to user-space, or we raced a node
+		 * destruction and couldn't send the message. The former is an
+		 * async error which we simply carry on and return late, as
+		 * there is nothing we can (or should) do about it. The latter,
+		 * though, would preferably be caught early before committing
+		 * anything. That is not possible right now, so we simply
+		 * ignore it. Should be properly fixed some day, though.
+		 */
+		if (r == -EFAULT)
+			res = r;
+		else
+			WARN_ON(r < 0 && r != -ENXIO);
 	}
+
+	return res;
 }
 
 /**
  * bus1_transaction_commit_for_id() - instantiate and commit unicast
  * @transaction:	transaction to use
  * @user:		sending user
- * @destination:	destination ID
+ * @idp:		user-space pointer with destination ID
  *
  * This is a fast-path for unicast messages. It is equivalent to calling
  * bus1_transaction_instantiate_for_id(), followed by bus1_transaction_commit().
@@ -550,28 +624,25 @@ void bus1_transaction_commit(struct bus1_transaction *transaction)
  */
 int bus1_transaction_commit_for_id(struct bus1_transaction *transaction,
 				   struct bus1_user *user,
-				   u64 destination)
+				   u64 __user *idp)
 {
 	struct bus1_peer_info *peer_info;
 	struct bus1_message *message;
 	struct bus1_handle *handle;
 	struct bus1_peer *peer;
-	u64 timestamp, id;
-	bool cont;
+	u64 destination;
+	bool alloc;
 	int r;
 
-	cont = transaction->param->flags & BUS1_SEND_FLAG_CONTINUE;
+	if (get_user(destination, idp))
+		return -EFAULT;
 
 	r = bus1_handle_pin_destination(transaction->peer, destination,
 					&handle, &peer);
 	if (r < 0)
-		return cont ? 0 : r;
+		return r;
 
 	peer_info = bus1_peer_dereference(peer);
-
-	mutex_lock(&transaction->peer_info->lock);
-	timestamp = bus1_queue_tick(&transaction->peer_info->queue);
-	mutex_unlock(&transaction->peer_info->lock);
 
 	message = bus1_transaction_instantiate(transaction, peer_info,
 					       handle, user);
@@ -581,34 +652,13 @@ int bus1_transaction_commit_for_id(struct bus1_transaction *transaction,
 		goto exit;
 	}
 
-	bus1_handle_inflight_install(&message->handles, peer,
-				     &transaction->handles,
-				     transaction->peer);
-
-	mutex_lock(&peer_info->lock);
-	timestamp = bus1_queue_sync(&peer_info->queue, timestamp);
-	timestamp = bus1_queue_tick(&peer_info->queue);
-	id = bus1_handle_order_destination(handle, timestamp);
-	if (id == BUS1_HANDLE_INVALID) {
-		bus1_message_deallocate(message, peer_info);
-		r = -ENXIO;
-	} else {
-		message->data.destination = id;
-		/* transfers message ownership to the queue */
-		if (bus1_queue_stage(&peer_info->queue, &message->qnode,
-				     timestamp))
-			bus1_peer_wake(peer);
-		message = NULL;
-		r = 0;
-	}
-	mutex_unlock(&peer_info->lock);
+	alloc = !!(destination & BUS1_NODE_FLAG_ALLOCATE);
+	r = bus1_transaction_consume(transaction, message, handle, peer,
+				     alloc ? idp : NULL, 0);
+	message = NULL;
+	handle = NULL;
 
 exit:
-	if (r < 0 && cont) {
-		if (atomic_inc_return(&peer_info->n_dropped) == 1)
-			bus1_peer_wake(peer);
-		r = 0;
-	}
 	bus1_message_free(message);
 	bus1_handle_release(handle, peer_info);
 	bus1_handle_unref(handle);

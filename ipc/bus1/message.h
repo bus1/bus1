@@ -35,6 +35,7 @@ struct bus1_user;
  * @transaction.next:		message list (during transactions)
  * @transaction.handle:		pinned handle (during transactions)
  * @transaction.raw_peer:	pinned destination (during transactions)
+ * @transaction.userid:		address to store handle id (during transactions)
  * @user:			sending user
  * @slice:			actual message data
  * @files:			passed file descriptors
@@ -48,6 +49,7 @@ struct bus1_message {
 		struct bus1_message *next;
 		struct bus1_handle *handle;
 		struct bus1_peer *raw_peer;
+		u64 __user *userid;
 	} transaction;
 
 	struct bus1_user *user;

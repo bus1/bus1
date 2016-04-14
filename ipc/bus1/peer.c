@@ -483,9 +483,8 @@ static int bus1_peer_ioctl_send(struct bus1_peer *peer, unsigned long arg)
 	struct bus1_transaction *transaction = NULL;
 	/* Use a stack-allocated buffer for the transaction object if it fits */
 	u8 buf[512];
-	const u64 __user *ptr_dest;
 	struct bus1_cmd_send param;
-	u64 destination;
+	u64 __user *ptr_dest;
 	bool cont;
 	size_t i;
 	int r;
@@ -505,11 +504,6 @@ static int bus1_peer_ioctl_send(struct bus1_peer *peer, unsigned long arg)
 	    unlikely(param.n_fds > BUS1_FD_MAX))
 		return -EMSGSIZE;
 
-	/* multicasts must ignore errors */
-	if (param.n_destinations > 1 &&
-	    !(param.flags & BUS1_SEND_FLAG_CONTINUE))
-		return -EINVAL;
-
 	/* 32bit pointer validity checks */
 	if (unlikely(param.ptr_destinations !=
 		     (u64)(unsigned long)param.ptr_destinations) ||
@@ -528,33 +522,25 @@ static int bus1_peer_ioctl_send(struct bus1_peer *peer, unsigned long arg)
 	if (IS_ERR(transaction))
 		return PTR_ERR(transaction);
 
-	ptr_dest = (const u64 __user *)(unsigned long)param.ptr_destinations;
+	ptr_dest = (u64 __user *)(unsigned long)param.ptr_destinations;
 	if (param.n_destinations == 1) { /* Fastpath: unicast */
-		if (get_user(destination, ptr_dest)) {
-			r = -EFAULT; /* faults are always fatal */
-			goto exit;
-		}
-
 		r = bus1_transaction_commit_for_id(transaction,
 						   peer->info->user,
-						   destination);
+						   ptr_dest);
 		if (r < 0 && (r != -ENXIO || !cont))
 			goto exit;
 	} else { /* Slowpath: any message */
 		for (i = 0; i < param.n_destinations; ++i) {
-			if (get_user(destination, ptr_dest + i)) {
-				r = -EFAULT; /* faults are always fatal */
-				goto exit;
-			}
-
 			r = bus1_transaction_instantiate_for_id(transaction,
 							peer->info->user,
-							destination);
+							ptr_dest + i);
 			if (r < 0 && (r != -ENXIO || !cont))
 				goto exit;
 		}
 
-		bus1_transaction_commit(transaction);
+		r = bus1_transaction_commit(transaction);
+		if (r < 0)
+			goto exit;
 	}
 
 	r = 0;
