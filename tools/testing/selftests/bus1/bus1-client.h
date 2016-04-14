@@ -51,6 +51,7 @@ int bus1_client_query(struct bus1_client *client, size_t *pool_sizep);
 int bus1_client_mmap(struct bus1_client *client);
 int bus1_client_init(struct bus1_client *client, size_t pool_size);
 int bus1_client_clone(struct bus1_client *client,
+		      uint64_t *nodep,
 		      uint64_t *handlep,
 		      int *fdp,
 		      size_t pool_size);

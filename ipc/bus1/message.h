@@ -22,7 +22,6 @@
 #include "handle.h"
 #include "queue.h"
 
-struct bus1_handle;
 struct bus1_message;
 struct bus1_peer;
 struct bus1_peer_info;
@@ -63,15 +62,13 @@ struct bus1_message *bus1_message_new(size_t n_bytes,
 				      size_t n_handles,
 				      bool silent);
 struct bus1_message *bus1_message_free(struct bus1_message *message);
-int bus1_message_allocate_locked(struct bus1_message *message,
-				 struct bus1_peer_info *peer_info,
-				 struct bus1_user *user);
-void bus1_message_deallocate_locked(struct bus1_message *message,
-				    struct bus1_peer_info *peer_info);
-int bus1_message_install_handles(struct bus1_message *message,
-				 struct bus1_peer_info *peer_info);
-int bus1_message_install_fds(struct bus1_message *message,
+int bus1_message_allocate(struct bus1_message *message,
+			  struct bus1_peer_info *peer_info,
+			  struct bus1_user *user);
+void bus1_message_deallocate(struct bus1_message *message,
 			     struct bus1_peer_info *peer_info);
+int bus1_message_install(struct bus1_message *message,
+			 struct bus1_peer_info *peer_info);
 
 /**
  * bus1_message_from_node - get parent message of a queue node

@@ -35,6 +35,7 @@
  *
  * This queries the node type that was provided via the node constructor. A
  * node never changes its type during its entire lifetime.
+ * The caller must hold the peer lock or own the queue-node.
  *
  * Return: Type of @node is returned.
  */
@@ -44,7 +45,16 @@ unsigned int bus1_queue_node_get_type(struct bus1_queue_node *node)
 							BUS1_QUEUE_TYPE_SHIFT;
 }
 
-static u64 bus1_queue_node_get_timestamp(struct bus1_queue_node *node)
+/**
+ * bus1_queue_node_get_timestamp() - query node timestamp
+ * @node:		node to query
+ *
+ * This queries the node timestamp that is currently set on this node. The
+ * caller must hold the peer lock or own the queue-node.
+ *
+ * Return: Timestamp of @node is returned.
+ */
+u64 bus1_queue_node_get_timestamp(struct bus1_queue_node *node)
 {
 	return node->timestamp_and_type & ~BUS1_QUEUE_TYPE_MASK;
 }

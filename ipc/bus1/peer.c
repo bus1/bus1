@@ -34,10 +34,9 @@
 #include "user.h"
 #include "util.h"
 
-static void bus1_peer_info_reset(struct bus1_peer_info *peer_info)
+static void bus1_peer_info_reset(struct bus1_peer_info *peer_info, bool final)
 {
 	struct bus1_queue_node *node, *t;
-	struct rb_root handles = RB_ROOT;
 
 	mutex_lock(&peer_info->lock);
 
@@ -51,8 +50,7 @@ static void bus1_peer_info_reset(struct bus1_peer_info *peer_info)
 			message = bus1_message_from_node(node);
 			RB_CLEAR_NODE(&node->rb); /* mark as dropped */
 			if (bus1_queue_node_is_committed(node)) {
-				bus1_message_deallocate_locked(message,
-							       peer_info);
+				bus1_message_deallocate(message, peer_info);
 				bus1_message_free(message);
 			}
 
@@ -61,9 +59,12 @@ static void bus1_peer_info_reset(struct bus1_peer_info *peer_info)
 		case BUS1_QUEUE_NODE_HANDLE_DESTRUCTION: {
 			struct bus1_handle *handle;
 
-			handle = bus1_handle_from_node(node);
+			handle = bus1_handle_from_node(node, NULL);
 			RB_CLEAR_NODE(&node->rb);
-			bus1_handle_unref(handle);
+			if (bus1_queue_node_is_committed(node)) {
+				bus1_queue_node_destroy(node);
+				bus1_handle_unref(handle);
+			}
 
 			break;
 		}
@@ -73,13 +74,11 @@ static void bus1_peer_info_reset(struct bus1_peer_info *peer_info)
 		}
 	}
 	bus1_queue_post_flush(&peer_info->queue);
-
 	bus1_pool_flush(&peer_info->pool);
-	bus1_handle_flush_all(peer_info, &handles);
 
 	mutex_unlock(&peer_info->lock);
 
-	bus1_handle_finish_all(peer_info, &handles);
+	bus1_handle_flush_all(peer_info, final);
 }
 
 static struct bus1_peer_info *
@@ -88,7 +87,7 @@ bus1_peer_info_free(struct bus1_peer_info *peer_info)
 	if (!peer_info)
 		return NULL;
 
-	bus1_peer_info_reset(peer_info);
+	bus1_peer_info_reset(peer_info, true);
 
 	bus1_queue_destroy(&peer_info->queue);
 	bus1_pool_destroy(&peer_info->pool);
@@ -97,6 +96,9 @@ bus1_peer_info_free(struct bus1_peer_info *peer_info)
 	peer_info->user = bus1_user_unref(peer_info->user);
 	put_pid_ns(peer_info->pid_ns);
 	put_cred(peer_info->cred);
+
+	WARN_ON(!RB_EMPTY_ROOT(&peer_info->map_handles_by_node));
+	WARN_ON(!RB_EMPTY_ROOT(&peer_info->map_handles_by_id));
 
 	/*
 	 * Make sure the object is freed in a delayed-manner. Some
@@ -340,77 +342,9 @@ static int bus1_peer_ioctl_reset(struct bus1_peer *peer, unsigned long arg)
 		return -EINVAL;
 
 	peer_info = bus1_peer_dereference(peer);
-	/* XXX: do not drop passed in handle */
-	bus1_peer_info_reset(peer_info);
+	bus1_peer_info_reset(peer_info, false);
 
 	return 0;
-}
-
-static int bus1_peer_handle_pair(struct bus1_peer *peer,
-				 struct bus1_peer *clone,
-				 u64 *idp)
-{
-	struct bus1_peer_info *peer_info = bus1_peer_dereference(peer);
-	struct bus1_peer_info *clone_info = bus1_peer_dereference(clone);
-	struct bus1_handle *t, *root = NULL, *export = NULL;
-	u64 id;
-	int r;
-
-	/*
-	 * This allocates a new node on @clone and imports a handle to it into
-	 * @peer. The ID of this handle is then returned via @idp.
-	 */
-
-	root = bus1_handle_new_node();
-	if (IS_ERR(root)) {
-		r = PTR_ERR(root);
-		return BUS1_ERR(r); /* silence gcc */
-	}
-
-	export = bus1_handle_new_copy(root);
-	if (IS_ERR(export)) {
-		r = PTR_ERR(export);
-		r = BUS1_ERR(r); /* silence gcc */
-		export = NULL;
-		goto exit;
-	}
-
-	mutex_lock(&clone_info->lock);
-	WARN_ON(!bus1_handle_attach_unlocked(root, clone));
-	WARN_ON(root != bus1_handle_install_unlocked(root));
-	WARN_ON(!bus1_handle_attach_unlocked(export, peer));
-	mutex_unlock(&clone_info->lock);
-
-	mutex_lock(&peer_info->lock);
-	t = bus1_handle_install_unlocked(export);
-	mutex_unlock(&peer_info->lock);
-
-	if (!t) {
-		bus1_handle_release_pinned(export, peer_info);
-		bus1_handle_release_pinned(root, clone_info);
-		r = -ESHUTDOWN;
-		goto exit;
-	}
-
-	if (t != export) {
-		/* conflict: switch over to @t */
-		bus1_handle_release_pinned(export, peer_info);
-		bus1_handle_unref(export);
-		export = t;
-	}
-
-	id = bus1_handle_release_to_inflight(root, 0);
-	WARN_ON(id == BUS1_HANDLE_INVALID);
-	id = bus1_handle_release_to_inflight(export, 0);
-	WARN_ON(id == BUS1_HANDLE_INVALID);
-
-	r = 0;
-	*idp = id;
-
-exit:
-	bus1_handle_unref(export);
-	bus1_handle_unref(root);
-	return r;
 }
 
 static int bus1_peer_ioctl_clone(struct bus1_peer *peer,
@@ -422,8 +356,8 @@ static int bus1_peer_ioctl_clone(struct bus1_peer *peer,
 	struct bus1_peer_info *peer_info, *clone_info = NULL;
 	struct bus1_peer *clone = NULL;
 	struct file *clone_file = NULL;
+	u64 node_id, handle_id;
 	int r, fd;
-	u64 id;
 
 	lockdep_assert_held(&peer->active);
 
@@ -433,6 +367,7 @@ static int bus1_peer_ioctl_clone(struct bus1_peer *peer,
 		return -EFAULT;
 	if (unlikely(param.flags) ||
 	    unlikely(param.pool_size == 0) ||
+	    unlikely(param.node != BUS1_HANDLE_INVALID) ||
 	    unlikely(param.handle != BUS1_HANDLE_INVALID) ||
 	    unlikely(param.fd != (u64)-1))
 		return -EINVAL;
@@ -470,14 +405,15 @@ static int bus1_peer_ioctl_clone(struct bus1_peer *peer,
 	bus1_active_activate(&clone->active);
 	WARN_ON(!bus1_peer_acquire(clone));
 
-	r = bus1_peer_handle_pair(peer, clone, &id);
+	r = bus1_handle_pair(clone, peer, &node_id, &handle_id);
 	if (r < 0)
 		goto error;
 
 	fd_install(fd, clone_file); /* consumes file reference */
 	bus1_peer_release(clone);
 
-	if (put_user(id, &uparam->handle) ||
+	if (put_user(node_id, &uparam->node) ||
+	    put_user(handle_id, &uparam->handle) ||
 	    put_user(fd, &uparam->fd))
 		return -EFAULT; /* We don't care, keep what we did */
 
@@ -550,6 +486,7 @@ static int bus1_peer_ioctl_send(struct bus1_peer *peer, unsigned long arg)
 	const u64 __user *ptr_dest;
 	struct bus1_cmd_send param;
 	u64 destination;
+	bool cont;
 	size_t i;
 	int r;
 
@@ -584,6 +521,8 @@ static int bus1_peer_ioctl_send(struct bus1_peer *peer, unsigned long arg)
 		     (u64)(unsigned long)param.ptr_fds))
 		return -EFAULT;
 
+	cont = param.flags & BUS1_SEND_FLAG_CONTINUE;
+
 	transaction = bus1_transaction_new_from_user(buf, sizeof(buf), peer,
 						     &param);
 	if (IS_ERR(transaction))
@@ -599,7 +538,7 @@ static int bus1_peer_ioctl_send(struct bus1_peer *peer, unsigned long arg)
 		r = bus1_transaction_commit_for_id(transaction,
 						   peer->info->user,
 						   destination);
-		if (r < 0)
+		if (r < 0 && (r != -ENXIO || !cont))
 			goto exit;
 	} else { /* Slowpath: any message */
 		for (i = 0; i < param.n_destinations; ++i) {
@@ -611,7 +550,7 @@ static int bus1_peer_ioctl_send(struct bus1_peer *peer, unsigned long arg)
 			r = bus1_transaction_instantiate_for_id(transaction,
 							peer->info->user,
 							destination);
-			if (r < 0)
+			if (r < 0 && (r != -ENXIO || !cont))
 				goto exit;
 		}
 
@@ -633,29 +572,13 @@ static int bus1_peer_dequeue_message(struct bus1_peer_info *peer_info,
 
 	lockdep_assert_held(&peer_info->lock);
 
-	if (message->data.n_handles > 0) {
-		/* similar to fd-install we do this with the peer locked */
-		r = bus1_message_install_handles(message, peer_info);
-		if (r < 0)
-			return r;
-	}
-
-	if (unlikely(message->data.n_fds > 0)) {
-		/*
-		 * Preferably, this would not be underneath the peer lock. But
-		 * unfortunately, even with pre-allocated FD arrays, the final
-		 * slice-copy may fail. Hence, we'd have to sync against other
-		 * parallel readers, which seems overkill. If you receive many
-		 * FDs, you better be able to deal with it.
-		 */
-		r = bus1_message_install_fds(message, peer_info);
-		if (r < 0)
-			return r;
-	}
+	r = bus1_message_install(message, peer_info);
+	if (r < 0)
+		return r;
 
 	bus1_queue_remove(&peer_info->queue, &message->qnode);
 	bus1_pool_publish(&peer_info->pool, message->slice);
-	bus1_message_deallocate_locked(message, peer_info);
+	bus1_message_deallocate(message, peer_info);
 
 	return 0;
 }
@@ -692,13 +615,13 @@ static int bus1_peer_dequeue(struct bus1_peer_info *peer_info,
 		case BUS1_QUEUE_NODE_HANDLE_DESTRUCTION: {
 			struct bus1_handle *handle;
 
-			handle = bus1_handle_from_node(node);
+			handle = bus1_handle_from_node(node,
+						&param->node_destroy.handle);
 			bus1_queue_remove(&peer_info->queue, node);
+			bus1_queue_node_destroy(node);
 			mutex_unlock(&peer_info->lock);
 
 			param->type = BUS1_MSG_NODE_DESTROY;
-			param->node_destroy.handle = bus1_handle_get_id(handle);
-
 			bus1_handle_unref(handle);
 			return 0;
 		}
@@ -719,7 +642,6 @@ static void bus1_peer_peek(struct bus1_peer_info *peer_info,
 {
 	struct bus1_queue_node *node;
 	struct bus1_message *message;
-	struct bus1_handle *handle;
 
 	mutex_lock(&peer_info->lock);
 	node = bus1_queue_peek(&peer_info->queue);
@@ -734,9 +656,9 @@ static void bus1_peer_peek(struct bus1_peer_info *peer_info,
 			       sizeof(param->data));
 			break;
 		case BUS1_QUEUE_NODE_HANDLE_DESTRUCTION:
-			handle = bus1_handle_from_node(node);
+			bus1_handle_from_node(node,
+					      &param->node_destroy.handle);
 			param->type = BUS1_MSG_NODE_DESTROY;
-			param->node_destroy.handle = bus1_handle_get_id(handle);
 			break;
 		default:
 			WARN(1, "Invalid queue-node type");

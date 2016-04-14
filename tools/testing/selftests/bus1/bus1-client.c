@@ -216,6 +216,7 @@ _public_ int bus1_client_init(struct bus1_client *client, size_t pool_size)
 }
 
 _public_ int bus1_client_clone(struct bus1_client *client,
+			       uint64_t *nodep,
 			       uint64_t *handlep,
 			       int *fdp,
 			       size_t pool_size)
@@ -225,6 +226,7 @@ _public_ int bus1_client_clone(struct bus1_client *client,
 
 	peer_clone.flags = 0;
 	peer_clone.pool_size = pool_size;
+	peer_clone.node = BUS1_HANDLE_INVALID;
 	peer_clone.handle = BUS1_HANDLE_INVALID;
 	peer_clone.fd = (uint64_t)-1;
 
@@ -235,9 +237,11 @@ _public_ int bus1_client_clone(struct bus1_client *client,
 	if (r < 0)
 		return r;
 
-	assert(peer_clone.fd != (uint64_t)-1);
+	assert(peer_clone.node != BUS1_HANDLE_INVALID);
 	assert(peer_clone.handle != BUS1_HANDLE_INVALID);
+	assert(peer_clone.fd != (uint64_t)-1);
 
+	*nodep = peer_clone.node;
 	*handlep = peer_clone.handle;
 	*fdp = peer_clone.fd;
 	return 0;

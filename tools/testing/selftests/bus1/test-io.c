@@ -55,7 +55,7 @@ static int client_slice_release(struct bus1_client *client, void *slice)
 static void test_basic(void)
 {
 	struct bus1_client *sender, *receiver1, *receiver2;
-	uint64_t handles[2];
+	uint64_t node, handles[2];
 	char *payload = "WOOFWOOF";
 	char *reply_payload;
 	size_t reply_len;
@@ -69,7 +69,8 @@ static void test_basic(void)
 	assert(r >= 0);
 
 	/* create first child */
-	r = bus1_client_clone(sender, handles, &fd, BUS1_CLIENT_POOL_SIZE);
+	r = bus1_client_clone(sender, &node, handles, &fd,
+			      BUS1_CLIENT_POOL_SIZE);
 	assert(r >= 0);
 
 	r = bus1_client_new_from_fd(&receiver1, fd);
@@ -92,7 +93,8 @@ static void test_basic(void)
 	assert(r >= 0);
 
 	/* create second child */
-	r = bus1_client_clone(sender, handles + 1, &fd, BUS1_CLIENT_POOL_SIZE);
+	r = bus1_client_clone(sender, &node, handles + 1, &fd,
+			      BUS1_CLIENT_POOL_SIZE);
 	assert(r >= 0);
 
 	r = bus1_client_new_from_fd(&receiver2, fd);
@@ -149,7 +151,7 @@ static uint64_t test_iterate(unsigned int iterations,
 	char *reply_payload;
 	size_t reply_len;
 	unsigned int j, i;
-	uint64_t time_start, time_end;
+	uint64_t node, time_start, time_end;
 	int r, fd;
 
 	/* create parent */
@@ -161,7 +163,7 @@ static uint64_t test_iterate(unsigned int iterations,
 
 	/* create children */
 	for (i = 0; i < n_destinations; i++) {
-		r = bus1_client_clone(sender, handles + i,
+		r = bus1_client_clone(sender, &node, handles + i,
 				      &fd, BUS1_CLIENT_POOL_SIZE);
 		assert(r >= 0);
 

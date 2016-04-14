@@ -179,32 +179,28 @@ struct bus1_handle_inflight {
 };
 
 /* handles */
-struct bus1_handle *bus1_handle_new_copy(struct bus1_handle *existing);
-struct bus1_handle *bus1_handle_new_node(void);
-struct bus1_handle *bus1_handle_ref(struct bus1_handle *handle);
 struct bus1_handle *bus1_handle_unref(struct bus1_handle *handle);
-struct bus1_handle *bus1_handle_from_node(struct bus1_queue_node *node);
-struct bus1_handle *bus1_handle_find_by_id(struct bus1_peer_info *peer_info,
-					   u64 id);
-bool bus1_handle_is_public(struct bus1_handle *handle);
-u64 bus1_handle_get_id(struct bus1_handle *handle);
-u64 bus1_handle_get_owner_id(struct bus1_handle *handle);
-u64 bus1_handle_get_inorder_id(struct bus1_handle *handle, u64 timestamp);
-struct bus1_handle *bus1_handle_release(struct bus1_handle *handle);
-struct bus1_handle *bus1_handle_release_pinned(struct bus1_handle *handle,
+struct bus1_handle *bus1_handle_release(struct bus1_handle *handle,
 					struct bus1_peer_info *peer_info);
-u64 bus1_handle_release_to_inflight(struct bus1_handle *handle, u64 timestamp);
-struct bus1_peer *bus1_handle_pin(struct bus1_handle *handle);
-bool bus1_handle_attach_unlocked(struct bus1_handle *handle,
-				 struct bus1_peer *holder);
-struct bus1_handle *bus1_handle_install_unlocked(struct bus1_handle *handle);
-u64 bus1_handle_commit(struct bus1_handle *handle, u64 msg_seq);
+struct bus1_handle *bus1_handle_from_node(struct bus1_queue_node *node,
+					  u64 *idp);
+
+/* api */
+int bus1_handle_pin_destination(struct bus1_peer *peer,
+				u64 id,
+				struct bus1_handle **dst_handlep,
+				struct bus1_peer **dst_peerp);
+u64 bus1_handle_order_destination(struct bus1_handle *handle, u64 timestamp);
+u64 bus1_handle_publish_destination(struct bus1_handle *handle,
+				    struct bus1_peer_info *peer_info,
+				    u64 timestamp);
+int bus1_handle_pair(struct bus1_peer *clone,
+		     struct bus1_peer *peer,
+		     u64 *node_idp,
+		     u64 *handle_idp);
 int bus1_handle_release_by_id(struct bus1_peer_info *peer_info, u64 id);
 int bus1_handle_destroy_by_id(struct bus1_peer_info *peer_info, u64 id);
-void bus1_handle_flush_all(struct bus1_peer_info *peer_info,
-			   struct rb_root *map);
-void bus1_handle_finish_all(struct bus1_peer_info *peer_info,
-			    struct rb_root *map);
+void bus1_handle_flush_all(struct bus1_peer_info *peer_info, bool final);
 
 /* transfer contexts */
 void bus1_handle_transfer_init(struct bus1_handle_transfer *transfer,
@@ -226,11 +222,15 @@ void bus1_handle_inflight_install(struct bus1_handle_inflight *inflight,
 				  struct bus1_peer *dst,
 				  struct bus1_handle_transfer *transfer,
 				  struct bus1_peer *src);
-void bus1_handle_inflight_commit(struct bus1_handle_inflight *inflight,
-				 u64 seq);
 size_t bus1_handle_inflight_walk(struct bus1_handle_inflight *inflight,
+				 struct bus1_peer_info *peer_info,
 				 size_t *pos,
-				 u64 **idp);
+				 void **iter,
+				 u64 *ids,
+				 u64 timestamp);
+void bus1_handle_inflight_commit(struct bus1_handle_inflight *inflight,
+				 struct bus1_peer_info *peer_info,
+				 u64 timestamp);
 
 /**
  * bus1_handle_batch_inline_size() - calculate required inline size

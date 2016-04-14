@@ -70,7 +70,7 @@ int client_query(struct bus1_client *client)
 static void test_api_connect(void)
 {
 	struct bus1_client *c1, *c2;
-	uint64_t handle;
+	uint64_t node, handle;
 	int r, fd;
 
 	r = bus1_client_new_from_path(&c1, test_path);
@@ -78,12 +78,14 @@ static void test_api_connect(void)
 
 	/* verify clone fails if origin is unconnected */
 
+	node = BUS1_HANDLE_INVALID;
 	handle = BUS1_HANDLE_INVALID;
 	fd = -1;
-	r = bus1_client_clone(c1, &handle, &fd, BUS1_CLIENT_POOL_SIZE);
+	r = bus1_client_clone(c1, &node, &handle, &fd, BUS1_CLIENT_POOL_SIZE);
 	assert(r < 0);
-	assert(fd == -1);
+	assert(node == BUS1_HANDLE_INVALID);
 	assert(handle == BUS1_HANDLE_INVALID);
+	assert(fd == -1);
 
 	r = client_query(c1);
 	assert(r == -ENOTCONN);
@@ -109,10 +111,11 @@ static void test_api_connect(void)
 
 	/* clone new peer from @c1 and create @c2 from it */
 
-	r = bus1_client_clone(c1, &handle, &fd, BUS1_CLIENT_POOL_SIZE);
+	r = bus1_client_clone(c1, &node, &handle, &fd, BUS1_CLIENT_POOL_SIZE);
 	assert(r >= 0);
-	assert(fd >= 0);
+	assert(node != BUS1_HANDLE_INVALID);
 	assert(handle != BUS1_HANDLE_INVALID);
+	assert(fd >= 0);
 
 	r = bus1_client_new_from_fd(&c2, fd);
 	assert(r >= 0);
