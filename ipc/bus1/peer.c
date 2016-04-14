@@ -525,15 +525,13 @@ static int bus1_peer_ioctl_send(struct bus1_peer *peer, unsigned long arg)
 	ptr_dest = (u64 __user *)(unsigned long)param.ptr_destinations;
 	if (param.n_destinations == 1) { /* Fastpath: unicast */
 		r = bus1_transaction_commit_for_id(transaction,
-						   peer->info->user,
 						   ptr_dest);
 		if (r < 0 && (r != -ENXIO || !cont))
 			goto exit;
 	} else { /* Slowpath: any message */
 		for (i = 0; i < param.n_destinations; ++i) {
 			r = bus1_transaction_instantiate_for_id(transaction,
-							peer->info->user,
-							ptr_dest + i);
+								ptr_dest + i);
 			if (r < 0 && (r != -ENXIO || !cont))
 				goto exit;
 		}

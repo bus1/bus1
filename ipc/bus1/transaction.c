@@ -263,8 +263,7 @@ bus1_transaction_free(struct bus1_transaction *transaction, u8 *stack_buffer)
 static struct bus1_message *
 bus1_transaction_instantiate(struct bus1_transaction *transaction,
 			     struct bus1_peer_info *peer_info,
-			     struct bus1_handle *handle,
-			     struct bus1_user *user)
+			     struct bus1_handle *handle)
 {
 	struct bus1_message *message;
 	bool silent, cont;
@@ -282,7 +281,8 @@ bus1_transaction_instantiate(struct bus1_transaction *transaction,
 		return ERR_CAST(message);
 
 	mutex_lock(&peer_info->lock);
-	r = bus1_message_allocate(message, peer_info, user);
+	r = bus1_message_allocate(message, peer_info,
+				  transaction->peer_info->user);
 	mutex_unlock(&peer_info->lock);
 	if (r < 0)
 		goto error;
@@ -335,7 +335,6 @@ error:
 /**
  * bus1_transaction_instantiate_for_id() - instantiate a message
  * @transaction:	transaction to work with
- * @user:		sending user
  * @idp:		user-space pointer with destination ID
  *
  * Instantiate the message from the given transaction for the handle id
@@ -347,7 +346,6 @@ error:
  * Return: 0 on success, negative error code on failure.
  */
 int bus1_transaction_instantiate_for_id(struct bus1_transaction *transaction,
-					struct bus1_user *user,
 					u64 __user *idp)
 {
 	struct bus1_peer_info *peer_info;
@@ -367,8 +365,7 @@ int bus1_transaction_instantiate_for_id(struct bus1_transaction *transaction,
 
 	peer_info = bus1_peer_dereference(peer);
 
-	message = bus1_transaction_instantiate(transaction, peer_info,
-					       handle, user);
+	message = bus1_transaction_instantiate(transaction, peer_info, handle);
 	if (IS_ERR(message)) {
 		r = PTR_ERR(message);
 		message = NULL;
@@ -614,7 +611,6 @@ int bus1_transaction_commit(struct bus1_transaction *transaction)
 /**
  * bus1_transaction_commit_for_id() - instantiate and commit unicast
  * @transaction:	transaction to use
- * @user:		sending user
  * @idp:		user-space pointer with destination ID
  *
  * This is a fast-path for unicast messages. It is equivalent to calling
@@ -623,7 +619,6 @@ int bus1_transaction_commit(struct bus1_transaction *transaction)
  * Return: 0 on success, negative error code on failure.
  */
 int bus1_transaction_commit_for_id(struct bus1_transaction *transaction,
-				   struct bus1_user *user,
 				   u64 __user *idp)
 {
 	struct bus1_peer_info *peer_info;
@@ -644,8 +639,7 @@ int bus1_transaction_commit_for_id(struct bus1_transaction *transaction,
 
 	peer_info = bus1_peer_dereference(peer);
 
-	message = bus1_transaction_instantiate(transaction, peer_info,
-					       handle, user);
+	message = bus1_transaction_instantiate(transaction, peer_info, handle);
 	if (IS_ERR(message)) {
 		r = PTR_ERR(message);
 		message = NULL;
