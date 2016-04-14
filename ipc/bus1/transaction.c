@@ -338,7 +338,7 @@ error:
  * @idp:		user-space pointer with destination ID
  *
  * Instantiate the message from the given transaction for the handle id
- * @destination. A new pool-slice is allocated, a queue entry is created and the
+ * in @idp. A new pool-slice is allocated, a queue entry is created and the
  * message is queued as in-flight message on the transaction object. The
  * message is not linked on the destination, yet. You need to commit the
  * transaction to actually link it on the destination queue.
@@ -481,8 +481,9 @@ exit:
  * the same contents as the previous one. This might come in handy for messages
  * that might be triggered multiple times (like peer notifications).
  *
- * This function never fails. If you successfully instantiated all your
- * entries, they will always be correctly committed without failure.
+ * This function may fail if the handle id of newly allocated nodes cannot be
+ * written back to the caller. Errors due to racing node destructions are
+ * silently ignored.
  *
  * Return: 0 on success, negative error code on failure.
  */
