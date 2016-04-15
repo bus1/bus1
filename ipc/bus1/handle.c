@@ -946,14 +946,14 @@ static int bus1_handle_userref_drop(struct bus1_handle *handle,
 	if (n_user >= 0)
 		return 0; /* DEC happened, but didn't drop to -1 */
 	else if (n_user < -1)
-		return -ESTALE; /* DEC did not happen, no ref owned */
+		return -ENXIO; /* DEC did not happen, no ref owned */
 
 	mutex_lock(&peer_info->lock);
 
 	n_user = atomic_read(&handle->n_user);
 	if (n_user < 0) {
 		mutex_unlock(&peer_info->lock);
-		return -ESTALE;
+		return -ENXIO;
 	}
 
 	n_user = atomic_dec_return(&handle->n_user);

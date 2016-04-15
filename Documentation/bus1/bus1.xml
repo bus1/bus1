@@ -310,13 +310,6 @@
         </varlistentry>
 
         <varlistentry>
-          <term><constant>ESTALE</constant></term>
-          <listitem><para>
-            Referenced node has no local handles.
-          </para></listitem>
-        </varlistentry>
-
-        <varlistentry>
           <term><constant>EINPROGRESS</constant></term>
           <listitem><para>
             Node destruction already in progress.
