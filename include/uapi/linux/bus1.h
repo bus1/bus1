@@ -35,7 +35,6 @@
  *   ENOTCONN:          local peer is not initialized, yet
  *   EISCONN:           local peer is already initialized
  *   EXFULL:            target memory pool is full
- *   EINPROGRESS:       node destruction already in progress
  *   EDQUOT:            quota exceeded
  *   EBADF:             invalid file-descriptor
  *   EPERM:             permission denied
