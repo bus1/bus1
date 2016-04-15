@@ -453,7 +453,7 @@ bus1_transaction_consume(struct bus1_transaction *transaction,
 		r = 0;
 	} else {
 		bus1_message_deallocate(message, peer_info);
-		r = -ENXIO;
+		r = -EHOSTUNREACH;
 	}
 	mutex_unlock(&peer_info->lock);
 
@@ -603,7 +603,7 @@ int bus1_transaction_commit(struct bus1_transaction *transaction)
 		if (r == -EFAULT)
 			res = r;
 		else
-			WARN_ON(r < 0 && r != -ENXIO);
+			WARN_ON(r < 0 && r != -EHOSTUNREACH);
 	}
 
 	return res;

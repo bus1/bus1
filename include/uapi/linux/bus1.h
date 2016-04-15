@@ -30,6 +30,7 @@
  *   EMSGSIZE:          ioctl parameters are too small/large
  *   ENOTTY:            unknown ioctl
  *   ENXIO:             destination handle does not exist
+ *   EHOSTUNREACH:      destination handle has been destroyed
  *   ESHUTDOWN:         local peer was already disconnected
  *   ENOTCONN:          local peer is not initialized, yet
  *   EISCONN:           local peer is already initialized
