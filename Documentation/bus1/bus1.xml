@@ -277,7 +277,7 @@
         <varlistentry>
           <term><constant>ENXIO</constant></term>
           <listitem><para>
-            Destination handle does not exist.
+            Invalid handle.
           </para></listitem>
         </varlistentry>
 

@@ -29,7 +29,7 @@
  *   EINVAL:            invalid parameters
  *   EMSGSIZE:          ioctl parameters are too small/large
  *   ENOTTY:            unknown ioctl
- *   ENXIO:             destination handle does not exist
+ *   ENXIO:             invalid handle
  *   EHOSTUNREACH:      destination handle has been destroyed
  *   ESHUTDOWN:         local peer was already disconnected
  *   ENOTCONN:          local peer is not initialized, yet
