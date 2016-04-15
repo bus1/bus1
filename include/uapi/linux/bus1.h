@@ -25,7 +25,7 @@
  * following error codes are well-defined and used all over the place:
  *
  *   EAGAIN:            no messages ready to be dequeued
- *   EHOSTUNREACH:      destination handle has been destroyed
+ *   EHOSTUNREACH:      destination node has been destroyed
  *   EDQUOT:            quota exceeded
  *   EXFULL:            target memory pool is full
  *   ETOOMANYREFS:      user has too many in-flight file-descriptors
@@ -33,7 +33,7 @@
  *   ESHUTDOWN:         local peer was already disconnected
  *   ENOTCONN:          local peer is not initialized, yet
  *   EISCONN:           local peer is already initialized
- *   ENXIO:             invalid handle
+ *   ENXIO:             invalid handle or slice
  *   EBADF:             invalid file-descriptor
  *   EPERM:             permission denied to mmap pool as writable
  *   EOPNOTSUPP:        could not pass file-descriptor of unsupported type

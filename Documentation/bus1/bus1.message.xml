@@ -445,44 +445,90 @@ struct bus1_msg_node_destroy {
     <para>
       On success, all mentioned ioctl commands return <errorcode>0</errorcode>;
       on error, <errorcode>-1</errorcode> is returned, and
-      <varname>errno</varname> is set to indicate the error.
-      If the issued ioctl is illegal for the file descriptor used,
-      <varname>errno</varname> will be set to <constant>ENOTTY</constant>.
+      <varname>errno</varname> is set to indicate the error. See
+      <citerefentry>
+        <refentrytitle>bus1</refentrytitle>
+        <manvolnum>7</manvolnum>
+      </citerefentry>
+      for a list of possible error codes, in addition to the ones listed below.
     </para>
 
-<!-- XXX
     <refsect2>
       <title>
-        <constant>KDBUS_CMD_FREE</constant> may fail with the following
+        <constant>BUS1_CMD_RECV</constant> may fail with the following
         errors
       </title>
 
       <variablelist>
         <varlistentry>
-          <term><constant>ENXIO</constant></term>
+          <term><constant>EAGAIN</constant></term>
           <listitem><para>
-            No pool slice found at given offset.
-          </para></listitem>
-        </varlistentry>
-
-        <varlistentry>
-          <term><constant>EINVAL</constant></term>
-          <listitem><para>
-            Invalid flags provided.
-          </para></listitem>
-        </varlistentry>
-
-        <varlistentry>
-          <term><constant>EINVAL</constant></term>
-          <listitem><para>
-            The offset is valid, but the user is not allowed to free the slice.
-            This happens, for example, if the offset was retrieved with
-            <constant>KDBUS_RECV_PEEK</constant>.
+            No message is ready to be dequeued.
           </para></listitem>
         </varlistentry>
       </variablelist>
     </refsect2>
--->
+
+    <refsect2>
+      <title>
+        <constant>BUS1_CMD_SEND</constant> may fail with the following
+        errors
+      </title>
+
+      <variablelist>
+        <varlistentry>
+          <term><constant>EHOSTUNREACH</constant></term>
+          <listitem><para>
+            The destination node has been destroyed. In particular, the message
+            being sent would be received after the destruction notification
+            for the destination node.
+          </para></listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><constant>EDQUOT</constant></term>
+          <listitem><para>
+            User exceeded their quota for destination peer.
+          </para></listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><constant>ETOOMANYREFS</constant></term>
+          <listitem><para>
+            User has too many in-flight file-descriptors.
+          </para></listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><constant>EXFULL</constant></term>
+          <listitem><para>
+            Target memory pool is full.
+          </para></listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><constant>ENXIO</constant></term>
+          <listitem><para>
+            Destination or passed handle id invalid.
+          </para></listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><constant>EBADF</constant></term>
+          <listitem><para>
+            Passed file-descriptor is invalid.
+          </para></listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><constant>EOPNOTSUPP</constant></term>
+          <listitem><para>
+            Passed file-descriptor has unsupported type. Passing bus1 or UDS
+            file-descriptors is not supported.
+          </para></listitem>
+        </varlistentry>
+      </variablelist>
+    </refsect2>
   </refsect1>
 
   <refsect1>
@@ -504,18 +550,6 @@ struct bus1_msg_node_destroy {
         <citerefentry>
           <refentrytitle>bus1.message</refentrytitle>
           <manvolnum>7</manvolnum>
-        </citerefentry>
-      </member>
-      <member>
-        <citerefentry>
-          <refentrytitle>mmap</refentrytitle>
-            <manvolnum>2</manvolnum>
-          </citerefentry>
-        </member>
-      <member>
-        <citerefentry>
-          <refentrytitle>munmap</refentrytitle>
-          <manvolnum>2</manvolnum>
         </citerefentry>
       </member>
     </simplelist>

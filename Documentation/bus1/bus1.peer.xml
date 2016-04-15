@@ -112,7 +112,6 @@ struct bus1_cmd_peer_init {
     <programlisting>
 struct bus1_cmd_peer_reset {
   __u64 flags;
-  __u64 handle;
 };
     </programlisting>
 
@@ -126,16 +125,6 @@ struct bus1_cmd_peer_reset {
           <constant>0</constant>.
         </para></listitem>
       </varlistentry>
-
-      <varlistentry>
-        <term><varname>handle</varname></term>
-        <listitem><para>
-          The handle to a node to preserve during reset. This may be set to
-          <constant>BUS1_HANDLE_INVALID</constant> if all handles should be
-          dropped.
-        </para></listitem>
-      </varlistentry>
-
     </variablelist>
   </refsect1>
 
@@ -215,44 +204,13 @@ struct bus1_cmd_peer_clone {
     <para>
       On success, all mentioned ioctl commands return <errorcode>0</errorcode>;
       on error, <errorcode>-1</errorcode> is returned, and
-      <varname>errno</varname> is set to indicate the error.
-      If the issued ioctl is illegal for the file descriptor used,
-      <varname>errno</varname> will be set to <constant>ENOTTY</constant>.
+      <varname>errno</varname> is set to indicate the error. See
+      <citerefentry>
+        <refentrytitle>bus1</refentrytitle>
+        <manvolnum>7</manvolnum>
+      </citerefentry>
+      for a list of possible error codes.
     </para>
-
-<!-- XXX
-    <refsect2>
-      <title>
-        <constant>KDBUS_CMD_FREE</constant> may fail with the following
-        errors
-      </title>
-
-      <variablelist>
-        <varlistentry>
-          <term><constant>ENXIO</constant></term>
-          <listitem><para>
-            No peer slice found at given offset.
-          </para></listitem>
-        </varlistentry>
-
-        <varlistentry>
-          <term><constant>EINVAL</constant></term>
-          <listitem><para>
-            Invalid flags provided.
-          </para></listitem>
-        </varlistentry>
-
-        <varlistentry>
-          <term><constant>EINVAL</constant></term>
-          <listitem><para>
-            The offset is valid, but the user is not allowed to free the slice.
-            This happens, for example, if the offset was retrieved with
-            <constant>KDBUS_RECV_PEEK</constant>.
-          </para></listitem>
-        </varlistentry>
-      </variablelist>
-    </refsect2>
--->
   </refsect1>
 
   <refsect1>
