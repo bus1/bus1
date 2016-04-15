@@ -240,44 +240,44 @@
 
       <variablelist>
         <varlistentry>
+          <term><constant>EAGAIN</constant></term>
+          <listitem><para>
+            No messages ready to be dequeued.
+          </para></listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><constant>EHOSTUNREACH</constant></term>
+          <listitem><para>
+            Destination handle has been destroyed.
+          </para></listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><constant>EDQUOT</constant></term>
+          <listitem><para>
+            Quota exceeded.
+          </para></listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><constant>EXFULL</constant></term>
+          <listitem><para>
+            Target memory pool is full.
+          </para></listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><constant>ETOOMANYREFS</constant></term>
+          <listitem><para>
+            User has too many in-flight file-descriptors.
+          </para></listitem>
+        </varlistentry>
+
+        <varlistentry>
           <term><constant>ENOMEM</constant></term>
           <listitem><para>
             Out of kernel memory.
-          </para></listitem>
-        </varlistentry>
-
-        <varlistentry>
-          <term><constant>EFAULT</constant></term>
-          <listitem><para>
-            Cannot acces ioctl parameters.
-          </para></listitem>
-        </varlistentry>
-
-        <varlistentry>
-          <term><constant>EINVAL</constant></term>
-          <listitem><para>
-            Invalid parameters.
-          </para></listitem>
-        </varlistentry>
-
-        <varlistentry>
-          <term><constant>EMSGSIZE</constant></term>
-          <listitem><para>
-            Parameters are too large or too small.
-          </para></listitem>
-        </varlistentry>
-
-        <varlistentry>
-          <term><constant>ENOTTY</constant></term>
-          <listitem><para>
-            Unknown ioctl.
-          </para></listitem>
-        </varlistentry>
-
-        <varlistentry>
-          <term><constant>ENXIO</constant></term>
-          <listitem><para>
-            Invalid handle.
           </para></listitem>
         </varlistentry>
 
@@ -303,16 +303,9 @@
         </varlistentry>
 
         <varlistentry>
-          <term><constant>EXFULL</constant></term>
+          <term><constant>ENXIO</constant></term>
           <listitem><para>
-            Target memory pool is full.
-          </para></listitem>
-        </varlistentry>
-
-        <varlistentry>
-          <term><constant>EDQUOT</constant></term>
-          <listitem><para>
-            Quota exceeded.
+            Invalid handle.
           </para></listitem>
         </varlistentry>
 
@@ -331,23 +324,37 @@
         </varlistentry>
 
         <varlistentry>
-          <term><constant>EAGAIN</constant></term>
-          <listitem><para>
-            No messages ready to be dequeued.
-          </para></listitem>
-        </varlistentry>
-
-        <varlistentry>
-          <term><constant>ETOOMANYREFS</constant></term>
-          <listitem><para>
-            User has too many in-flight file-descriptors.
-          </para></listitem>
-        </varlistentry>
-
-        <varlistentry>
           <term><constant>EOPNOTSUPP</constant></term>
           <listitem><para>
             Could not pass file-descriptor of unsupported type.
+          </para></listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><constant>EMSGSIZE</constant></term>
+          <listitem><para>
+            Too large or too small ioctl parameters.
+          </para></listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><constant>EINVAL</constant></term>
+          <listitem><para>
+            Invalid ioctl parameters.
+          </para></listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><constant>EFAULT</constant></term>
+          <listitem><para>
+            Cannot acces ioctl parameters.
+          </para></listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><constant>ENOTTY</constant></term>
+          <listitem><para>
+            Unknown ioctl.
           </para></listitem>
         </varlistentry>
 

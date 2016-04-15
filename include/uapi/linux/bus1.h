@@ -24,23 +24,23 @@
  * All operations performed on bus1 fds return negative error codes. The
  * following error codes are well-defined and used all over the place:
  *
- *   ENOMEM:            out of kernel memory
- *   EFAULT:            cannot access ioctl parameters
- *   EINVAL:            invalid parameters
- *   EMSGSIZE:          ioctl parameters are too small/large
- *   ENOTTY:            unknown ioctl
- *   ENXIO:             invalid handle
+ *   EAGAIN:            no messages ready to be dequeued
  *   EHOSTUNREACH:      destination handle has been destroyed
+ *   EDQUOT:            quota exceeded
+ *   EXFULL:            target memory pool is full
+ *   ETOOMANYREFS:      user has too many in-flight file-descriptors
+ *   ENOMEM:            out of kernel memory
  *   ESHUTDOWN:         local peer was already disconnected
  *   ENOTCONN:          local peer is not initialized, yet
  *   EISCONN:           local peer is already initialized
- *   EXFULL:            target memory pool is full
- *   EDQUOT:            quota exceeded
+ *   ENXIO:             invalid handle
  *   EBADF:             invalid file-descriptor
- *   EPERM:             permission denied
- *   EAGAIN:            no messages ready to be dequeued
- *   ETOOMANYREFS:      user has too many in-flight file-descriptors
+ *   EPERM:             permission denied to mmap pool as writable
  *   EOPNOTSUPP:        could not pass file-descriptor of unsupported type
+ *   EMSGSIZE:          ioctl parameters are too small/large
+ *   EINVAL:            invalid ioctl parameters
+ *   EFAULT:            cannot access ioctl parameters
+ *   ENOTTY:            unknown ioctl
  */
 
 #include <linux/ioctl.h>
