@@ -230,7 +230,7 @@ struct file *bus1_clone_file(struct file *file)
 	 * cannot serve.
 	 */
 	if (WARN_ON(file->f_op != &bus1_fops))
-		return ERR_PTR(-EINVAL);
+		return ERR_PTR(-ENOTRECOVERABLE);
 
 	fops = fops_get(file->f_op);
 	if (!fops)

@@ -134,7 +134,7 @@ int bus1_message_allocate(struct bus1_message *message,
 	lockdep_assert_held(&peer_info->lock);
 
 	if (WARN_ON(message->user || message->slice))
-		return -EINVAL;
+		return -ENOTRECOVERABLE;
 
 	r = bus1_user_quota_charge(peer_info, user,
 				   message->data.n_bytes,
@@ -210,7 +210,7 @@ int bus1_message_install(struct bus1_message *message,
 	lockdep_assert_held(&peer_info->lock);
 
 	if (WARN_ON(!message->slice))
-		return -EINVAL;
+		return -ENOTRECOVERABLE;
 	if (message->data.n_handles == 0 && message->data.n_fds == 0)
 		return 0;
 

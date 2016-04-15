@@ -613,7 +613,7 @@ static int bus1_peer_dequeue(struct bus1_peer_info *peer_info,
 			mutex_unlock(&peer_info->lock);
 
 			WARN(1, "Invalid queue-node type");
-			return -EINVAL;
+			return -ENOTRECOVERABLE;
 		}
 	}
 	mutex_unlock(&peer_info->lock);

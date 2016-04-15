@@ -1526,7 +1526,7 @@ static int bus1_handle_batch_import(struct bus1_handle_batch *batch,
 	union bus1_handle_entry *block;
 
 	if (WARN_ON(n_ids != batch->n_entries || batch->n_handles > 0))
-		return -EINVAL;
+		return -ENOTRECOVERABLE;
 
 	BUILD_BUG_ON(sizeof(*block) != sizeof(*ids));
 
@@ -1768,9 +1768,9 @@ int bus1_handle_inflight_instantiate(struct bus1_handle_inflight *inflight,
 	if (r < 0)
 		return r;
 	if (WARN_ON(inflight->batch.n_handles > 0))
-		return -EINVAL;
+		return -ENOTRECOVERABLE;
 	if (WARN_ON(inflight->batch.n_entries != transfer->batch.n_entries))
-		return -EINVAL;
+		return -ENOTRECOVERABLE;
 
 	to = BUS1_HANDLE_BATCH_FIRST(&inflight->batch, pos_to);
 
