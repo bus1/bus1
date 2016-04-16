@@ -259,13 +259,6 @@
         </varlistentry>
 
         <varlistentry>
-          <term><constant>EISCONN</constant></term>
-          <listitem><para>
-            Local peer is already initialized.
-          </para></listitem>
-        </varlistentry>
-
-        <varlistentry>
           <term><constant>EINVAL</constant></term>
           <listitem><para>
             Invalid ioctl parameters.

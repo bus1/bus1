@@ -211,8 +211,24 @@ struct bus1_cmd_peer_clone {
         <refentrytitle>bus1</refentrytitle>
         <manvolnum>7</manvolnum>
       </citerefentry>
-      for a list of possible error codes.
+      for a list of possible error codes, in addition to the ones listed below.
     </para>
+
+    <refsect2>
+      <title>
+        <constant>BUS1_CMD_PEER_INIT</constant> may fail with the following
+        errors
+      </title>
+
+      <variablelist>
+        <varlistentry>
+          <term><constant>EISCONN</constant></term>
+          <listitem><para>
+            Local peer is already initialized.
+          </para></listitem>
+        </varlistentry>
+      </variablelist>
+    </refsect2>
   </refsect1>
 
   <refsect1>
@@ -226,7 +242,7 @@ struct bus1_cmd_peer_clone {
       </member>
       <member>
         <citerefentry>
-          <refentrytitle>bus1.peer</refentrytitle>
+          <refentrytitle>bus1.node</refentrytitle>
           <manvolnum>7</manvolnum>
         </citerefentry>
       </member>
@@ -234,18 +250,6 @@ struct bus1_cmd_peer_clone {
         <citerefentry>
           <refentrytitle>bus1.message</refentrytitle>
           <manvolnum>7</manvolnum>
-        </citerefentry>
-      </member>
-      <member>
-        <citerefentry>
-          <refentrytitle>mmap</refentrytitle>
-            <manvolnum>2</manvolnum>
-          </citerefentry>
-        </member>
-      <member>
-        <citerefentry>
-          <refentrytitle>munmap</refentrytitle>
-          <manvolnum>2</manvolnum>
         </citerefentry>
       </member>
     </simplelist>
