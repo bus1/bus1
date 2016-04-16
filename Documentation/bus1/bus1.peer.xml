@@ -104,8 +104,10 @@ struct bus1_cmd_peer_init {
     <title>Resetting a peer</title>
     <para>
       An existing peer can be reset to a pristine state by calling the
-      <constant>BUS1_CMD_PEER_RESET</constant> ioctl. All slices, handles, nodes
-      and pending messages are dropped. The ioctl takes a
+      <constant>BUS1_CMD_PEER_RESET</constant> ioctl. All slices are
+      simultaneously destroyed, all messages up-to and including each of the
+      node destruction notification messages are discarded and all user
+      references to slices and handles are released. The ioctl takes a
       <type>struct bus1_cmd_peer_reset</type> struct as argument.
     </para>
 
