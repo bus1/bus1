@@ -1922,9 +1922,10 @@ void bus1_handle_inflight_install(struct bus1_handle_inflight *inflight,
  * @timestamp:		timestamp of the transaction
  *
  * This walks over all stored handles of @inflight, returning their IDs in
- * blocks to the caller. The caller must initialize @pos to 0 and pre-allocate
- * @ids large enough to hold IDs of all stored handles, but at most
- * BUS1_HANDLE_BATCH_SIZE.
+ * blocks to the caller, instantiating them if necessary. If a given handle will
+ * be invalid at @timestamp, BUS1_HANDLE_INVALID is returned instead. The caller
+ * must initialize @pos to 0 and pre-allocate @ids large enough to hold IDs of
+ * all stored handles, but at most BUS1_HANDLE_BATCH_SIZE.
  *
  * On each call, this function advances @pos and @iter to keep track of the
  * iteration, and updates @ids with the handle IDs of the current block. It
