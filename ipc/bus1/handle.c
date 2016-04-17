@@ -105,7 +105,7 @@ static void bus1_handle_init(struct bus1_handle *handle, struct bus1_node *node)
 	INIT_LIST_HEAD(&handle->link_node);
 	kref_init(&handle->ref);
 	atomic_set(&handle->n_inflight, -1);
-	atomic_set(&handle->n_user, 0);
+	atomic_set(&handle->n_user, -1);
 
 	kref_get(&node->ref);
 }
@@ -1689,7 +1689,7 @@ int bus1_handle_transfer_instantiate(struct bus1_handle_transfer *transfer,
 			 * user-ref before, we are good to go.
 			 */
 			handle = bus1_handle_find_by_id(peer_info, entry->id);
-			if (handle && (atomic_read(&handle->n_user) < 1 ||
+			if (handle && (atomic_read(&handle->n_user) < 0 ||
 				       !bus1_handle_acquire(handle)))
 				handle = bus1_handle_unref(handle);
 		}
