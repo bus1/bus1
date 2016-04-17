@@ -880,7 +880,7 @@ static u64 bus1_handle_userref_publish(struct bus1_handle *handle,
 	 */
 	if (atomic_read(&handle->n_user) >= 0) {
 		if (commit) {
-			WARN_ON(atomic_inc_return(&handle->n_user) != 0);
+			WARN_ON(atomic_inc_return(&handle->n_user) == 0);
 			WARN_ON(atomic_dec_return(&handle->n_inflight) == 0);
 		}
 		return handle->id;
