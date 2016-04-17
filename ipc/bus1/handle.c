@@ -119,9 +119,8 @@ static void bus1_handle_destroy(struct bus1_handle *handle)
 	 * that, hence, we do *not* verify they are unlinked here.
 	 */
 
-	WARN_ON(atomic_read(&handle->n_inflight) != -1 &&
-		!atomic_read(&handle->n_inflight) !=
-		!atomic_read(&handle->n_user));
+	WARN_ON(atomic_read(&handle->n_inflight) == 0 &&
+		atomic_read(&handle->n_user) > 0);
 	WARN_ON(handle->holder);
 
 	/*
