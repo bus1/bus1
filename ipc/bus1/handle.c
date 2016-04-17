@@ -31,7 +31,7 @@
  * struct bus1_handle - handle objects
  * @ref:		object ref-count
  * @n_inflight:		number of inflight references; initially -1 if
- *			unattached; 1-n if live; 0 if about to be detached
+ *			unattached; >0 if live; 0 if about to be detached
  * @n_user:		number of user-visible references (shifted by -1)
  * @rb_id:		link into owning peer, based on ID
  * @rb_node:		link into owning peer, based on node pointer
@@ -947,6 +947,8 @@ static int bus1_handle_userref_drop(struct bus1_handle *handle,
 		return 0; /* DEC happened, but didn't drop to -1 */
 	else if (n_user < -1)
 		return -ENXIO; /* DEC did not happen, no ref owned */
+
+	/* DEC did not happen */
 
 	mutex_lock(&peer_info->lock);
 
