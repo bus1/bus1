@@ -452,6 +452,7 @@ bus1_transaction_consume(struct bus1_transaction *transaction,
 		message = NULL;
 		r = 0;
 	} else {
+		bus1_queue_remove(&peer_info->queue, &message->qnode);
 		bus1_message_deallocate(message, peer_info);
 		r = -EHOSTUNREACH;
 	}
