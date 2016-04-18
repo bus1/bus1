@@ -910,21 +910,24 @@ static u64 bus1_handle_userref_publish(struct bus1_handle *handle,
 		if (handle->id == BUS1_HANDLE_INVALID)
 			handle->id = (++peer_info->handle_ids << 2) |
 							BUS1_NODE_FLAG_MANAGED;
-		n = NULL;
-		slot = &peer_info->map_handles_by_id.rb_node;
-		while (*slot) {
-			n = *slot;
-			iter = container_of(n, struct bus1_handle, rb_id);
-			if (handle->id < iter->id) {
-				slot = &n->rb_left;
-			} else /* if (handle->id >= iter->id) */ {
-				WARN_ON(handle->id == iter->id);
-				slot = &n->rb_right;
+		if (commit) {
+			n = NULL;
+			slot = &peer_info->map_handles_by_id.rb_node;
+			while (*slot) {
+				n = *slot;
+				iter = container_of(n, struct bus1_handle,
+						    rb_id);
+				if (handle->id < iter->id) {
+					slot = &n->rb_left;
+				} else /* if (handle->id >= iter->id) */ {
+					WARN_ON(handle->id == iter->id);
+					slot = &n->rb_right;
+				}
 			}
+			rb_link_node_rcu(&handle->rb_id, n, slot);
+			rb_insert_color(&handle->rb_id,
+					&peer_info->map_handles_by_id);
 		}
-		rb_link_node_rcu(&handle->rb_id, n, slot);
-		rb_insert_color(&handle->rb_id,
-				&peer_info->map_handles_by_id);
 	}
 	write_seqcount_end(&peer_info->seqcount);
 
