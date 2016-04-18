@@ -134,6 +134,9 @@ static struct bus1_handle *bus1_handle_new_owner(u64 id)
 {
 	struct bus1_node *node;
 
+	if ((id & ~BUS1_NODE_FLAG_ALLOCATE) != BUS1_NODE_FLAG_MANAGED)
+		return ERR_PTR(-EINVAL);
+
 	node = kmalloc(sizeof(*node), GFP_KERNEL);
 	if (!node)
 		return ERR_PTR(-ENOMEM);
@@ -1085,14 +1088,6 @@ int bus1_handle_pin_destination(struct bus1_peer *peer,
 	struct bus1_peer *dst_peer;
 
 	if (id & BUS1_NODE_FLAG_ALLOCATE) {
-		/*
-		 * Right now we only support allocating managed nodes.
-		 * All the upper command flags must be unset, as they
-		 * are reserved for the future.
-		 */
-		if ((id & ~BUS1_NODE_FLAG_ALLOCATE) != BUS1_NODE_FLAG_MANAGED)
-			return -EINVAL;
-
 		if (bus1_peer_acquire(peer))
 			return -ESHUTDOWN;
 
@@ -1658,15 +1653,6 @@ int bus1_handle_transfer_instantiate(struct bus1_handle_transfer *transfer,
 
 	BUS1_HANDLE_BATCH_FOREACH_ENTRY(entry, pos, &transfer->batch) {
 		if (entry->id & BUS1_NODE_FLAG_ALLOCATE) {
-			/*
-			 * Right now we only support allocating managed nodes.
-			 * All the upper command flags must be unset, as they
-			 * are reserved for the future.
-			 */
-			if ((entry->id & ~BUS1_NODE_FLAG_ALLOCATE) !=
-							BUS1_NODE_FLAG_MANAGED)
-				return -EINVAL;
-
 			handle = bus1_handle_new_owner(entry->id);
 			if (IS_ERR(handle))
 				return PTR_ERR(handle);
