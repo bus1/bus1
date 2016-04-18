@@ -143,10 +143,10 @@ static int bus1_transaction_import_handles(struct bus1_transaction *transaction)
 	const u64 __user *ptr_handles;
 
 	ptr_handles = (const u64 __user *)(unsigned long)param->ptr_handles;
-	return bus1_handle_transfer_instantiate(&transaction->handles,
-						transaction->peer_info,
-						ptr_handles,
-						param->n_handles);
+	return bus1_handle_transfer_import(&transaction->handles,
+					   transaction->peer_info,
+					   ptr_handles,
+					   param->n_handles);
 }
 
 static int bus1_transaction_import_files(struct bus1_transaction *transaction)

@@ -1608,7 +1608,7 @@ void bus1_handle_transfer_destroy(struct bus1_handle_transfer *transfer)
 }
 
 /**
- * bus1_handle_transfer_instantiate() - instantiate handles for transfer
+ * bus1_handle_transfer_import() - import handles for transfer
  * @transfer:		transfer context
  * @peer_info:		peer to import handles of
  * @ids:		user-space array of handle IDs
@@ -1623,10 +1623,10 @@ void bus1_handle_transfer_destroy(struct bus1_handle_transfer *transfer)
  *
  * Return: 0 on success, negative error code on failure.
  */
-int bus1_handle_transfer_instantiate(struct bus1_handle_transfer *transfer,
-				     struct bus1_peer_info *peer_info,
-				     const u64 __user *ids,
-				     size_t n_ids)
+int bus1_handle_transfer_import(struct bus1_handle_transfer *transfer,
+				struct bus1_peer_info *peer_info,
+				const u64 __user *ids,
+				size_t n_ids)
 {
 	union bus1_handle_entry *entry;
 	struct bus1_handle *handle;
