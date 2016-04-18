@@ -109,7 +109,8 @@ static void bus1_transaction_destroy(struct bus1_transaction *transaction)
 		message->transaction.userid = NULL;
 
 		mutex_lock(&peer_info->lock);
-		WARN_ON(bus1_queue_node_is_queued(&message->qnode));
+		if (bus1_queue_remove(&peer_info->queue, &message->qnode))
+			bus1_peer_wake(peer);
 		bus1_message_deallocate(message, peer_info);
 		mutex_unlock(&peer_info->lock);
 
