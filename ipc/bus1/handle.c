@@ -1660,23 +1660,13 @@ int bus1_handle_transfer_instantiate(struct bus1_handle_transfer *transfer,
 
 			++transfer->n_new;
 		} else {
-			/*
-			 * If you transfer non-existant, or destructed handles,
-			 * we simply store NULL in the batch. We might
-			 * optionally allow returning an error instead. But
-			 * given the async nature of handle destruction, it
-			 * seems rather unlikely that callers want to handle
-			 * that.
-			 * Note that we require user-space to know the handle
-			 * and own a user reference. The check is not required
-			 * to be atomic, since handles are never re-used. If we
-			 * can acquire an inflight ref, and the user did own a
-			 * user-ref before, we are good to go.
-			 */
 			handle = bus1_handle_find_by_id(peer_info, entry->id);
-			if (handle && (atomic_read(&handle->n_user) < 0 ||
-				       !bus1_handle_acquire(handle)))
+			if (!handle ||
+			    atomic_read(&handle->n_user) < 0 ||
+			    !bus1_handle_acquire(handle)) {
 				handle = bus1_handle_unref(handle);
+				return -ENXIO;
+			}
 		}
 
 		entry->handle = handle;
