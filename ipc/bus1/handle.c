@@ -499,25 +499,20 @@ static void bus1_node_finish_flush(struct list_head *list_handles)
 			write_seqcount_end(&peer_info->seqcount);
 
 			if (bus1_queue_node_is_queued(&h->qnode)) {
-				/* consumes handle reference */
+				bus1_handle_ref(h);
 				if (bus1_queue_stage(&peer_info->queue,
 						     &h->qnode,
 						     h->node->timestamp))
 					bus1_peer_wake(peer);
-				if (bus1_handle_is_owner(h))
-					complete_all(&h->node->completion);
 			} else {
 				bus1_queue_node_destroy(&h->qnode);
-				if (bus1_handle_is_owner(h))
-					complete_all(&h->node->completion);
-				bus1_handle_unref(h);
 			}
-		} else {
-			if (bus1_handle_is_owner(h))
-				complete_all(&h->node->completion);
-			bus1_handle_unref(h);
 		}
 		bus1_handle_unlock_peer(peer, peer_info);
+
+		if (bus1_handle_is_owner(h))
+			complete_all(&h->node->completion);
+		bus1_handle_unref(h);
 	}
 }
 
