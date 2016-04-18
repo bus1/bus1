@@ -210,6 +210,10 @@ int bus1_handle_transfer_instantiate(struct bus1_handle_transfer *transfer,
 				     struct bus1_peer_info *peer_info,
 				     const u64 __user *ids,
 				     size_t n_ids);
+int bus1_handle_transfer_export(struct bus1_handle_transfer *transfer,
+				struct bus1_peer_info *peer_info,
+				u64 __user *ids,
+				size_t n_ids);
 
 /* inflight tracking */
 void bus1_handle_inflight_init(struct bus1_handle_inflight *inflight,

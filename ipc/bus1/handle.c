@@ -1677,6 +1677,65 @@ int bus1_handle_transfer_instantiate(struct bus1_handle_transfer *transfer,
 }
 
 /**
+ * bus1_handle_transfer_export() - publish new nodes of transfer context
+ * @transfer:		transfer context
+ * @peer_info:		owning peer of @transfer
+ * @ids:		user pointer to store IDs to
+ * @n_ids:		number of IDs
+ *
+ * For every node that is created as part of an handle transfer, we have to
+ * publish a single user reference to the node and provide it back to the
+ * caller. This function both publishes those user-refs *and* directly copies
+ * them over into the user-provided buffers.
+ *
+ * This calls releases all handles after they have been processes. Hence, this
+ * must be the last operation on a transfer object, before it is destroyed.
+ *
+ * The caller must hold the peer lock of @peer_info.
+ *
+ * Return: 0 on success, negative error code on failure.
+ */
+int bus1_handle_transfer_export(struct bus1_handle_transfer *transfer,
+				struct bus1_peer_info *peer_info,
+				u64 __user *ids,
+				size_t n_ids)
+{
+	union bus1_handle_entry *entry;
+	size_t pos;
+	u64 id;
+
+	lockdep_assert_held(&peer_info->lock);
+	WARN_ON(n_ids != transfer->batch.n_handles);
+
+	BUS1_HANDLE_BATCH_FOREACH_HANDLE(entry, pos, &transfer->batch) {
+		WARN_ON(!entry->handle);
+		if (entry->handle->id != BUS1_HANDLE_INVALID) {
+			WARN_ON(!bus1_handle_was_attached(entry->handle));
+			bus1_handle_release(entry->handle, peer_info);
+			entry->handle = bus1_handle_unref(entry->handle);
+		} else {
+			WARN_ON(!bus1_handle_is_owner(entry->handle));
+			id = bus1_handle_userref_publish(entry->handle,
+							 peer_info, 0, false);
+			if (put_user(id, ids + pos))
+				return -EFAULT;
+		}
+	}
+
+	BUS1_HANDLE_BATCH_FOREACH_HANDLE(entry, pos, &transfer->batch) {
+		if (entry->handle) {
+			bus1_handle_userref_publish(entry->handle, peer_info,
+						    0, true);
+			bus1_handle_release(entry->handle, peer_info);
+			entry->handle = bus1_handle_unref(entry->handle);
+		}
+	}
+
+	transfer->batch.n_handles = 0;
+	return 0;
+}
+
+/**
  * bus1_handle_inflight_init() - initialize inflight context
  * @inflight:		inflight context to initialize
  * @n_entries:		number of entries to store in this context
