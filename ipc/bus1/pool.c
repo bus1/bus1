@@ -220,7 +220,7 @@ int bus1_pool_create_internal(struct bus1_pool *pool, size_t size)
 	 */
 	p = shmem_read_mapping_page(file_inode(f)->i_mapping, 0);
 	if (!IS_ERR(p))
-		page_cache_release(p);
+		put_page(p);
 
 	return 0;
 
