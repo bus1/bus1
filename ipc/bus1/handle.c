@@ -467,7 +467,8 @@ static void bus1_node_finish_stage(struct bus1_node *node,
 	write_seqcount_begin(&peer_info->seqcount);
 	bus1_handle_detach_internal(&node->owner, peer_info);
 	/* sync on owner *again* to provide barriers for transactions */
-	node->timestamp = bus1_queue_sync(&peer_info->queue, ts);
+	ts = bus1_queue_sync(&peer_info->queue, ts);
+	node->timestamp = bus1_queue_tick(&peer_info->queue);
 	write_seqcount_end(&peer_info->seqcount);
 
 	if (list_empty(list_handles))
