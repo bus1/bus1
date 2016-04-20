@@ -72,6 +72,10 @@ struct bus1_peer_info {
 	size_t n_allocated;
 	size_t n_messages;
 	size_t n_handles;
+	size_t n_fds;
+	size_t max_messages;
+	size_t max_handles;
+	size_t max_fds;
 };
 
 /**

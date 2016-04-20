@@ -137,6 +137,10 @@ static struct bus1_peer_info *bus1_peer_info_new(size_t pool_size)
 	peer_info->n_allocated = 0;
 	peer_info->n_messages = 0;
 	peer_info->n_handles = 0;
+	peer_info->n_fds = 0;
+	peer_info->max_messages = -1;
+	peer_info->max_handles = -1;
+	peer_info->max_fds = rlimit(RLIMIT_NOFILE);
 
 	peer_info->user = bus1_user_ref_by_uid(peer_info->cred->uid);
 	if (IS_ERR(peer_info->user)) {

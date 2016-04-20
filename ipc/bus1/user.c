@@ -20,6 +20,7 @@
 #include "main.h"
 #include "peer.h"
 #include "user.h"
+#include "util.h"
 
 #define BUS1_INTERNAL_UID_INVALID ((unsigned int) -1)
 
@@ -38,7 +39,9 @@ static struct bus1_user *bus1_user_new(void)
 	kref_init(&u->ref);
 	u->uid = INVALID_UID;
 	u->id = BUS1_INTERNAL_UID_INVALID;
-	atomic_set(&u->fds_inflight, 0);
+	atomic_set(&u->n_messages, BUS1_MESSAGES_MAX);
+	atomic_set(&u->n_handles, BUS1_HANDLES_MAX);
+	atomic_set(&u->n_fds, BUS1_FDS_MAX);
 
 	return u;
 }
@@ -47,7 +50,9 @@ static void bus1_user_free(struct kref *ref)
 {
 	struct bus1_user *user = container_of(ref, struct bus1_user, ref);
 
-	WARN_ON(atomic_read(&user->fds_inflight));
+	WARN_ON(atomic_read(&user->n_messages) != BUS1_MESSAGES_MAX);
+	WARN_ON(atomic_read(&user->n_handles) != BUS1_HANDLES_MAX);
+	WARN_ON(atomic_read(&user->n_fds) != BUS1_FDS_MAX);
 
 	/* if already dropped, it's set to invalid */
 	if (uid_valid(user->uid)) {
@@ -260,7 +265,7 @@ int bus1_user_quota_charge(struct bus1_peer_info *peer_info,
 			   size_t n_fds)
 {
 	struct bus1_user_stats *stats;
-	size_t max;
+	size_t max, remaining;
 
 	lockdep_assert_held(&peer_info->lock);
 
@@ -277,6 +282,7 @@ int bus1_user_quota_charge(struct bus1_peer_info *peer_info,
 
 	BUILD_BUG_ON(BUS1_MESSAGES_MAX > U16_MAX);
 	BUILD_BUG_ON(BUS1_HANDLES_MAX > U16_MAX);
+	BUILD_BUG_ON(BUS1_FDS_MAX > U16_MAX);
 
 	WARN_ON(peer_info->n_allocated > peer_info->pool.size);
 	WARN_ON(stats->n_allocated > peer_info->n_allocated);
@@ -285,38 +291,68 @@ int bus1_user_quota_charge(struct bus1_peer_info *peer_info,
 	WARN_ON(peer_info->n_handles > BUS1_HANDLES_MAX);
 	WARN_ON(stats->n_handles > peer_info->n_handles);
 
+	/*
+	 * For the pool size, shmem enforces a global maximum, so we only
+	 * enforce the per-peer one.
+	 */
 	max = peer_info->pool.size - peer_info->n_allocated +
 	      stats->n_allocated;
 	if (stats->n_allocated + size > max / 2)
 		return -EDQUOT;
 
-	max = BUS1_MESSAGES_MAX - peer_info->n_messages + stats->n_messages;
-	if (stats->n_messages + 1 > max / 2)
-		return -EDQUOT;
-
-	max = BUS1_HANDLES_MAX - peer_info->n_handles + stats->n_handles;
-	if (stats->n_handles + n_handles > max / 2)
-		return -EDQUOT;
-
 	/*
-	 * Unlike the other quotas, file-descriptors have global per-user
-	 * limits, just like UDS does it. Preferably, we would use
-	 * user_struct->unix_inflight, but it is not accessible by modules.
-	 * Hence, we have our own per-user counter.
-	 * Note that this check is racy. However, we couldn't care less.. There
-	 * is no reason to enforce it strictly. We'd want something like
-	 * atomic_add_unless_greater().
+	 * For all the other quotas, we enforce both a global and a per-peer
+	 * limit.
 	 */
-	if (atomic_read(&user->fds_inflight) + n_fds > rlimit(RLIMIT_NOFILE))
-		return -ETOOMANYREFS;
+	remaining = bus1_atomic_sub_floor(&user->n_messages, 1);
+	if (remaining < 0)
+		return -EDQUOT;
 
-	atomic_add(n_fds, &user->fds_inflight);
+	max = min(remaining, peer_info->max_messages - peer_info->n_messages) +
+	      stats->n_messages;
+	if (stats->n_messages + 1 > max / 2) {
+		atomic_inc(&user->n_messages);
+		return -EDQUOT;
+	}
+
+	remaining = bus1_atomic_sub_floor(&user->n_handles, n_handles);
+	if (remaining < 0) {
+		atomic_inc(&user->n_messages);
+		return -EDQUOT;
+	}
+
+	max = min(remaining, peer_info->max_handles - peer_info->n_handles) +
+	      stats->n_handles;
+	if (stats->n_handles + n_handles > max / 2) {
+		atomic_inc(&user->n_messages);
+		atomic_add(n_handles, &user->n_handles);
+		return -EDQUOT;
+	}
+
+	remaining = bus1_atomic_sub_floor(&user->n_fds, n_fds);
+	if (remaining < 0) {
+		atomic_inc(&user->n_messages);
+		atomic_add(n_handles, &user->n_handles);
+		return -ETOOMANYREFS;
+	}
+
+	max = min(remaining, peer_info->max_fds - peer_info->n_fds) +
+	      stats->n_fds;
+	if (stats->n_fds + n_fds > max / 2) {
+		atomic_inc(&user->n_messages);
+		atomic_add(n_handles, &user->n_handles);
+		atomic_add(n_fds, &user->n_fds);
+		return -ETOOMANYREFS;
+	}
+
 	peer_info->n_allocated += size;
 	peer_info->n_messages += 1;
 	peer_info->n_handles += n_handles;
+	peer_info->n_fds += n_fds;
 	stats->n_allocated += size;
 	stats->n_messages += 1;
 	stats->n_handles += n_handles;
+	stats->n_fds += n_fds;
 
 	return 0;
 }
@@ -351,7 +387,9 @@ void bus1_user_quota_discharge(struct bus1_peer_info *peer_info,
 	WARN_ON(stats->n_messages < 1);
 	WARN_ON(n_handles > peer_info->n_handles);
 	WARN_ON(n_handles > stats->n_handles);
-	WARN_ON(n_fds > atomic_read(&user->fds_inflight));
+	WARN_ON(atomic_read(&user->n_messages) >= BUS1_MESSAGES_MAX);
+	WARN_ON(atomic_read(&user->n_handles) + n_handles > BUS1_HANDLES_MAX);
+	WARN_ON(atomic_read(&user->n_fds) + n_fds > BUS1_FDS_MAX);
 
 	peer_info->n_allocated -= size;
 	peer_info->n_messages -= 1;
@@ -359,7 +397,9 @@ void bus1_user_quota_discharge(struct bus1_peer_info *peer_info,
 	stats->n_allocated -= size;
 	stats->n_messages -= 1;
 	stats->n_handles -= n_handles;
-	atomic_sub(n_fds, &user->fds_inflight);
+	atomic_inc(&user->n_messages);
+	atomic_add(n_handles, &user->n_handles);
+	atomic_add(n_fds, &user->n_fds);
 }
 
 /**
@@ -370,9 +410,9 @@ void bus1_user_quota_discharge(struct bus1_peer_info *peer_info,
  * @n_handles:		number of handles to commit
  * @n_fds:		number of FDs to commit
  *
- * Commit a quota charge to a user. This de-accounts the in-flight charges, but
- * keeps the actual object charges. The caller must make sure the actual
- * objects are de-accounted once they are destructed.
+ * Commit a quota charge to the receiving user. This de-accounts the in-flight
+ * charges, but keeps the actual object charges on the receiver. The caller must
+ * make sure the actual objects are de-accounted once they are destructed.
  */
 void bus1_user_quota_commit(struct bus1_peer_info *peer_info,
 			    struct bus1_user *user,
@@ -389,10 +429,13 @@ void bus1_user_quota_commit(struct bus1_peer_info *peer_info,
 	WARN_ON(size > stats->n_allocated);
 	WARN_ON(stats->n_messages < 1);
 	WARN_ON(n_handles > stats->n_handles);
-	WARN_ON(n_fds > atomic_read(&user->fds_inflight));
+	WARN_ON(atomic_read(&user->n_messages) < 1);
+	WARN_ON(n_handles > atomic_read(&user->n_handles));
+	WARN_ON(n_fds > atomic_read(&user->n_fds));
 
 	stats->n_allocated -= size;
 	stats->n_messages -= 1;
 	stats->n_handles -= n_handles;
-	atomic_sub(n_fds, &user->fds_inflight);
+	atomic_dec(&user->n_messages);
+	atomic_sub(n_fds, &user->n_fds);
 }

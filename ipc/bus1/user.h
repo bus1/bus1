@@ -71,7 +71,9 @@ struct bus1_user {
 		struct {
 			kuid_t uid;
 			unsigned int id;
-			atomic_t fds_inflight;
+			atomic_t n_messages;
+			atomic_t n_handles;
+			atomic_t n_fds;
 		};
 		struct rcu_head rcu;
 	};
@@ -82,11 +84,14 @@ struct bus1_user {
  * @n_allocated:	memory in bytes used by queued messages
  * @n_messages:		number of queued messages
  * @n_handles:		number of queued handles
+ * @n_fds:		number of queued fds
  */
+/* XXX: make this fit in 64 bits */
 struct bus1_user_stats {
 	u32 n_allocated;
 	u16 n_messages;
 	u16 n_handles;
+	u16 n_fds;
 };
 
 /**

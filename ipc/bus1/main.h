@@ -28,8 +28,9 @@
  *       b1_peer_info.seqcount
  */
 
-#define BUS1_MESSAGES_MAX (1024)
-#define BUS1_HANDLES_MAX (16384)
+#define BUS1_MESSAGES_MAX (16383)
+#define BUS1_HANDLES_MAX (65535)
+#define BUS1_FDS_MAX (65535)
 
 extern const struct file_operations bus1_fops;
 
