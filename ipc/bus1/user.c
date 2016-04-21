@@ -266,6 +266,7 @@ int bus1_user_quota_charge(struct bus1_peer_info *peer_info,
 {
 	struct bus1_user_stats *stats;
 	size_t max, remaining;
+	int r;
 
 	lockdep_assert_held(&peer_info->lock);
 
@@ -311,30 +312,28 @@ int bus1_user_quota_charge(struct bus1_peer_info *peer_info,
 	max = min(remaining, peer_info->max_messages - peer_info->n_messages) +
 	      stats->n_messages;
 	if (stats->n_messages + 1 > max / 2) {
-		atomic_inc(&user->n_messages);
-		return -EDQUOT;
+		r = -EDQUOT;
+		goto error_messages;
 	}
 
 	remaining = bus1_atomic_sub_unless_underflow(&user->n_handles,
 						     n_handles);
 	if (remaining < 0) {
-		atomic_inc(&user->n_messages);
-		return -EDQUOT;
+		r = -EDQUOT;
+		goto error_messages;
 	}
 
 	max = min(remaining, peer_info->max_handles - peer_info->n_handles) +
 	      stats->n_handles;
 	if (stats->n_handles + n_handles > max / 2) {
-		atomic_inc(&user->n_messages);
-		atomic_add(n_handles, &user->n_handles);
-		return -EDQUOT;
+		r = -EDQUOT;
+		goto error_handles;
 	}
 
 	remaining = bus1_atomic_sub_unless_underflow(&user->n_fds, n_fds);
 	if (remaining < 0) {
-		atomic_inc(&user->n_messages);
-		atomic_add(n_handles, &user->n_handles);
-		return -ETOOMANYREFS;
+		r = -ETOOMANYREFS;
+		goto error_handles;
 	}
 
 	max = min(remaining, peer_info->max_fds - peer_info->n_fds) +
@@ -343,7 +342,8 @@ int bus1_user_quota_charge(struct bus1_peer_info *peer_info,
 		atomic_inc(&user->n_messages);
 		atomic_add(n_handles, &user->n_handles);
 		atomic_add(n_fds, &user->n_fds);
-		return -ETOOMANYREFS;
+		r = -ETOOMANYREFS;
+		goto error_fds;
 	}
 
 	peer_info->n_allocated += size;
@@ -356,6 +356,14 @@ int bus1_user_quota_charge(struct bus1_peer_info *peer_info,
 	stats->n_fds += n_fds;
 
 	return 0;
+
+error_fds:
+	atomic_add(n_fds, &user->n_fds);
+error_handles:
+	atomic_add(n_handles, &user->n_handles);
+error_messages:
+	atomic_inc(&user->n_messages);
+	return r;
 }
 
 /**
