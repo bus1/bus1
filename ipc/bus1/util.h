@@ -39,19 +39,24 @@ struct file *bus1_clone_file(struct file *file);
  * Atomically subtract @sub from @a, if the result is non-negative, otherwise
  * do nothing.
  *
- * Return: Resulting value on success, negative errno on failure.
+ * The operation will *not* be performed on underflow, but the return value
+ * will obviously be undefined. Hence, the caller is expected to guarantee that
+ * the operation cannot underflow.
+ *
+ * Return: Resulting value, regardless whether it was subtracted or not.
  */
-static inline int bus1_atomic_sub_floor(atomic_t *a, int sub)
+static inline int bus1_atomic_sub_unless_underflow(atomic_t *a,
+						   unsigned int sub)
 {
 	int v, v1;
 
-	for (v = atomic_read(a); v - sub >= 0; v = v1) {
+	for (v = atomic_read(a); v >= sub; v = v1) {
 		v1 = atomic_cmpxchg(a, v, v - sub);
 		if (likely(v1 == v))
-			return v - sub;
+			break;
 	}
 
-	return -ERANGE;
+	return v - sub;
 }
 
 /**

@@ -304,7 +304,7 @@ int bus1_user_quota_charge(struct bus1_peer_info *peer_info,
 	 * For all the other quotas, we enforce both a global and a per-peer
 	 * limit.
 	 */
-	remaining = bus1_atomic_sub_floor(&user->n_messages, 1);
+	remaining = bus1_atomic_sub_unless_underflow(&user->n_messages, 1);
 	if (remaining < 0)
 		return -EDQUOT;
 
@@ -315,7 +315,8 @@ int bus1_user_quota_charge(struct bus1_peer_info *peer_info,
 		return -EDQUOT;
 	}
 
-	remaining = bus1_atomic_sub_floor(&user->n_handles, n_handles);
+	remaining = bus1_atomic_sub_unless_underflow(&user->n_handles,
+						     n_handles);
 	if (remaining < 0) {
 		atomic_inc(&user->n_messages);
 		return -EDQUOT;
@@ -329,7 +330,7 @@ int bus1_user_quota_charge(struct bus1_peer_info *peer_info,
 		return -EDQUOT;
 	}
 
-	remaining = bus1_atomic_sub_floor(&user->n_fds, n_fds);
+	remaining = bus1_atomic_sub_unless_underflow(&user->n_fds, n_fds);
 	if (remaining < 0) {
 		atomic_inc(&user->n_messages);
 		atomic_add(n_handles, &user->n_handles);
