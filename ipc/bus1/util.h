@@ -19,6 +19,7 @@
  * some of them are our own.
  */
 
+#include <linux/atomic.h>
 #include <linux/err.h>
 #include <linux/kernel.h>
 #include <linux/uio.h>
@@ -30,18 +31,18 @@ int bus1_import_vecs(struct iovec *out_vecs,
 struct file *bus1_import_fd(const u32 __user *user_fd);
 struct file *bus1_clone_file(struct file *file);
 
-/*
+/**
  * bus1_atomic_sub_floor() - subtract, if the result is non-negative
- * @a:		an atomic
- * @sub:	the value to subtract
+ * @a:		atomic_t to operate on
+ * @sub:	value to subtract
  *
  * Atomically subtract @sub from @a, if the result is non-negative, otherwise
  * do nothing.
  *
- * Return: the result if the operation succeeded, and a negative value
- * otherwise.
+ * Return: Resulting value on success, negative errno on failure.
  */
-static inline int bus1_atomic_sub_floor(atomic_t *a, int sub) {
+static inline int bus1_atomic_sub_floor(atomic_t *a, int sub)
+{
 	int v, v1;
 
 	for (v = atomic_read(a); v - sub >= 0; v = v1) {
