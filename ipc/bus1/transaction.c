@@ -22,6 +22,7 @@
 #include <linux/uidgid.h>
 #include <linux/uio.h>
 #include <uapi/linux/bus1.h>
+#include "active.h"
 #include "handle.h"
 #include "message.h"
 #include "peer.h"
@@ -91,40 +92,37 @@ static void bus1_transaction_init(struct bus1_transaction *transaction,
 static void bus1_transaction_destroy(struct bus1_transaction *transaction)
 {
 	struct bus1_peer_info *peer_info;
+	struct bus1_handle_dest dest;
 	struct bus1_message *message;
-	struct bus1_handle *handle;
-	struct bus1_peer *peer;
 	size_t i;
 
 	while ((message = transaction->entries)) {
 		transaction->entries = message->transaction.next;
-		handle = message->transaction.handle;
-		peer = message->transaction.raw_peer;
-		bus1_active_lockdep_acquired(&peer->active);
-		peer_info = bus1_peer_dereference(peer);
+		dest = message->transaction.dest;
+		bus1_active_lockdep_acquired(&dest.raw_peer->active);
+		peer_info = bus1_peer_dereference(dest.raw_peer);
 
 		message->transaction.next = NULL;
-		message->transaction.handle = NULL;
-		message->transaction.raw_peer = NULL;
+		message->transaction.dest = (struct bus1_handle_dest){};
 		message->transaction.userid = NULL;
 
 		mutex_lock(&peer_info->lock);
 		if (bus1_queue_remove(&peer_info->queue, &message->qnode))
-			bus1_peer_wake(peer);
+			bus1_peer_wake(dest.raw_peer);
 		bus1_message_deallocate(message, peer_info);
 		mutex_unlock(&peer_info->lock);
 
-		bus1_message_free(message);
-		bus1_handle_release(handle, peer_info);
-		bus1_handle_unref(handle);
-		bus1_peer_release(peer);
+		bus1_active_lockdep_released(&dest.raw_peer->active);
+		bus1_message_free(message, peer_info);
+		bus1_handle_dest_destroy(&dest, transaction->peer_info);
 	}
 
 	for (i = 0; i < transaction->param->n_fds; ++i)
 		if (transaction->files[i])
 			fput(transaction->files[i]);
 
-	bus1_handle_transfer_destroy(&transaction->handles);
+	bus1_handle_transfer_destroy(&transaction->handles,
+				     transaction->peer_info);
 }
 
 static int bus1_transaction_import_vecs(struct bus1_transaction *transaction)
@@ -263,30 +261,47 @@ bus1_transaction_free(struct bus1_transaction *transaction, u8 *stack_buffer)
 
 static struct bus1_message *
 bus1_transaction_instantiate(struct bus1_transaction *transaction,
-			     struct bus1_peer_info *peer_info,
-			     struct bus1_handle *handle)
+			     struct bus1_handle_dest *dest,
+			     u64 id)
 {
+	struct bus1_peer_info *peer_info = NULL;
 	struct bus1_message *message;
-	bool silent, cont;
 	size_t i;
 	int r;
 
-	silent = transaction->param->flags & BUS1_SEND_FLAG_SILENT;
-	cont = transaction->param->flags & BUS1_SEND_FLAG_CONTINUE;
+	r = bus1_handle_dest_import(dest, transaction->peer, id);
+	if (r < 0)
+		return ERR_PTR(r);
+
+	bus1_active_lockdep_acquired(&dest->raw_peer->active);
+	peer_info = bus1_peer_dereference(dest->raw_peer);
 
 	message = bus1_message_new(transaction->length_vecs,
-				   transaction->param->n_fds,
-				   transaction->param->n_handles,
-				   silent);
-	if (IS_ERR(message))
-		return ERR_CAST(message);
+			transaction->param->n_fds,
+			transaction->param->n_handles,
+			transaction->param->flags & BUS1_SEND_FLAG_SILENT);
+	if (IS_ERR(message)) {
+		r = PTR_ERR(message);
+		message = NULL;
+		goto error;
+	}
 
 	mutex_lock(&peer_info->lock);
 	r = bus1_message_allocate(message, peer_info,
 				  transaction->peer_info->user);
 	mutex_unlock(&peer_info->lock);
-	if (r < 0)
+	if (r < 0) {
+		/*
+		 * If BUS1_SEND_FLAG_CONTINUE is specified, target errors are
+		 * ignored. That is, any error that is caused by the *target*,
+		 * rather than the sender, will not cause an abort of the
+		 * transaction. Instead, we keep the erroneous message and will
+		 * signal the target during commit.
+		 */
+		if (transaction->param->flags & BUS1_SEND_FLAG_CONTINUE)
+			r = 0;
 		goto error;
+	}
 
 	r = bus1_pool_write_iovec(&peer_info->pool,	/* pool to write */
 				  message->slice,	/* slice to write to */
@@ -312,25 +327,21 @@ bus1_transaction_instantiate(struct bus1_transaction *transaction,
 	for (i = 0; i < transaction->param->n_fds; ++i)
 		message->files[i] = get_file(transaction->files[i]);
 
+	bus1_active_lockdep_released(&dest->raw_peer->active);
 	return message;
 
 error:
-	mutex_lock(&peer_info->lock);
-	bus1_message_deallocate(message, peer_info);
-	mutex_unlock(&peer_info->lock);
-
-	/*
-	 * If BUS1_SEND_FLAG_CONTINUE is specified, target errors are ignored.
-	 * That is, any error that is caused by the *target*, rather than the
-	 * sender, will not cause an abort of the transaction. Instead, we keep
-	 * the erroneous message and will signal the target during commit.
-	 */
-	if (cont) {
-		return message;
-	} else {
-		bus1_message_free(message);
-		return ERR_PTR(r);
+	if (message) {
+		mutex_lock(&peer_info->lock);
+		bus1_message_deallocate(message, peer_info);
+		mutex_unlock(&peer_info->lock);
 	}
+	if (r < 0) {
+		bus1_message_free(message, peer_info);
+		message = ERR_PTR(r);
+	}
+	bus1_active_lockdep_released(&dest->raw_peer->active);
+	return message;
 }
 
 /**
@@ -349,59 +360,49 @@ error:
 int bus1_transaction_instantiate_for_id(struct bus1_transaction *transaction,
 					u64 __user *idp)
 {
-	struct bus1_peer_info *peer_info;
+	struct bus1_handle_dest dest;
 	struct bus1_message *message;
-	struct bus1_handle *handle;
-	struct bus1_peer *peer;
-	u64 destination;
+	u64 id;
 	int r;
 
-	if (get_user(destination, idp))
+	if (get_user(id, idp))
 		return -EFAULT;
 
-	r = bus1_handle_pin_destination(transaction->peer, destination,
-					&handle, &peer);
-	if (r < 0)
-		return r;
+	bus1_handle_dest_init(&dest);
 
-	peer_info = bus1_peer_dereference(peer);
-
-	message = bus1_transaction_instantiate(transaction, peer_info, handle);
+	message = bus1_transaction_instantiate(transaction, &dest, id);
 	if (IS_ERR(message)) {
 		r = PTR_ERR(message);
-		message = NULL;
 		goto error;
 	}
 
 	message->transaction.next = transaction->entries;
-	message->transaction.handle = handle;
-	message->transaction.raw_peer = peer;
-	if (destination & BUS1_NODE_FLAG_ALLOCATE)
+	message->transaction.dest = dest; /* consume */
+	if (id & BUS1_NODE_FLAG_ALLOCATE)
 		message->transaction.userid = idp;
 	transaction->entries = message;
-	bus1_active_lockdep_released(&peer->active);
 
 	return 0;
 
 error:
-	bus1_handle_release(handle, peer_info);
-	bus1_handle_unref(handle);
-	bus1_peer_release(peer);
+	bus1_handle_dest_destroy(&dest, transaction->peer_info);
 	return r;
 }
 
 static int
 bus1_transaction_consume(struct bus1_transaction *transaction,
 			 struct bus1_message *message,
-			 struct bus1_handle *handle,
-			 struct bus1_peer *peer,
+			 struct bus1_handle_dest *dest,
 			 u64 __user *userid,
 			 u64 timestamp)
 {
-	struct bus1_peer_info *peer_info = bus1_peer_dereference(peer);
+	struct bus1_peer_info *peer_info;
 	bool faulted = false;
 	u64 id, ts;
 	int r;
+
+	bus1_active_lockdep_acquired(&dest->raw_peer->active);
+	peer_info = bus1_peer_dereference(dest->raw_peer);
 
 	if (!message->slice) {
 		/*
@@ -413,7 +414,7 @@ bus1_transaction_consume(struct bus1_transaction *transaction,
 		if (userid)
 			faulted = !!put_user(-1, userid);
 		else if (atomic_inc_return(&peer_info->n_dropped) == 1)
-			bus1_peer_wake(peer);
+			bus1_peer_wake(dest->raw_peer);
 		r = 0;
 		goto exit;
 	}
@@ -424,7 +425,7 @@ bus1_transaction_consume(struct bus1_transaction *transaction,
 		mutex_unlock(&transaction->peer_info->lock);
 	}
 
-	bus1_handle_inflight_install(&message->handles, peer,
+	bus1_handle_inflight_install(&message->handles, dest->raw_peer,
 				     &transaction->handles,
 				     transaction->peer);
 
@@ -439,17 +440,16 @@ bus1_transaction_consume(struct bus1_transaction *transaction,
 		id = BUS1_HANDLE_INVALID;
 	} else if (userid) {
 		/* publishing the handle consumes our inflight reference */
-		id = bus1_handle_publish_destination(handle, peer_info, ts);
-		handle = bus1_handle_unref(handle);
+		id = bus1_handle_dest_export(dest, peer_info, ts);
 		if (put_user(id, userid))
 			faulted = true;
 	} else {
-		id = bus1_handle_order_destination(handle, ts);
+		id = bus1_handle_dest_order(dest, ts);
 	}
 	if (id != BUS1_HANDLE_INVALID) {
 		message->data.destination = id;
 		if (bus1_queue_stage(&peer_info->queue, &message->qnode, ts))
-			bus1_peer_wake(peer);
+			bus1_peer_wake(dest->raw_peer);
 		message = NULL;
 		r = 0;
 	} else {
@@ -460,9 +460,9 @@ bus1_transaction_consume(struct bus1_transaction *transaction,
 	mutex_unlock(&peer_info->lock);
 
 exit:
-	bus1_message_free(message);
-	bus1_handle_release(handle, peer_info);
-	bus1_handle_unref(handle);
+	bus1_message_free(message, peer_info);
+	bus1_active_lockdep_released(&dest->raw_peer->active);
+	bus1_handle_dest_destroy(dest, transaction->peer_info);
 	return faulted ? -EFAULT : r;
 }
 
@@ -493,8 +493,7 @@ int bus1_transaction_commit(struct bus1_transaction *transaction)
 {
 	struct bus1_peer_info *peer_info;
 	struct bus1_message *message, *list;
-	struct bus1_handle *handle;
-	struct bus1_peer *peer;
+	struct bus1_handle_dest dest;
 	u64 __user *userid;
 	u64 timestamp;
 	bool silent;
@@ -524,9 +523,9 @@ int bus1_transaction_commit(struct bus1_transaction *transaction)
 	 * eventually queue the message as staging entry.
 	 */
 	for (message = list; message; message = message->transaction.next) {
-		peer = message->transaction.raw_peer;
-		bus1_active_lockdep_acquired(&peer->active);
-		peer_info = bus1_peer_dereference(peer);
+		dest = message->transaction.dest;
+		bus1_active_lockdep_acquired(&dest.raw_peer->active);
+		peer_info = bus1_peer_dereference(dest.raw_peer);
 
 		/* sync clocks and queue message as staging entry */
 		mutex_lock(&peer_info->lock);
@@ -534,10 +533,10 @@ int bus1_transaction_commit(struct bus1_transaction *transaction)
 		timestamp = bus1_queue_tick(&peer_info->queue);
 		if (bus1_queue_stage(&peer_info->queue, &message->qnode,
 				     timestamp - 1))
-			bus1_peer_wake(peer);
+			bus1_peer_wake(dest.raw_peer);
 		mutex_unlock(&peer_info->lock);
 
-		bus1_active_lockdep_released(&peer->active);
+		bus1_active_lockdep_released(&dest.raw_peer->active);
 	}
 
 	/*
@@ -556,15 +555,15 @@ int bus1_transaction_commit(struct bus1_transaction *transaction)
 	 * we actually want to give that guarantee, so here we go..
 	 */
 	for (message = list; message; message = message->transaction.next) {
-		peer = message->transaction.raw_peer;
-		bus1_active_lockdep_acquired(&peer->active);
-		peer_info = bus1_peer_dereference(peer);
+		dest = message->transaction.dest;
+		bus1_active_lockdep_acquired(&dest.raw_peer->active);
+		peer_info = bus1_peer_dereference(dest.raw_peer);
 
 		mutex_lock(&peer_info->lock);
 		bus1_queue_sync(&peer_info->queue, timestamp);
 		mutex_unlock(&peer_info->lock);
 
-		bus1_active_lockdep_released(&peer->active);
+		bus1_active_lockdep_released(&dest.raw_peer->active);
 	}
 
 	/*
@@ -578,19 +577,15 @@ int bus1_transaction_commit(struct bus1_transaction *transaction)
 	 */
 	while ((message = list)) {
 		list = message->transaction.next;
-		handle = message->transaction.handle;
-		peer = message->transaction.raw_peer;
+		dest = message->transaction.dest;
 		userid = message->transaction.userid;
-		bus1_active_lockdep_acquired(&peer->active);
 
 		message->transaction.next = NULL;
-		message->transaction.handle = NULL;
-		message->transaction.raw_peer = NULL;
+		message->transaction.dest = (struct bus1_handle_dest){};
 		message->transaction.userid = NULL;
 
-		r = bus1_transaction_consume(transaction, message, handle, peer,
+		r = bus1_transaction_consume(transaction, message, &dest,
 					     userid, timestamp);
-		bus1_peer_release(peer);
 
 		/*
 		 * A final commit can fail for two reasons: We either couldn't
@@ -624,41 +619,30 @@ int bus1_transaction_commit(struct bus1_transaction *transaction)
 int bus1_transaction_commit_for_id(struct bus1_transaction *transaction,
 				   u64 __user *idp)
 {
-	struct bus1_peer_info *peer_info;
+	struct bus1_handle_dest dest;
 	struct bus1_message *message;
-	struct bus1_handle *handle;
-	struct bus1_peer *peer;
-	u64 destination;
-	bool alloc;
+	u64 id;
 	int r;
 
-	if (get_user(destination, idp))
+	if (get_user(id, idp))
 		return -EFAULT;
 
-	r = bus1_handle_pin_destination(transaction->peer, destination,
-					&handle, &peer);
-	if (r < 0)
-		return r;
+	bus1_handle_dest_init(&dest);
 
-	peer_info = bus1_peer_dereference(peer);
-
-	message = bus1_transaction_instantiate(transaction, peer_info, handle);
+	message = bus1_transaction_instantiate(transaction, &dest, id);
 	if (IS_ERR(message)) {
 		r = PTR_ERR(message);
-		message = NULL;
 		goto exit;
 	}
 
-	alloc = !!(destination & BUS1_NODE_FLAG_ALLOCATE);
-	r = bus1_transaction_consume(transaction, message, handle, peer,
-				     alloc ? idp : NULL, 0);
-	message = NULL;
-	handle = NULL;
+	r = bus1_transaction_consume(transaction,
+				     message,
+				     &dest,
+				     (id & BUS1_NODE_FLAG_ALLOCATE) ?
+								idp : NULL,
+				     0);
 
 exit:
-	bus1_message_free(message);
-	bus1_handle_release(handle, peer_info);
-	bus1_handle_unref(handle);
-	bus1_peer_release(peer);
+	bus1_handle_dest_destroy(&dest, transaction->peer_info);
 	return r;
 }

@@ -83,6 +83,16 @@ struct bus1_peer_info;
 struct bus1_queue_node;
 
 /**
+ * struct bus1_handle_dest - destination context
+ * @handle:		local destination handle
+ * @raw_peer:		remote destination peer (raw active ref)
+ */
+struct bus1_handle_dest {
+	struct bus1_handle *handle;
+	struct bus1_peer *raw_peer;
+};
+
+/**
  * BUS1_HANDLE_BATCH_SIZE - number of handles per set in a batch
  *
  * We need to support large handle transactions, bigger than any linear
@@ -178,34 +188,35 @@ struct bus1_handle_inflight {
 	/* @batch must be last */
 };
 
-/* handles */
-struct bus1_handle *bus1_handle_unref(struct bus1_handle *handle);
-struct bus1_handle *bus1_handle_release(struct bus1_handle *handle,
-					struct bus1_peer_info *peer_info);
-struct bus1_handle *bus1_handle_from_node(struct bus1_queue_node *node,
-					  u64 *idp);
-
 /* api */
-int bus1_handle_pin_destination(struct bus1_peer *peer,
-				u64 id,
-				struct bus1_handle **dst_handlep,
-				struct bus1_peer **dst_peerp);
-u64 bus1_handle_order_destination(struct bus1_handle *handle, u64 timestamp);
-u64 bus1_handle_publish_destination(struct bus1_handle *handle,
-				    struct bus1_peer_info *peer_info,
-				    u64 timestamp);
+u64 bus1_handle_from_queue(struct bus1_queue_node *node,
+			   struct bus1_peer_info *peer_info,
+			   bool drop);
 int bus1_handle_pair(struct bus1_peer *clone,
 		     struct bus1_peer *peer,
 		     u64 *node_idp,
 		     u64 *handle_idp);
 int bus1_handle_release_by_id(struct bus1_peer_info *peer_info, u64 id);
 int bus1_handle_destroy_by_id(struct bus1_peer_info *peer_info, u64 id);
-void bus1_handle_flush_all(struct bus1_peer_info *peer_info, bool final);
+void bus1_handle_flush_all(struct bus1_peer_info *peer_info);
+
+/* destination context */
+void bus1_handle_dest_init(struct bus1_handle_dest *dest);
+void bus1_handle_dest_destroy(struct bus1_handle_dest *dest,
+			      struct bus1_peer_info *peer_info);
+int bus1_handle_dest_import(struct bus1_handle_dest *dest,
+			    struct bus1_peer *peer,
+			    u64 id);
+u64 bus1_handle_dest_order(struct bus1_handle_dest *dest, u64 timestamp);
+u64 bus1_handle_dest_export(struct bus1_handle_dest *dest,
+			    struct bus1_peer_info *peer_info,
+			    u64 timestamp);
 
 /* transfer contexts */
 void bus1_handle_transfer_init(struct bus1_handle_transfer *transfer,
 			       size_t n_entries);
-void bus1_handle_transfer_destroy(struct bus1_handle_transfer *transfer);
+void bus1_handle_transfer_destroy(struct bus1_handle_transfer *transfer,
+				  struct bus1_peer_info *peer_info);
 int bus1_handle_transfer_import(struct bus1_handle_transfer *transfer,
 				struct bus1_peer_info *peer_info,
 				const u64 __user *ids,
@@ -220,7 +231,8 @@ int bus1_handle_transfer_export(struct bus1_handle_transfer *transfer,
 /* inflight tracking */
 void bus1_handle_inflight_init(struct bus1_handle_inflight *inflight,
 			       size_t n_entries);
-void bus1_handle_inflight_destroy(struct bus1_handle_inflight *inflight);
+void bus1_handle_inflight_destroy(struct bus1_handle_inflight *inflight,
+				  struct bus1_peer_info *peer_info);
 int bus1_handle_inflight_instantiate(struct bus1_handle_inflight *inflight,
 				     struct bus1_peer_info *peer_info,
 				     struct bus1_handle_transfer *transfer);

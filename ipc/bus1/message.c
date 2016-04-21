@@ -63,8 +63,8 @@ struct bus1_message *bus1_message_new(size_t n_bytes,
 	message->data.n_handles = n_handles;
 	message->data.n_fds = n_files;
 	message->transaction.next = NULL;
-	message->transaction.handle = NULL;
-	message->transaction.raw_peer = NULL;
+	message->transaction.dest.handle = NULL;
+	message->transaction.dest.raw_peer = NULL;
 	message->transaction.userid = NULL;
 	message->user = NULL;
 	message->slice = NULL;
@@ -78,6 +78,7 @@ struct bus1_message *bus1_message_new(size_t n_bytes,
 /**
  * bus1_message_free() - destroy a message
  * @message:		message to destroy, or NULL
+ * @peer_info:		owning peer
  *
  * This deallocates, destroys, and frees a message that was previously created
  * via bus1_message_new(). The caller must take care to unlink the message from
@@ -86,7 +87,8 @@ struct bus1_message *bus1_message_new(size_t n_bytes,
  *
  * Return: NULL is returned.
  */
-struct bus1_message *bus1_message_free(struct bus1_message *message)
+struct bus1_message *bus1_message_free(struct bus1_message *message,
+				       struct bus1_peer_info *peer_info)
 {
 	size_t i;
 
@@ -96,15 +98,15 @@ struct bus1_message *bus1_message_free(struct bus1_message *message)
 	WARN_ON(message->slice);
 	WARN_ON(message->user);
 	WARN_ON(message->transaction.userid);
-	WARN_ON(message->transaction.raw_peer);
-	WARN_ON(message->transaction.handle);
+	WARN_ON(message->transaction.dest.raw_peer);
+	WARN_ON(message->transaction.dest.handle);
 	WARN_ON(message->transaction.next);
 
 	for (i = 0; i < message->data.n_fds; ++i)
 		if (message->files[i])
 			fput(message->files[i]);
 
-	bus1_handle_inflight_destroy(&message->handles);
+	bus1_handle_inflight_destroy(&message->handles, peer_info);
 	bus1_queue_node_destroy(&message->qnode);
 	kfree_rcu(message, qnode.rcu);
 

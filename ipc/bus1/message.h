@@ -33,8 +33,7 @@ struct bus1_user;
  * @qnode:			embedded queue node
  * @data:			message data
  * @transaction.next:		message list (during transactions)
- * @transaction.handle:		pinned handle (during transactions)
- * @transaction.raw_peer:	pinned destination (during transactions)
+ * @transaction.dest:		pinned destination (during transactions)
  * @transaction.userid:		address to store handle id (during transactions)
  * @user:			sending user
  * @slice:			actual message data
@@ -47,8 +46,7 @@ struct bus1_message {
 
 	struct {
 		struct bus1_message *next;
-		struct bus1_handle *handle;
-		struct bus1_peer *raw_peer;
+		struct bus1_handle_dest dest;
 		u64 __user *userid;
 	} transaction;
 
@@ -63,7 +61,8 @@ struct bus1_message *bus1_message_new(size_t n_bytes,
 				      size_t n_files,
 				      size_t n_handles,
 				      bool silent);
-struct bus1_message *bus1_message_free(struct bus1_message *message);
+struct bus1_message *bus1_message_free(struct bus1_message *message,
+				       struct bus1_peer_info *peer_info);
 int bus1_message_allocate(struct bus1_message *message,
 			  struct bus1_peer_info *peer_info,
 			  struct bus1_user *user);
