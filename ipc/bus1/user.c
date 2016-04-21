@@ -459,6 +459,5 @@ void bus1_user_quota_commit(struct bus1_peer_info *peer_info,
 	stats->n_allocated -= size;
 	stats->n_messages -= 1;
 	stats->n_handles -= n_handles;
-	atomic_dec(&user->n_messages);
 	atomic_sub(n_fds, &user->n_fds);
 }
