@@ -32,12 +32,12 @@ struct file *bus1_import_fd(const u32 __user *user_fd);
 struct file *bus1_clone_file(struct file *file);
 
 /**
- * bus1_atomic_sub_floor() - subtract, if the result is non-negative
+ * bus1_atomic_sub_floor() - subtract, if the result is not below a given value
  * @a:		atomic_t to operate on
  * @sub:	value to subtract
  *
- * Atomically subtract @sub from @a, if the result is non-negative, otherwise
- * do nothing.
+ * Atomically subtract @sub from @a, if the result is not less than @floor,
+ * otherwise do nothing.
  *
  * The operation will *not* be performed on underflow, but the return value
  * will obviously be undefined. Hence, the caller is expected to guarantee that
@@ -46,11 +46,12 @@ struct file *bus1_clone_file(struct file *file);
  * Return: Resulting value, regardless whether it was subtracted or not.
  */
 static inline int bus1_atomic_sub_unless_underflow(atomic_t *a,
-						   unsigned int sub)
+						   unsigned int sub,
+						   int floor)
 {
 	int v, v1;
 
-	for (v = atomic_read(a); v >= sub; v = v1) {
+	for (v = atomic_read(a); v - sub <= v && v - sub >= floor; v = v1) {
 		v1 = atomic_cmpxchg(a, v, v - sub);
 		if (likely(v1 == v))
 			break;

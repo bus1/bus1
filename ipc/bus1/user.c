@@ -241,6 +241,31 @@ bus1_user_quota_query(struct bus1_user_quota *quota,
 	return quota->stats + user->id;
 }
 
+/*
+ * True if the charge would leave at least the new share available. Caller must
+ * ensure that share + charge does not overflow.
+ */
+static bool bus1_user_quota_check_local(size_t available,
+					size_t share,
+					size_t charge)
+{
+	return available >= charge && available - charge >= share + charge;
+}
+
+/*
+ * True if the charge leaves at least the new share available. Caller must
+ * ensure that share + charge does not overflow, and that available - charge
+ * cannot underflow.
+ */
+static bool bus1_user_quota_charge_global(atomic_t *available,
+					  size_t share,
+					  size_t charge)
+{
+	return bus1_atomic_sub_unless_underflow(available, charge,
+						share + charge) >=
+	       share + charge;
+}
+
 /**
  * bus1_user_quota_charge() - try charging a user
  * @peer_info:		peer with quota to operate on
@@ -265,7 +290,6 @@ int bus1_user_quota_charge(struct bus1_peer_info *peer_info,
 			   size_t n_fds)
 {
 	struct bus1_user_stats *stats;
-	size_t max, remaining;
 	int r;
 
 	lockdep_assert_held(&peer_info->lock);
@@ -292,60 +316,52 @@ int bus1_user_quota_charge(struct bus1_peer_info *peer_info,
 	WARN_ON(peer_info->n_handles > BUS1_HANDLES_MAX);
 	WARN_ON(stats->n_handles > peer_info->n_handles);
 
-	/*
-	 * For the pool size, shmem enforces a global maximum, so we only
-	 * enforce the per-peer one.
-	 */
-	max = peer_info->pool.size - peer_info->n_allocated +
-	      stats->n_allocated;
-	if (stats->n_allocated + size > max / 2)
+	/* enforce the per-peer quota, but do not charge anything */
+	if (!bus1_user_quota_check_local(peer_info->pool.size -
+					 peer_info->n_allocated,
+					 stats->n_allocated,
+					 size))
 		return -EDQUOT;
 
-	/*
-	 * For all the other quotas, we enforce both a global and a per-peer
-	 * limit.
-	 */
-	remaining = bus1_atomic_sub_unless_underflow(&user->n_messages, 1);
-	if (remaining < 0)
+	if (!bus1_user_quota_check_local(peer_info->max_messages -
+					 peer_info->n_messages,
+					 stats->n_messages,
+					 1))
 		return -EDQUOT;
 
-	max = min(remaining, peer_info->max_messages - peer_info->n_messages) +
-	      stats->n_messages;
-	if (stats->n_messages + 1 > max / 2) {
-		r = -EDQUOT;
-		goto error_messages;
-	}
+	if (!bus1_user_quota_check_local(peer_info->max_handles -
+					 peer_info->n_handles,
+					 stats->n_handles,
+					 n_handles))
+		return -EDQUOT;
 
-	remaining = bus1_atomic_sub_unless_underflow(&user->n_handles,
-						     n_handles);
-	if (remaining < 0) {
-		r = -EDQUOT;
-		goto error_messages;
-	}
+	if (!bus1_user_quota_check_local(peer_info->max_fds -
+					 peer_info->n_fds,
+					 stats->n_fds,
+					 n_fds))
+		return -ETOOMANYREFS;
 
-	max = min(remaining, peer_info->max_handles - peer_info->n_handles) +
-	      stats->n_handles;
-	if (stats->n_handles + n_handles > max / 2) {
+	/*
+	 * Enforce and charge the global quotas. There is no global pool-size
+	 * quota as that is handled by shmem.
+	 */
+	if (!bus1_user_quota_charge_global(&user->n_messages,
+					   stats->n_messages, 1))
+		return -EDQUOT;
+
+	if (!bus1_user_quota_charge_global(&user->n_handles,
+					   stats->n_handles, n_handles)) {
 		r = -EDQUOT;
 		goto error_handles;
 	}
 
-	remaining = bus1_atomic_sub_unless_underflow(&user->n_fds, n_fds);
-	if (remaining < 0) {
-		r = -ETOOMANYREFS;
-		goto error_handles;
-	}
-
-	max = min(remaining, peer_info->max_fds - peer_info->n_fds) +
-	      stats->n_fds;
-	if (stats->n_fds + n_fds > max / 2) {
-		atomic_inc(&user->n_messages);
-		atomic_add(n_handles, &user->n_handles);
-		atomic_add(n_fds, &user->n_fds);
+	if (!bus1_user_quota_charge_global(&user->n_fds,
+					   stats->n_fds, n_fds)) {
 		r = -ETOOMANYREFS;
 		goto error_fds;
 	}
 
+	/* charge the local quoats */
 	peer_info->n_allocated += size;
 	peer_info->n_messages += 1;
 	peer_info->n_handles += n_handles;
@@ -358,10 +374,8 @@ int bus1_user_quota_charge(struct bus1_peer_info *peer_info,
 	return 0;
 
 error_fds:
-	atomic_add(n_fds, &user->n_fds);
-error_handles:
 	atomic_add(n_handles, &user->n_handles);
-error_messages:
+error_handles:
 	atomic_inc(&user->n_messages);
 	return r;
 }
