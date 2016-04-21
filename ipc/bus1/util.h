@@ -54,4 +54,27 @@ static inline int bus1_atomic_sub_floor(atomic_t *a, int sub)
 	return -ERANGE;
 }
 
+/**
+ * bus1_atomic_add_unless_negative() - add value, unless already negative
+ * @a:		atomic_t to operate on
+ * @add:	value to add
+ *
+ * This atomically adds @add to @a if, and only if, @a is not negative before
+ * the operation.
+ *
+ * Return: 1 if operation was performed, 0 if not.
+ */
+static inline int bus1_atomic_add_unless_negative(atomic_t *a, int add)
+{
+	int v, v1;
+
+	for (v = atomic_read(a); v >= 0; v = v1) {
+		v1 = atomic_cmpxchg(a, v, v + add);
+		if (likely(v1 == v))
+			return 1;
+	}
+
+	return 0;
+}
+
 #endif /* __BUS1_UTIL_H */

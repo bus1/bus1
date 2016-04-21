@@ -13,6 +13,7 @@
 #include <linux/sched.h>
 #include <linux/wait.h>
 #include "active.h"
+#include "util.h"
 
 /*
  * Bias values track states of "active references". They're all negative. If an
@@ -160,24 +161,6 @@ bool bus1_active_activate(struct bus1_active *active)
 			      BUS1_ACTIVE_NEW, 0) == BUS1_ACTIVE_NEW;
 }
 
-/*
- * There is no atomic_add_unless_negative(), nor an
- * atomic_sub_unless_negative(), so we implement it here, similarly to their
- * inc and dec counterparts.
- */
-static int bus1_active_add_unless_negative(struct bus1_active *active, int add)
-{
-	int v, v1;
-
-	for (v = atomic_read(&active->count); v >= 0; v = v1) {
-		v1 = atomic_cmpxchg(&active->count, v, v + add);
-		if (likely(v1 == v))
-			return 1;
-	}
-
-	return 0;
-}
-
 /**
  * bus1_active_deactivate() - deactivate object
  * @active:	object to deactivate
@@ -195,7 +178,8 @@ bool bus1_active_deactivate(struct bus1_active *active)
 	v = atomic_cmpxchg(&active->count,
 			   BUS1_ACTIVE_NEW, BUS1_ACTIVE_RELEASE_DIRECT);
 	if (v != BUS1_ACTIVE_NEW)
-		v = bus1_active_add_unless_negative(active, BUS1_ACTIVE_BIAS);
+		v = bus1_atomic_add_unless_negative(&active->count,
+						    BUS1_ACTIVE_BIAS);
 
 	return v;
 }
