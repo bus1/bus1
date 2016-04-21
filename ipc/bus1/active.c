@@ -281,8 +281,7 @@ void bus1_active_drain(struct bus1_active *active, wait_queue_head_t *waitq)
  */
 bool bus1_active_cleanup(struct bus1_active *active,
 			 wait_queue_head_t *waitq,
-			 void (*cleanup) (struct bus1_active *active,
-			                  void *userdata),
+			 void (*cleanup) (struct bus1_active *, void *),
 			 void *userdata)
 {
 	int v;
