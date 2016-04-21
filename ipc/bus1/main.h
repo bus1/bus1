@@ -30,8 +30,42 @@
  *       bus1_user_lock
  */
 
+/**
+ * BUS1_MESSAGES_MAX - default limit for maximum number of messages
+ *
+ * This defines the default message limit for each user and peer. This is just
+ * the default, limits can be adjusted at runtime, if required.
+ *
+ * The message-limit controls the number of message a peer can have assigned.
+ * They are accounted on SEND and deaccounted on final release. Queuing
+ * messages on a remote peer is subject to quotas.
+ */
 #define BUS1_MESSAGES_MAX (16383)
+
+/**
+ * BUS1_HANDLES_MAX - default limit for maximum number of handles
+ *
+ * This defines the default handle limit for each user and peer. This is just
+ * the default, limits can be adjusted at runtime, if required.
+ *
+ * The handle-limit controls how many handles can be allocated on an ID-space.
+ * They are accounted on creation (usually SEND), and deaccounted once released
+ * (usually via RELEASE). Remote handle creation is subject to quotas, local
+ * handle creation is not.
+ */
 #define BUS1_HANDLES_MAX (65535)
+
+/**
+ * BUS1_FDS_MAX - default limit for inflight FDs
+ *
+ * This defines the default inflight FD limit for each user and peer. This is
+ * just the default, limits can be adjusted at runtime, if required.
+ *
+ * The FD-limit controls how many inflight FDs are allowed. It is accounted for
+ * on SEND, and de-accounted on RECV. After RECV it is subject to RLIM_NOFILE
+ * and under full control of the receiver. All inflight FD accounting is
+ * accounting is subject to quotas.
+ */
 #define BUS1_FDS_MAX (65535)
 
 extern const struct file_operations bus1_fops;
