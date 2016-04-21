@@ -34,7 +34,7 @@
  * existing handles to that node on any peer, notifying each one of the
  * destruction.
  *
- * Unlike nodes and handles, peers cannot be addresses directly. In fact, peers
+ * Unlike nodes and handles, peers cannot be addressed directly. In fact, peers
  * are completely unconnected entities in bus1.ko. A peer is merely an anchor
  * of a set of nodes and handles, including an incoming message queue for any
  * of those. Whether multiple nodes are all part of the same set (and as such
