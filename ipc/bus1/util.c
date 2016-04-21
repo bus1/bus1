@@ -22,29 +22,6 @@
 #include "util.h"
 
 /**
- * bus1_in_compat_syscall() - check whether running in compat syscall
- *
- * This function checks whether the current context runs in a compat syscall,
- * that is, it was called via compat_ioctl(), rather than unlocked_ioctl().
- *
- * Return: True if running in a compat syscall
- */
-static bool bus1_in_compat_syscall(void)
-{
-	/*
-	 * XXX: in_compat_syscall() was introduced in v4.5-rc1, but for us it
-	 *      is totally fine to fall back to is_compat_task() on older
-	 *      kernels. But make sure to remove this fallback once v4.5 is
-	 *      released.
-	 */
-#ifdef in_compat_syscall
-	return in_compat_syscall();
-#else
-	return is_compat_task();
-#endif
-}
-
-/**
  * bus1_import_vecs() - import vectors from user
  * @out_vecs:		kernel memory to store vecs, preallocated
  * @out_length:		output storage for sum of all vectors lengths
@@ -78,7 +55,17 @@ int bus1_import_vecs(struct iovec *out_vecs,
 		return 0;
 	}
 
-	if (IS_ENABLED(CONFIG_COMPAT) && bus1_in_compat_syscall()) {
+	/*
+	 * XXX: in_compat_syscall() was introduced in v4.5-rc1, but for us it
+	 *      is totally fine to fall back to is_compat_task() on older
+	 *      kernels. But make sure to remove this fallback once v4.5 is
+	 *      released.
+	 */
+#ifdef in_compat_syscall
+	if (IS_ENABLED(CONFIG_COMPAT) && in_compat_syscall()) {
+#else
+	if (IS_ENABLED(CONFIG_COMPAT) && is_compat_task()) {
+#endif
 		/*
 		 * Compat types and macros are protected by CONFIG_COMPAT,
 		 * rather than providing a fallback. We want compile-time
