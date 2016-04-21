@@ -15,7 +15,7 @@
  *
  * The bus1.ko module is a local IPC technology which provides a decentralized
  * infrastructure to share objects between local peers. The main building
- * blocks are nodes and handles. Nodes represent objects of a local peers,
+ * blocks are nodes and handles. Nodes represent objects of a local peer,
  * while handles represent descriptors that point to a node. Nodes can be
  * created and destroyed by any peer, and they will always remain owned by
  * their respective creator. Handles, on the other hand, are used to refer to
@@ -65,40 +65,44 @@
  */
 
 /**
- * BUS1_MESSAGES_MAX - default limit for maximum number of messages
+ * BUS1_MESSAGES_MAX - per-user limit for maximum number of messages
  *
- * This defines the default message limit for each user and peer. This is just
- * the default, limits can be adjusted at runtime, if required.
+ * This defines the limit on how many messages each user can have pinned. This
+ * is just the global limit, a per-peer limit can be set at runtime as well, if
+ * required.
  *
- * The message-limit controls the number of message a peer can have assigned.
- * They are accounted on SEND and deaccounted on final release. Queuing
- * messages on a remote peer is subject to quotas.
+ * The message-limit controls the number of message a user can have assigned.
+ * They are accounted, on the receiving user, on SEND and deaccounted on final
+ * release. Queuing messages on a remote peer is subject to a per-sending-user
+ * quota.
  */
 #define BUS1_MESSAGES_MAX (16383)
 
 /**
- * BUS1_HANDLES_MAX - default limit for maximum number of handles
+ * BUS1_HANDLES_MAX - per-user limit for maximum number of handles
  *
- * This defines the default handle limit for each user and peer. This is just
- * the default, limits can be adjusted at runtime, if required.
+ * This defines the limit on how many handles each user can have pinned. This is
+ * just the global limit, a per-peer limit can be set at runtime as well, if
+ * required.
  *
- * The handle-limit controls how many handles can be allocated on an ID-space.
+ * The handle-limit controls how many handles can be allocated in an ID-space.
  * They are accounted on creation (usually SEND), and deaccounted once released
- * (usually via RELEASE). Remote handle creation is subject to quotas, local
- * handle creation is not.
+ * (usually via RELEASE). Remote handle creation is subject to a
+ * per-creating-user quota, local handle creation is not.
  */
 #define BUS1_HANDLES_MAX (65535)
 
 /**
- * BUS1_FDS_MAX - default limit for inflight FDs
+ * BUS1_FDS_MAX - per-user limit for inflight FDs
  *
- * This defines the default inflight FD limit for each user and peer. This is
- * just the default, limits can be adjusted at runtime, if required.
+ * This defines the inflight on how many FDs each user can have inflight. This
+ * is just the global limit, a per-peer limit can be set at runtime as well, if
+ * required.
  *
- * The FD-limit controls how many inflight FDs are allowed. It is accounted for
- * on SEND, and de-accounted on RECV. After RECV it is subject to RLIM_NOFILE
- * and under full control of the receiver. All inflight FD accounting is
- * accounting is subject to quotas.
+ * The FD-limit controls how many inflight FDs are allowed to be destined fro a
+ * given user. It is accounted for on SEND, and de-accounted on RECV. After RECV
+ * it is subject to RLIM_NOFILE and under full control of the receiver. All
+ * inflight FD accounting is accounting is subject to per-sending-user quotas.
  */
 #define BUS1_FDS_MAX (65535)
 
