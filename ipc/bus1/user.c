@@ -352,13 +352,13 @@ int bus1_user_quota_charge(struct bus1_peer_info *peer_info,
 	if (!bus1_user_quota_charge_global(&user->n_handles,
 					   stats->n_handles, n_handles)) {
 		r = -EDQUOT;
-		goto error_handles;
+		goto error_messages;
 	}
 
 	if (!bus1_user_quota_charge_global(&user->n_fds,
 					   stats->n_fds, n_fds)) {
 		r = -ETOOMANYREFS;
-		goto error_fds;
+		goto error_handles;
 	}
 
 	/* charge the local quoats */
@@ -373,9 +373,9 @@ int bus1_user_quota_charge(struct bus1_peer_info *peer_info,
 
 	return 0;
 
-error_fds:
-	atomic_add(n_handles, &user->n_handles);
 error_handles:
+	atomic_add(n_handles, &user->n_handles);
+error_messages:
 	atomic_inc(&user->n_messages);
 	return r;
 }
