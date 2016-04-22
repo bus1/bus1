@@ -65,7 +65,6 @@ struct bus1_message *bus1_message_new(size_t n_bytes,
 	message->transaction.next = NULL;
 	message->transaction.dest.handle = NULL;
 	message->transaction.dest.raw_peer = NULL;
-	message->transaction.userid = NULL;
 	message->user = NULL;
 	message->slice = NULL;
 	message->files = (void *)((u8 *)message + base_size);
@@ -97,7 +96,6 @@ struct bus1_message *bus1_message_free(struct bus1_message *message,
 
 	WARN_ON(message->slice);
 	WARN_ON(message->user);
-	WARN_ON(message->transaction.userid);
 	WARN_ON(message->transaction.dest.raw_peer);
 	WARN_ON(message->transaction.dest.handle);
 	WARN_ON(message->transaction.next);

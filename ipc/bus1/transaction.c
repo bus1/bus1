@@ -104,7 +104,6 @@ static void bus1_transaction_destroy(struct bus1_transaction *transaction)
 
 		message->transaction.next = NULL;
 		message->transaction.dest = (struct bus1_handle_dest){};
-		message->transaction.userid = NULL;
 
 		mutex_lock(&peer_info->lock);
 		if (bus1_queue_remove(&peer_info->queue, &message->qnode))
@@ -262,14 +261,14 @@ bus1_transaction_free(struct bus1_transaction *transaction, u8 *stack_buffer)
 static struct bus1_message *
 bus1_transaction_instantiate(struct bus1_transaction *transaction,
 			     struct bus1_handle_dest *dest,
-			     u64 id)
+			     u64 __user *idp)
 {
 	struct bus1_peer_info *peer_info = NULL;
 	struct bus1_message *message;
 	size_t i;
 	int r;
 
-	r = bus1_handle_dest_import(dest, transaction->peer, id);
+	r = bus1_handle_dest_import(dest, transaction->peer, idp);
 	if (r < 0)
 		return ERR_PTR(r);
 
@@ -362,15 +361,11 @@ int bus1_transaction_instantiate_for_id(struct bus1_transaction *transaction,
 {
 	struct bus1_handle_dest dest;
 	struct bus1_message *message;
-	u64 id;
 	int r;
-
-	if (get_user(id, idp))
-		return -EFAULT;
 
 	bus1_handle_dest_init(&dest);
 
-	message = bus1_transaction_instantiate(transaction, &dest, id);
+	message = bus1_transaction_instantiate(transaction, &dest, idp);
 	if (IS_ERR(message)) {
 		r = PTR_ERR(message);
 		goto error;
@@ -378,8 +373,6 @@ int bus1_transaction_instantiate_for_id(struct bus1_transaction *transaction,
 
 	message->transaction.next = transaction->entries;
 	message->transaction.dest = dest; /* consume */
-	if (id & BUS1_NODE_FLAG_ALLOCATE)
-		message->transaction.userid = idp;
 	transaction->entries = message;
 
 	return 0;
@@ -393,7 +386,6 @@ static int
 bus1_transaction_consume(struct bus1_transaction *transaction,
 			 struct bus1_message *message,
 			 struct bus1_handle_dest *dest,
-			 u64 __user *userid,
 			 u64 timestamp)
 {
 	struct bus1_peer_info *peer_info;
@@ -411,8 +403,8 @@ bus1_transaction_consume(struct bus1_transaction *transaction,
 		 * that itself was a newly created node, we rather tell the
 		 * caller about the error than waking itself up.
 		 */
-		if (userid)
-			faulted = !!put_user(-1, userid);
+		if (dest->idp)
+			faulted = !!put_user(-1, dest->idp);
 		else if (atomic_inc_return(&peer_info->n_dropped) == 1)
 			bus1_peer_wake(dest->raw_peer);
 		r = 0;
@@ -438,10 +430,10 @@ bus1_transaction_consume(struct bus1_transaction *transaction,
 	}
 	if (!bus1_queue_node_is_queued(&message->qnode)) {
 		id = BUS1_HANDLE_INVALID;
-	} else if (userid) {
+	} else if (dest->idp) {
 		/* publishing the handle consumes our inflight reference */
 		id = bus1_handle_dest_export(dest, peer_info, ts);
-		if (put_user(id, userid))
+		if (put_user(id, dest->idp))
 			faulted = true;
 	} else {
 		id = bus1_handle_dest_order(dest, ts);
@@ -494,7 +486,6 @@ int bus1_transaction_commit(struct bus1_transaction *transaction)
 	struct bus1_peer_info *peer_info;
 	struct bus1_message *message, *list;
 	struct bus1_handle_dest dest;
-	u64 __user *userid;
 	u64 timestamp;
 	bool silent;
 	int r, res = 0;
@@ -578,14 +569,12 @@ int bus1_transaction_commit(struct bus1_transaction *transaction)
 	while ((message = list)) {
 		list = message->transaction.next;
 		dest = message->transaction.dest;
-		userid = message->transaction.userid;
 
 		message->transaction.next = NULL;
 		message->transaction.dest = (struct bus1_handle_dest){};
-		message->transaction.userid = NULL;
 
 		r = bus1_transaction_consume(transaction, message, &dest,
-					     userid, timestamp);
+					     timestamp);
 
 		/*
 		 * A final commit can fail for two reasons: We either couldn't
@@ -621,26 +610,17 @@ int bus1_transaction_commit_for_id(struct bus1_transaction *transaction,
 {
 	struct bus1_handle_dest dest;
 	struct bus1_message *message;
-	u64 id;
 	int r;
-
-	if (get_user(id, idp))
-		return -EFAULT;
 
 	bus1_handle_dest_init(&dest);
 
-	message = bus1_transaction_instantiate(transaction, &dest, id);
+	message = bus1_transaction_instantiate(transaction, &dest, idp);
 	if (IS_ERR(message)) {
 		r = PTR_ERR(message);
 		goto exit;
 	}
 
-	r = bus1_transaction_consume(transaction,
-				     message,
-				     &dest,
-				     (id & BUS1_NODE_FLAG_ALLOCATE) ?
-								idp : NULL,
-				     0);
+	r = bus1_transaction_consume(transaction, message, &dest, 0);
 
 exit:
 	bus1_handle_dest_destroy(&dest, transaction->peer_info);
