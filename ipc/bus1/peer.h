@@ -48,9 +48,10 @@
  * @seqcount:			sequence counter
  * @n_dropped:			number of lost messages since last report
  * @handle_ids:			handle ID allocator
- * @n_allocated:		current amount of allocated pool memory
- * @n_messages:			current number of queue entries
- * @n_handles:			current number of handles
+ * @n_allocated:		remaining quota for allocated pool memory
+ * @n_messages:			remaining quota for owned messages
+ * @n_handles:			remaining quota for owned handles
+ * @n_fds:			remaining quota for inflight FDs
  */
 struct bus1_peer_info {
 	union {
@@ -73,9 +74,6 @@ struct bus1_peer_info {
 	size_t n_messages;
 	size_t n_handles;
 	size_t n_fds;
-	size_t max_messages;
-	size_t max_handles;
-	size_t max_fds;
 };
 
 /**

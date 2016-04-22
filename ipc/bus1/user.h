@@ -59,23 +59,31 @@ extern struct ida bus1_user_ida;
 /**
  * struct bus1_user - resource accounting for users
  * @ref:		reference counter
- * @uid:		UID of the user
  * @id:			internal index of this user
- * @fds_inflight:	number of in-flight fds the user has
+ * @uid:		UID of the user
  * @rcu:		rcu
+ * @n_messages:		number of remaining quota for owned messages
+ * @n_handles:		number of remaining quota for owned handles
+ * @n_fds:		number of remaining quota for inflight FDs
+ * @max_messages:	maximum number of owned messages
+ * @max_handles:	maximum number of owned handles
+ * @max_fds:		maximum number of inflight FDs
  */
 struct bus1_user {
 	struct kref ref;
+	unsigned int id;
+	kuid_t uid;
 
 	union {
+		struct rcu_head rcu;
 		struct {
-			kuid_t uid;
-			unsigned int id;
 			atomic_t n_messages;
 			atomic_t n_handles;
 			atomic_t n_fds;
+			atomic_t max_messages;
+			atomic_t max_handles;
+			atomic_t max_fds;
 		};
-		struct rcu_head rcu;
 	};
 };
 

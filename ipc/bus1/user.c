@@ -37,11 +37,14 @@ static struct bus1_user *bus1_user_new(void)
 		return ERR_PTR(-ENOMEM);
 
 	kref_init(&u->ref);
-	u->uid = INVALID_UID;
 	u->id = BUS1_INTERNAL_UID_INVALID;
+	u->uid = INVALID_UID;
 	atomic_set(&u->n_messages, BUS1_MESSAGES_MAX);
 	atomic_set(&u->n_handles, BUS1_HANDLES_MAX);
 	atomic_set(&u->n_fds, BUS1_FDS_MAX);
+	atomic_set(&u->max_messages, BUS1_MESSAGES_MAX);
+	atomic_set(&u->max_handles, BUS1_HANDLES_MAX);
+	atomic_set(&u->max_fds, BUS1_FDS_MAX);
 
 	return u;
 }
@@ -50,9 +53,12 @@ static void bus1_user_free(struct kref *ref)
 {
 	struct bus1_user *user = container_of(ref, struct bus1_user, ref);
 
-	WARN_ON(atomic_read(&user->n_messages) != BUS1_MESSAGES_MAX);
-	WARN_ON(atomic_read(&user->n_handles) != BUS1_HANDLES_MAX);
-	WARN_ON(atomic_read(&user->n_fds) != BUS1_FDS_MAX);
+	WARN_ON(atomic_read(&user->n_fds) !=
+					atomic_read(&user->max_fds));
+	WARN_ON(atomic_read(&user->n_handles) !=
+					atomic_read(&user->max_handles));
+	WARN_ON(atomic_read(&user->n_messages) !=
+					atomic_read(&user->max_messages));
 
 	/* if already dropped, it's set to invalid */
 	if (uid_valid(user->uid)) {
@@ -243,12 +249,9 @@ bus1_user_quota_query(struct bus1_user_quota *quota,
 
 static int bus1_user_quota_charge_one(atomic_t *global,
 				      size_t local,
-				      size_t max,
 				      size_t share,
 				      size_t charge)
 {
-	size_t remaining;
-
 	/*
 	 * Try charging a single resource type. If limits are exceeded, return
 	 * an error-code, otherwise apply charges globally but not locally
@@ -260,10 +263,11 @@ static int bus1_user_quota_charge_one(atomic_t *global,
 	 *          this user. For each accounted resource, we decrement it.
 	 *          Thus, if must not drop below 0, or you exceeded your quota.
 	 * @local: per-peer variable that counts all instances of this resource
-	 *         for this single user.
+	 *         for this single user. Same semantics as @global, i.e., it
+	 *         counts number of remaining units, rather than accounted
+	 *         units.
 	 *         This function does not touch the counter, since the caller
-	 *         can do that itself on success.
-	 * @max: maximum value that @local can grow to
+	 *         can do that themself on success.
 	 * @share: current amount of resources that the acting task has in
 	 *         @local. That is, this share describes how many of the
 	 *         resources in @local were added there by the current context.
@@ -278,8 +282,7 @@ static int bus1_user_quota_charge_one(atomic_t *global,
 	 * big as what the caller has charged in total.
 	 */
 
-	remaining = max - local;
-	if (remaining < charge || remaining - charge < share + charge)
+	if (local < charge || local - charge < share + charge)
 		return -EDQUOT;
 
 	if (global &&
@@ -332,16 +335,8 @@ int bus1_user_quota_charge(struct bus1_peer_info *peer_info,
 	BUILD_BUG_ON(BUS1_HANDLES_MAX > U16_MAX);
 	BUILD_BUG_ON(BUS1_FDS_MAX > U16_MAX);
 
-	WARN_ON(peer_info->n_allocated > peer_info->pool.size);
-	WARN_ON(stats->n_allocated > peer_info->n_allocated);
-	WARN_ON(peer_info->n_messages > BUS1_MESSAGES_MAX);
-	WARN_ON(stats->n_messages > peer_info->n_messages);
-	WARN_ON(peer_info->n_handles > BUS1_HANDLES_MAX);
-	WARN_ON(stats->n_handles > peer_info->n_handles);
-
 	r = bus1_user_quota_charge_one(NULL,
 				       peer_info->n_allocated,
-				       peer_info->pool.size,
 				       stats->n_allocated,
 				       size);
 	if (r < 0)
@@ -349,7 +344,6 @@ int bus1_user_quota_charge(struct bus1_peer_info *peer_info,
 
 	r = bus1_user_quota_charge_one(&user->n_messages,
 				       peer_info->n_messages,
-				       peer_info->max_messages,
 				       stats->n_messages,
 				       1);
 	if (r < 0)
@@ -357,7 +351,6 @@ int bus1_user_quota_charge(struct bus1_peer_info *peer_info,
 
 	r = bus1_user_quota_charge_one(&user->n_handles,
 				       peer_info->n_handles,
-				       peer_info->max_handles,
 				       stats->n_handles,
 				       n_handles);
 	if (r < 0)
@@ -365,17 +358,16 @@ int bus1_user_quota_charge(struct bus1_peer_info *peer_info,
 
 	r = bus1_user_quota_charge_one(&user->n_fds,
 				       peer_info->n_fds,
-				       peer_info->max_fds,
 				       stats->n_fds,
 				       n_fds);
 	if (r < 0)
 		goto error_handles;
 
 	/* charge the local quoats */
-	peer_info->n_allocated += size;
-	peer_info->n_messages += 1;
-	peer_info->n_handles += n_handles;
-	peer_info->n_fds += n_fds;
+	peer_info->n_allocated -= size;
+	peer_info->n_messages -= 1;
+	peer_info->n_handles -= n_handles;
+	peer_info->n_fds -= n_fds;
 	stats->n_allocated += size;
 	stats->n_messages += 1;
 	stats->n_handles += n_handles;
@@ -388,6 +380,7 @@ error_handles:
 error_messages:
 	atomic_inc(&user->n_messages);
 error_allocated:
+	/* memory has no per-user global limit; use memcgs */
 	return r;
 }
 
@@ -415,22 +408,14 @@ void bus1_user_quota_discharge(struct bus1_peer_info *peer_info,
 	if (WARN_ON(IS_ERR_OR_NULL(stats)))
 		return;
 
-	WARN_ON(size > peer_info->n_allocated);
-	WARN_ON(size > stats->n_allocated);
-	WARN_ON(peer_info->n_messages < 1);
-	WARN_ON(stats->n_messages < 1);
-	WARN_ON(n_handles > peer_info->n_handles);
-	WARN_ON(n_handles > stats->n_handles);
-	WARN_ON(atomic_read(&user->n_messages) >= BUS1_MESSAGES_MAX);
-	WARN_ON(atomic_read(&user->n_handles) + n_handles > BUS1_HANDLES_MAX);
-	WARN_ON(atomic_read(&user->n_fds) + n_fds > BUS1_FDS_MAX);
-
-	peer_info->n_allocated -= size;
-	peer_info->n_messages -= 1;
-	peer_info->n_handles -= n_handles;
+	peer_info->n_allocated += size;
+	peer_info->n_messages += 1;
+	peer_info->n_handles += n_handles;
+	peer_info->n_fds += n_fds;
 	stats->n_allocated -= size;
 	stats->n_messages -= 1;
 	stats->n_handles -= n_handles;
+	stats->n_fds -= n_fds;
 	atomic_inc(&user->n_messages);
 	atomic_add(n_handles, &user->n_handles);
 	atomic_add(n_fds, &user->n_fds);
@@ -460,15 +445,11 @@ void bus1_user_quota_commit(struct bus1_peer_info *peer_info,
 	if (WARN_ON(IS_ERR_OR_NULL(stats)))
 		return;
 
-	WARN_ON(size > stats->n_allocated);
-	WARN_ON(stats->n_messages < 1);
-	WARN_ON(n_handles > stats->n_handles);
-	WARN_ON(atomic_read(&user->n_messages) < 1);
-	WARN_ON(n_handles > atomic_read(&user->n_handles));
-	WARN_ON(n_fds > atomic_read(&user->n_fds));
-
 	stats->n_allocated -= size;
 	stats->n_messages -= 1;
 	stats->n_handles -= n_handles;
-	atomic_sub(n_fds, &user->n_fds);
+	stats->n_fds -= n_fds;
+
+	/* FDs are externally accounted if non-inflight; we can ignore it */
+	atomic_add(n_fds, &user->n_fds);
 }

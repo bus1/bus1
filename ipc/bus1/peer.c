@@ -126,13 +126,6 @@ static struct bus1_peer_info *bus1_peer_info_new(size_t pool_size)
 	seqcount_init(&peer_info->seqcount);
 	atomic_set(&peer_info->n_dropped, 0);
 	peer_info->handle_ids = 0;
-	peer_info->n_allocated = 0;
-	peer_info->n_messages = 0;
-	peer_info->n_handles = 0;
-	peer_info->n_fds = 0;
-	peer_info->max_messages = -1;
-	peer_info->max_handles = -1;
-	peer_info->max_fds = rlimit(RLIMIT_NOFILE);
 
 	peer_info->user = bus1_user_ref_by_uid(peer_info->cred->uid);
 	if (IS_ERR(peer_info->user)) {
@@ -140,6 +133,11 @@ static struct bus1_peer_info *bus1_peer_info_new(size_t pool_size)
 		peer_info->user = NULL;
 		goto error;
 	}
+
+	peer_info->n_allocated = pool_size;
+	peer_info->n_messages = atomic_read(&peer_info->user->max_messages);
+	peer_info->n_handles = atomic_read(&peer_info->user->max_handles);
+	peer_info->n_fds = rlimit(RLIMIT_NOFILE);
 
 	r = bus1_pool_create_for_peer(peer_info, pool_size);
 	if (r < 0)
