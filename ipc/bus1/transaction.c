@@ -471,7 +471,6 @@ int bus1_transaction_commit(struct bus1_transaction *transaction)
 	struct bus1_message *message, *list;
 	struct bus1_handle_dest dest;
 	u64 timestamp;
-	bool silent;
 	int r, res = 0;
 
 	/* nothing to do for empty destination sets */
@@ -480,7 +479,6 @@ int bus1_transaction_commit(struct bus1_transaction *transaction)
 
 	list = transaction->entries;
 	transaction->entries = NULL;
-	silent = transaction->param->flags & BUS1_SEND_FLAG_SILENT;
 
 	mutex_lock(&transaction->peer_info->lock);
 	timestamp = bus1_queue_tick(&transaction->peer_info->queue);
