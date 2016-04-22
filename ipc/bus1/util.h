@@ -32,32 +32,29 @@ struct file *bus1_import_fd(const u32 __user *user_fd);
 struct file *bus1_clone_file(struct file *file);
 
 /**
- * bus1_atomic_sub_floor() - subtract, if the result is not below a given value
+ * bus1_atomic_sub_if_ge() - subtract, if above threshold
  * @a:		atomic_t to operate on
  * @sub:	value to subtract
+ * @t:		threshold
  *
- * Atomically subtract @sub from @a, if the result is not less than @floor,
- * otherwise do nothing.
+ * Atomically subtract @sub from @a, if @a is greater than, or equal to, @t.
  *
- * The operation will *not* be performed on underflow, but the return value
- * will obviously be undefined. Hence, the caller is expected to guarantee that
- * the operation cannot underflow.
+ * If [t - sub] triggers an underflow, the operation is undefined. The caller
+ * must verify that this cannot happen.
  *
- * Return: Resulting value, regardless whether it was subtracted or not.
+ * Return: 1 if operation was performed, 0 if not.
  */
-static inline int bus1_atomic_sub_unless_underflow(atomic_t *a,
-						   unsigned int sub,
-						   int floor)
+static inline int bus1_atomic_sub_if_ge(atomic_t *a, unsigned int sub, int t)
 {
 	int v, v1;
 
-	for (v = atomic_read(a); v - sub <= v && v - sub >= floor; v = v1) {
+	for (v = atomic_read(a); v >= t; v = v1) {
 		v1 = atomic_cmpxchg(a, v, v - sub);
 		if (likely(v1 == v))
-			break;
+			return 1;
 	}
 
-	return v - sub;
+	return 0;
 }
 
 /**

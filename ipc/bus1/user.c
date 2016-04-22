@@ -241,29 +241,52 @@ bus1_user_quota_query(struct bus1_user_quota *quota,
 	return quota->stats + user->id;
 }
 
-/*
- * True if the charge would leave at least the new share available. Caller must
- * ensure that share + charge does not overflow.
- */
-static bool bus1_user_quota_check_local(size_t available,
-					size_t share,
-					size_t charge)
+static int bus1_user_quota_charge_one(atomic_t *global,
+				      size_t local,
+				      size_t max,
+				      size_t share,
+				      size_t charge)
 {
-	return available >= charge && available - charge >= share + charge;
-}
+	size_t remaining;
 
-/*
- * True if the charge leaves at least the new share available. Caller must
- * ensure that share + charge does not overflow, and that available - charge
- * cannot underflow.
- */
-static bool bus1_user_quota_charge_global(atomic_t *available,
-					  size_t share,
-					  size_t charge)
-{
-	return bus1_atomic_sub_unless_underflow(available, charge,
-						share + charge) >=
-	       share + charge;
+	/*
+	 * Try charging a single resource type. If limits are exceeded, return
+	 * an error-code, otherwise apply charges globally but not locally
+	 * (because global charges are atomic, local charges are locked and
+	 * can be applied by the caller).
+	 *
+	 * @global: per-user atomic that counts all instances of this resource
+	 *          for this single user. It is initially set to the limit for
+	 *          this user. For each accounted resource, we decrement it.
+	 *          Thus, if must not drop below 0, or you exceeded your quota.
+	 * @local: per-peer variable that counts all instances of this resource
+	 *         for this single user.
+	 *         This function does not touch the counter, since the caller
+	 *         can do that itself on success.
+	 * @max: maximum value that @local can grow to
+	 * @share: current amount of resources that the acting task has in
+	 *         @local. That is, this share describes how many of the
+	 *         resources in @local were added there by the current context.
+	 * @charge: number of resources to charge with this operation
+	 *
+	 * We try charging @charge on both @local and @global. The applied
+	 * logic is the same for both: The caller is not allowed to account for
+	 * more than the half of the remaining space (including what its
+	 * current share). That is, if 'n' free resources are remaining, then
+	 * after charging @charge, it must not drop below @share+@charge. That
+	 * is, the remaining resources after the charge are still at least as
+	 * big as what the caller has charged in total.
+	 */
+
+	remaining = max - local;
+	if (remaining < charge || remaining - charge < share + charge)
+		return -EDQUOT;
+
+	if (global &&
+	    !bus1_atomic_sub_if_ge(global, charge, share + charge * 2))
+		return -EDQUOT;
+
+	return 0;
 }
 
 /**
@@ -316,50 +339,37 @@ int bus1_user_quota_charge(struct bus1_peer_info *peer_info,
 	WARN_ON(peer_info->n_handles > BUS1_HANDLES_MAX);
 	WARN_ON(stats->n_handles > peer_info->n_handles);
 
-	/* enforce the per-peer quota, but do not charge anything */
-	if (!bus1_user_quota_check_local(peer_info->pool.size -
-					 peer_info->n_allocated,
-					 stats->n_allocated,
-					 size))
-		return -EDQUOT;
+	r = bus1_user_quota_charge_one(NULL,
+				       peer_info->n_allocated,
+				       peer_info->pool.size,
+				       stats->n_allocated,
+				       size);
+	if (r < 0)
+		return r;
 
-	if (!bus1_user_quota_check_local(peer_info->max_messages -
-					 peer_info->n_messages,
-					 stats->n_messages,
-					 1))
-		return -EDQUOT;
+	r = bus1_user_quota_charge_one(&user->n_messages,
+				       peer_info->n_messages,
+				       peer_info->max_messages,
+				       stats->n_messages,
+				       1);
+	if (r < 0)
+		goto error_allocated;
 
-	if (!bus1_user_quota_check_local(peer_info->max_handles -
-					 peer_info->n_handles,
-					 stats->n_handles,
-					 n_handles))
-		return -EDQUOT;
-
-	if (!bus1_user_quota_check_local(peer_info->max_fds -
-					 peer_info->n_fds,
-					 stats->n_fds,
-					 n_fds))
-		return -ETOOMANYREFS;
-
-	/*
-	 * Enforce and charge the global quotas. There is no global pool-size
-	 * quota as that is handled by shmem.
-	 */
-	if (!bus1_user_quota_charge_global(&user->n_messages,
-					   stats->n_messages, 1))
-		return -EDQUOT;
-
-	if (!bus1_user_quota_charge_global(&user->n_handles,
-					   stats->n_handles, n_handles)) {
-		r = -EDQUOT;
+	r = bus1_user_quota_charge_one(&user->n_handles,
+				       peer_info->n_handles,
+				       peer_info->max_handles,
+				       stats->n_handles,
+				       n_handles);
+	if (r < 0)
 		goto error_messages;
-	}
 
-	if (!bus1_user_quota_charge_global(&user->n_fds,
-					   stats->n_fds, n_fds)) {
-		r = -ETOOMANYREFS;
+	r = bus1_user_quota_charge_one(&user->n_fds,
+				       peer_info->n_fds,
+				       peer_info->max_fds,
+				       stats->n_fds,
+				       n_fds);
+	if (r < 0)
 		goto error_handles;
-	}
 
 	/* charge the local quoats */
 	peer_info->n_allocated += size;
@@ -377,6 +387,7 @@ error_handles:
 	atomic_add(n_handles, &user->n_handles);
 error_messages:
 	atomic_inc(&user->n_messages);
+error_allocated:
 	return r;
 }
 
