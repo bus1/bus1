@@ -398,21 +398,6 @@ bus1_transaction_consume(struct bus1_transaction *transaction,
 	ts = timestamp;
 	id = BUS1_HANDLE_INVALID;
 
-	if (!message->slice) {
-		/*
-		 * If this is an erroneous message, all we have to do is signal
-		 * the destination that it couldn't receive the message. If
-		 * that itself was a newly created node, we rather tell the
-		 * caller about the error than waking itself up.
-		 */
-		if (dest->idp)
-			faulted = !!put_user(-1, dest->idp);
-		else if (atomic_inc_return(&peer_info->n_dropped) == 1)
-			bus1_peer_wake(dest->raw_peer);
-		r = 0;
-		goto exit;
-	}
-
 	if (!timestamp) {
 		mutex_lock(&transaction->peer_info->lock);
 		ts = bus1_queue_tick(&transaction->peer_info->queue);
@@ -428,7 +413,12 @@ bus1_transaction_consume(struct bus1_transaction *transaction,
 		ts = bus1_queue_sync(&peer_info->queue, ts);
 		ts = bus1_queue_tick(&peer_info->queue);
 	}
-	if (bus1_queue_node_is_queued(&message->qnode)) {
+	if (!message->slice) {
+		if (dest->idp && put_user(id, dest->idp))
+			faulted = true;
+		if (atomic_inc_return(&peer_info->n_dropped) == 1)
+			bus1_peer_wake(dest->raw_peer);
+	} else if (bus1_queue_node_is_queued(&message->qnode)) {
 		id = bus1_handle_dest_export(dest, peer_info, ts);
 		if (dest->idp && put_user(id, dest->idp))
 			faulted = true;
@@ -440,13 +430,12 @@ bus1_transaction_consume(struct bus1_transaction *transaction,
 		message = NULL;
 		r = 0;
 	} else {
+		r = message->slice ? -EHOSTUNREACH : 0;
 		bus1_queue_remove(&peer_info->queue, &message->qnode);
 		bus1_message_deallocate(message, peer_info);
-		r = -EHOSTUNREACH;
 	}
 	mutex_unlock(&peer_info->lock);
 
-exit:
 	bus1_message_free(message, peer_info);
 	bus1_active_lockdep_released(&dest->raw_peer->active);
 	bus1_handle_dest_destroy(dest, transaction->peer_info);
