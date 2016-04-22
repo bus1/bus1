@@ -395,6 +395,8 @@ bus1_transaction_consume(struct bus1_transaction *transaction,
 
 	bus1_active_lockdep_acquired(&dest->raw_peer->active);
 	peer_info = bus1_peer_dereference(dest->raw_peer);
+	ts = timestamp;
+	id = BUS1_HANDLE_INVALID;
 
 	if (!message->slice) {
 		/*
@@ -422,21 +424,14 @@ bus1_transaction_consume(struct bus1_transaction *transaction,
 				     transaction->peer);
 
 	mutex_lock(&peer_info->lock);
-	if (timestamp) {
-		ts = timestamp;
-	} else {
+	if (!timestamp) {
 		ts = bus1_queue_sync(&peer_info->queue, ts);
 		ts = bus1_queue_tick(&peer_info->queue);
 	}
-	if (!bus1_queue_node_is_queued(&message->qnode)) {
-		id = BUS1_HANDLE_INVALID;
-	} else if (dest->idp) {
-		/* publishing the handle consumes our inflight reference */
+	if (bus1_queue_node_is_queued(&message->qnode)) {
 		id = bus1_handle_dest_export(dest, peer_info, ts);
-		if (put_user(id, dest->idp))
+		if (dest->idp && put_user(id, dest->idp))
 			faulted = true;
-	} else {
-		id = bus1_handle_dest_order(dest, ts);
 	}
 	if (id != BUS1_HANDLE_INVALID) {
 		message->data.destination = id;

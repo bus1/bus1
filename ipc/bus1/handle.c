@@ -1330,21 +1330,6 @@ int bus1_handle_dest_import(struct bus1_handle_dest *dest,
 }
 
 /**
- * bus1_handle_dest_order() - XXX
- */
-u64 bus1_handle_dest_order(struct bus1_handle_dest *dest, u64 timestamp)
-{
-	if (WARN_ON(!dest->handle || !dest->raw_peer))
-		return BUS1_HANDLE_INVALID;
-
-	if (!bus1_node_order(dest->handle->node, timestamp))
-		return BUS1_HANDLE_INVALID;
-
-	WARN_ON(dest->handle->node->owner.id == BUS1_HANDLE_INVALID);
-	return dest->handle->node->owner.id;
-}
-
-/**
  * bus1_handle_dest_export() - XXX
  */
 u64 bus1_handle_dest_export(struct bus1_handle_dest *dest,
@@ -1356,10 +1341,19 @@ u64 bus1_handle_dest_export(struct bus1_handle_dest *dest,
 	if (WARN_ON(!dest->handle || !dest->raw_peer))
 		return BUS1_HANDLE_INVALID;
 
-	WARN_ON(!bus1_handle_is_owner(dest->handle));
-	id = bus1_handle_userref_publish(dest->handle, peer_info, timestamp,
-					 true);
-	dest->handle = bus1_handle_unref(dest->handle);
+	if (dest->idp) {
+		WARN_ON(!bus1_handle_is_owner(dest->handle));
+		/* consumes the inflight ref */
+		id = bus1_handle_userref_publish(dest->handle, peer_info,
+						 timestamp, true);
+		dest->handle = bus1_handle_unref(dest->handle);
+	} else if (!bus1_node_order(dest->handle->node, timestamp)) {
+		id = BUS1_HANDLE_INVALID;
+	} else {
+		WARN_ON(dest->handle->node->owner.id == BUS1_HANDLE_INVALID);
+		id = dest->handle->node->owner.id;
+	}
+
 	return id;
 }
 
