@@ -94,7 +94,6 @@ struct bus1_user {
  * @n_handles:		number of queued handles
  * @n_fds:		number of queued fds
  */
-/* XXX: make this fit in 64 bits */
 struct bus1_user_stats {
 	u32 n_allocated;
 	u16 n_messages;
