@@ -239,7 +239,6 @@ int bus1_handle_inflight_instantiate(struct bus1_handle_inflight *inflight,
 				     struct bus1_handle_transfer *transfer);
 void bus1_handle_inflight_install(struct bus1_handle_inflight *inflight,
 				  struct bus1_peer *dst,
-				  struct bus1_handle_transfer *transfer,
 				  struct bus1_peer *src);
 size_t bus1_handle_inflight_walk(struct bus1_handle_inflight *inflight,
 				 struct bus1_peer_info *peer_info,

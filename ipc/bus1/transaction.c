@@ -401,11 +401,12 @@ bus1_transaction_consume(struct bus1_transaction *transaction,
 	if (!timestamp) {
 		mutex_lock(&transaction->peer_info->lock);
 		ts = bus1_queue_tick(&transaction->peer_info->queue);
+		bus1_handle_transfer_install(&transaction->handles,
+					     transaction->peer);
 		mutex_unlock(&transaction->peer_info->lock);
 	}
 
 	bus1_handle_inflight_install(&message->handles, dest->raw_peer,
-				     &transaction->handles,
 				     transaction->peer);
 
 	mutex_lock(&peer_info->lock);
@@ -482,6 +483,7 @@ int bus1_transaction_commit(struct bus1_transaction *transaction)
 
 	mutex_lock(&transaction->peer_info->lock);
 	timestamp = bus1_queue_tick(&transaction->peer_info->queue);
+	bus1_handle_transfer_install(&transaction->handles, transaction->peer);
 	mutex_unlock(&transaction->peer_info->lock);
 
 	/*

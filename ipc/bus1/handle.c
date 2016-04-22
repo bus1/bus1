@@ -1899,7 +1899,6 @@ int bus1_handle_inflight_instantiate(struct bus1_handle_inflight *inflight,
  * bus1_handle_inflight_install() - install inflight handles
  * @inflight:		instantiated inflight context
  * @dst:		peer @inflight is for
- * @transfer:		transfer context
  * @src:		peer @transfer is from
  *
  * After an inflight context was successfully instantiated, this will install
@@ -1908,12 +1907,11 @@ int bus1_handle_inflight_instantiate(struct bus1_handle_inflight *inflight,
  */
 void bus1_handle_inflight_install(struct bus1_handle_inflight *inflight,
 				  struct bus1_peer *dst,
-				  struct bus1_handle_transfer *transfer,
 				  struct bus1_peer *src)
 {
 	struct bus1_peer_info *src_info, *dst_info, *owner_info;
-	struct bus1_handle *h, *t;
 	union bus1_handle_entry *e;
+	struct bus1_handle *h, *t;
 	struct bus1_peer *owner;
 	size_t pos, n_installs;
 	LIST_HEAD(list_notify);
@@ -1925,22 +1923,8 @@ void bus1_handle_inflight_install(struct bus1_handle_inflight *inflight,
 	dst_info = bus1_peer_dereference(dst);
 	n_installs = inflight->n_new;
 
-	if (transfer->n_new > 0 || inflight->n_new_local > 0) {
+	if (inflight->n_new_local > 0) {
 		mutex_lock(&src_info->lock);
-
-		BUS1_HANDLE_BATCH_FOREACH_HANDLE(e, pos, &transfer->batch) {
-			if (transfer->n_new < 1)
-				break;
-
-			h = e->handle;
-			if (!h || bus1_handle_was_attached(h))
-				continue;
-
-			--transfer->n_new;
-			bus1_handle_attach_owner(h, src);
-			bus1_handle_install_owner(h);
-		}
-		WARN_ON(transfer->n_new > 0);
 
 		BUS1_HANDLE_BATCH_FOREACH_HANDLE(e, pos, &inflight->batch) {
 			if (inflight->n_new_local < 1)
