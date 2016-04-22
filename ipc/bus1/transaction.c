@@ -311,8 +311,8 @@ bus1_transaction_instantiate(struct bus1_transaction *transaction,
 	if (r < 0)
 		goto error;
 
-	r = bus1_handle_inflight_instantiate(&message->handles, peer_info,
-					     &transaction->handles);
+	r = bus1_handle_inflight_import(&message->handles, peer_info,
+					&transaction->handles);
 	if (r < 0)
 		goto error;
 

@@ -234,9 +234,9 @@ void bus1_handle_inflight_init(struct bus1_handle_inflight *inflight,
 			       size_t n_entries);
 void bus1_handle_inflight_destroy(struct bus1_handle_inflight *inflight,
 				  struct bus1_peer_info *peer_info);
-int bus1_handle_inflight_instantiate(struct bus1_handle_inflight *inflight,
-				     struct bus1_peer_info *peer_info,
-				     struct bus1_handle_transfer *transfer);
+int bus1_handle_inflight_import(struct bus1_handle_inflight *inflight,
+				struct bus1_peer_info *peer_info,
+				struct bus1_handle_transfer *transfer);
 void bus1_handle_inflight_install(struct bus1_handle_inflight *inflight,
 				  struct bus1_peer *dst,
 				  struct bus1_peer *src);

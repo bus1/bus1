@@ -1587,7 +1587,7 @@ static size_t bus1_handle_batch_walk(struct bus1_handle_batch *batch,
  * That is, for each transaction, you need one handle-transfer object,
  * initialized with the number of handles to transfer.
  *
- * Handles can be imported via bus1_handle_transfer_instantiate(). Once done,
+ * Handles can be imported via bus1_handle_transfer_import(). Once done,
  * the handle-inflight objects can be instantiated from it for each destination
  * of the transaction.
  *
@@ -1833,7 +1833,7 @@ void bus1_handle_inflight_destroy(struct bus1_handle_inflight *inflight,
 }
 
 /**
- * bus1_handle_inflight_instantiate() - instantiate inflight context
+ * bus1_handle_inflight_import() - import inflight context
  * @inflight:		inflight context to instantiate
  * @peer_info:		peer info to instantiate for
  * @transfer:		transfer object to instantiate from
@@ -1848,9 +1848,9 @@ void bus1_handle_inflight_destroy(struct bus1_handle_inflight *inflight,
  *
  * Return: 0 on success, negative error code on failure.
  */
-int bus1_handle_inflight_instantiate(struct bus1_handle_inflight *inflight,
-				     struct bus1_peer_info *peer_info,
-				     struct bus1_handle_transfer *transfer)
+int bus1_handle_inflight_import(struct bus1_handle_inflight *inflight,
+				struct bus1_peer_info *peer_info,
+				struct bus1_handle_transfer *transfer)
 {
 	union bus1_handle_entry *from, *to;
 	struct bus1_handle *handle;
