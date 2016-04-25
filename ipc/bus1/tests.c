@@ -12,6 +12,7 @@
 #include <linux/kernel.h>
 #include <linux/slab.h>
 #include <uapi/linux/bus1.h>
+#include "main.h"
 #include "peer.h"
 #include "tests.h"
 
@@ -20,14 +21,33 @@ static void bus1_test_user(void)
 	struct bus1_user *user1, *user2;
 	kuid_t uid1 = KUIDT_INIT(1), uid2 = KUIDT_INIT(2);
 
+	/* drop the NULL user */
+	bus1_user_unref(NULL);
+
 	/* create a user */
 	user1 = bus1_user_ref_by_uid(uid1);
 	WARN_ON(!user1);
+	WARN_ON(__kuid_val(user1->uid) != 1);
+	WARN_ON(user1->id != 0);
+	WARN_ON(atomic_read(&user1->n_messages) != BUS1_MESSAGES_MAX);
+	WARN_ON(atomic_read(&user1->n_handles) != BUS1_HANDLES_MAX);
+	WARN_ON(atomic_read(&user1->n_fds) != BUS1_FDS_MAX);
+	WARN_ON(atomic_read(&user1->max_messages) != BUS1_MESSAGES_MAX);
+	WARN_ON(atomic_read(&user1->max_handles) != BUS1_HANDLES_MAX);
+	WARN_ON(atomic_read(&user1->max_fds) != BUS1_FDS_MAX);
 
 	/* create a different user */
 	user2 = bus1_user_ref_by_uid(uid2);
 	WARN_ON(!user2);
 	WARN_ON(user1 == user2);
+	WARN_ON(__kuid_val(user2->uid) != 2);
+	WARN_ON(user2->id != 1);
+	WARN_ON(atomic_read(&user2->n_messages) != BUS1_MESSAGES_MAX);
+	WARN_ON(atomic_read(&user2->n_handles) != BUS1_HANDLES_MAX);
+	WARN_ON(atomic_read(&user2->n_fds) != BUS1_FDS_MAX);
+	WARN_ON(atomic_read(&user2->max_messages) != BUS1_MESSAGES_MAX);
+	WARN_ON(atomic_read(&user2->max_handles) != BUS1_HANDLES_MAX);
+	WARN_ON(atomic_read(&user2->max_fds) != BUS1_FDS_MAX);
 
 	/* drop the second user */
 	user2 = bus1_user_unref(user2);
