@@ -171,7 +171,6 @@ struct bus1_handle_transfer {
 /**
  * struct bus1_handle_inflight - set of inflight handles
  * @n_new:		number of newly allocated nodes
- * @n_new_local:	number of newly allocated local nodes
  * @batch:		associated handles
  *
  * The bus1_handle_inflight object carries state for each message instance
@@ -185,7 +184,6 @@ struct bus1_handle_transfer {
  */
 struct bus1_handle_inflight {
 	size_t n_new;
-	size_t n_new_local;
 	struct bus1_handle_batch batch;
 	/* @batch must be last */
 };
@@ -238,8 +236,7 @@ int bus1_handle_inflight_import(struct bus1_handle_inflight *inflight,
 				struct bus1_peer_info *peer_info,
 				struct bus1_handle_transfer *transfer);
 void bus1_handle_inflight_install(struct bus1_handle_inflight *inflight,
-				  struct bus1_peer *dst,
-				  struct bus1_peer *src);
+				  struct bus1_peer *dst);
 size_t bus1_handle_inflight_walk(struct bus1_handle_inflight *inflight,
 				 struct bus1_peer_info *peer_info,
 				 size_t *pos,

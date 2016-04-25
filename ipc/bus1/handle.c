@@ -1809,7 +1809,6 @@ void bus1_handle_inflight_init(struct bus1_handle_inflight *inflight,
 			       size_t n_entries)
 {
 	inflight->n_new = 0;
-	inflight->n_new_local = 0;
 	bus1_handle_batch_init(&inflight->batch, n_entries);
 }
 
@@ -1883,7 +1882,7 @@ int bus1_handle_inflight_import(struct bus1_handle_inflight *inflight,
 				if (IS_ERR(handle))
 					return PTR_ERR(handle);
 
-				/* XXX: inc n_new and n_new_local */
+				++inflight->n_new;
 			}
 		}
 
@@ -1899,17 +1898,15 @@ int bus1_handle_inflight_import(struct bus1_handle_inflight *inflight,
  * bus1_handle_inflight_install() - install inflight handles
  * @inflight:		instantiated inflight context
  * @dst:		peer @inflight is for
- * @src:		peer @transfer is from
  *
  * After an inflight context was successfully instantiated, this will install
  * the handles into the peer @dst. The caller must provide the used transfer
  * context and the origin peer as @transfer and @src.
  */
 void bus1_handle_inflight_install(struct bus1_handle_inflight *inflight,
-				  struct bus1_peer *dst,
-				  struct bus1_peer *src)
+				  struct bus1_peer *dst)
 {
-	struct bus1_peer_info *src_info, *dst_info, *owner_info;
+	struct bus1_peer_info *dst_info, *owner_info;
 	union bus1_handle_entry *e;
 	struct bus1_handle *h, *t;
 	struct bus1_peer *owner;
@@ -1919,47 +1916,22 @@ void bus1_handle_inflight_install(struct bus1_handle_inflight *inflight,
 	if (inflight->batch.n_handles < 1)
 		return;
 
-	src_info = bus1_peer_dereference(src);
 	dst_info = bus1_peer_dereference(dst);
 	n_installs = inflight->n_new;
 
-	if (inflight->n_new_local > 0) {
-		mutex_lock(&src_info->lock);
-
-		BUS1_HANDLE_BATCH_FOREACH_HANDLE(e, pos, &inflight->batch) {
-			if (inflight->n_new_local < 1)
-				break;
-
-			h = e->handle;
-			if (!h || bus1_handle_was_attached(h))
-				continue;
-
-			--inflight->n_new;
-			--inflight->n_new_local;
-
-			if (!bus1_handle_attach_holder(h, dst))
-				e->handle = bus1_handle_unref(h);
-		}
-		WARN_ON(inflight->n_new_local > 0);
-
-		mutex_unlock(&src_info->lock);
-	}
-
 	if (inflight->n_new > 0) {
 		BUS1_HANDLE_BATCH_FOREACH_HANDLE(e, pos, &inflight->batch) {
-			if (inflight->n_new < 1)
-				break;
-
 			h = e->handle;
 			if (!h || bus1_handle_was_attached(h))
 				continue;
-
-			--inflight->n_new;
 
 			owner = bus1_handle_lock_owner(h, &owner_info);
 			if (!owner || !bus1_handle_attach_holder(h, dst))
 				e->handle = bus1_handle_unref(h);
 			bus1_handle_unlock_peer(owner, owner_info);
+
+			if (--inflight->n_new < 1)
+				break;
 		}
 		WARN_ON(inflight->n_new > 0);
 	}
@@ -1967,16 +1939,11 @@ void bus1_handle_inflight_install(struct bus1_handle_inflight *inflight,
 	if (n_installs > 0) {
 		mutex_lock(&dst_info->lock);
 		BUS1_HANDLE_BATCH_FOREACH_HANDLE(e, pos, &inflight->batch) {
-			if (n_installs < 1)
-				break;
-
 			h = e->handle;
 			if (!h || !RB_EMPTY_NODE(&h->rb_node))
 				continue;
 			if (WARN_ON(!bus1_handle_was_attached(h)))
 				continue;
-
-			--n_installs;
 
 			t = bus1_handle_install_holder(h);
 			if (t != h) {
@@ -1986,6 +1953,9 @@ void bus1_handle_inflight_install(struct bus1_handle_inflight *inflight,
 				e->handle = t;
 				mutex_lock(&dst_info->lock);
 			}
+
+			if (--n_installs < 1)
+				break;
 		}
 		mutex_unlock(&dst_info->lock);
 		WARN_ON(n_installs > 0);

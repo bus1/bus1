@@ -406,8 +406,7 @@ bus1_transaction_consume(struct bus1_transaction *transaction,
 		mutex_unlock(&transaction->peer_info->lock);
 	}
 
-	bus1_handle_inflight_install(&message->handles, dest->raw_peer,
-				     transaction->peer);
+	bus1_handle_inflight_install(&message->handles, dest->raw_peer);
 
 	mutex_lock(&peer_info->lock);
 	if (!timestamp) {
