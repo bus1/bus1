@@ -209,7 +209,8 @@ int bus1_handle_dest_import(struct bus1_handle_dest *dest,
 			    u64 __user *idp);
 u64 bus1_handle_dest_export(struct bus1_handle_dest *dest,
 			    struct bus1_peer_info *peer_info,
-			    u64 timestamp);
+			    u64 timestamp,
+			    bool commit);
 
 /* transfer contexts */
 void bus1_handle_transfer_init(struct bus1_handle_transfer *transfer,

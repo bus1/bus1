@@ -1334,7 +1334,8 @@ int bus1_handle_dest_import(struct bus1_handle_dest *dest,
  */
 u64 bus1_handle_dest_export(struct bus1_handle_dest *dest,
 			    struct bus1_peer_info *peer_info,
-			    u64 timestamp)
+			    u64 timestamp,
+			    bool commit)
 {
 	u64 id;
 
@@ -1345,8 +1346,9 @@ u64 bus1_handle_dest_export(struct bus1_handle_dest *dest,
 		WARN_ON(!bus1_handle_is_owner(dest->handle));
 		/* consumes the inflight ref */
 		id = bus1_handle_userref_publish(dest->handle, peer_info,
-						 timestamp, true);
-		dest->handle = bus1_handle_unref(dest->handle);
+						 timestamp, commit);
+		if (commit)
+			dest->handle = bus1_handle_unref(dest->handle);
 	} else if (!bus1_node_order(dest->handle->node, timestamp)) {
 		id = BUS1_HANDLE_INVALID;
 	} else {

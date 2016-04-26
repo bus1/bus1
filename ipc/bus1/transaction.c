@@ -382,64 +382,38 @@ error:
 	return r;
 }
 
-static int
-bus1_transaction_consume(struct bus1_transaction *transaction,
-			 struct bus1_message *message,
-			 struct bus1_handle_dest *dest,
-			 u64 timestamp)
+static bool
+bus1_transaction_commit_one(struct bus1_transaction *transaction,
+			    struct bus1_message *message,
+			    struct bus1_handle_dest *dest,
+			    u64 timestamp)
 {
 	struct bus1_peer_info *peer_info;
-	bool faulted = false;
-	u64 id, ts;
-	int r;
+	u64 id;
 
-	bus1_active_lockdep_acquired(&dest->raw_peer->active);
 	peer_info = bus1_peer_dereference(dest->raw_peer);
-	ts = timestamp;
+	lockdep_assert_held(&peer_info->lock);
+
 	id = BUS1_HANDLE_INVALID;
 
-	if (!timestamp) {
-		mutex_lock(&transaction->peer_info->lock);
-		ts = bus1_queue_tick(&transaction->peer_info->queue);
-		bus1_handle_transfer_install(&transaction->handles,
-					     transaction->peer);
-		mutex_unlock(&transaction->peer_info->lock);
-	}
-
-	bus1_handle_inflight_install(&message->handles, dest->raw_peer);
-
-	mutex_lock(&peer_info->lock);
-	if (!timestamp) {
-		ts = bus1_queue_sync(&peer_info->queue, ts);
-		ts = bus1_queue_tick(&peer_info->queue);
-	}
 	if (!message->slice) {
-		if (dest->idp && put_user(id, dest->idp))
-			faulted = true;
 		if (atomic_inc_return(&peer_info->n_dropped) == 1)
 			bus1_peer_wake(dest->raw_peer);
 	} else if (bus1_queue_node_is_queued(&message->qnode)) {
-		id = bus1_handle_dest_export(dest, peer_info, ts);
-		if (dest->idp && put_user(id, dest->idp))
-			faulted = true;
+		id = bus1_handle_dest_export(dest, peer_info, timestamp, true);
 	}
-	if (id != BUS1_HANDLE_INVALID) {
-		message->data.destination = id;
-		if (bus1_queue_stage(&peer_info->queue, &message->qnode, ts))
-			bus1_peer_wake(dest->raw_peer);
-		message = NULL;
-		r = 0;
-	} else {
-		r = message->slice ? -EHOSTUNREACH : 0;
+
+	if (id == BUS1_HANDLE_INVALID) {
 		bus1_queue_remove(&peer_info->queue, &message->qnode);
 		bus1_message_deallocate(message, peer_info);
+		return false;
 	}
-	mutex_unlock(&peer_info->lock);
 
-	bus1_message_free(message, peer_info);
-	bus1_active_lockdep_released(&dest->raw_peer->active);
-	bus1_handle_dest_destroy(dest, transaction->peer_info);
-	return faulted ? -EFAULT : r;
+	message->data.destination = id;
+	if (bus1_queue_stage(&peer_info->queue, &message->qnode, timestamp))
+		bus1_peer_wake(dest->raw_peer);
+
+	return true;
 }
 
 /**
@@ -467,115 +441,101 @@ bus1_transaction_consume(struct bus1_transaction *transaction,
  */
 int bus1_transaction_commit(struct bus1_transaction *transaction)
 {
+	struct bus1_cmd_send *param = transaction->param;
 	struct bus1_peer_info *peer_info;
 	struct bus1_message *message, *list;
 	struct bus1_handle_dest dest;
-	u64 timestamp;
-	int r, res = 0;
+	struct bus1_peer *peer;
+	u64 id, timestamp;
+	u64 __user *idp;
+	bool res;
+	int r;
 
-	/* nothing to do for empty destination sets */
 	if (!transaction->entries)
 		return 0;
 
 	list = transaction->entries;
-	transaction->entries = NULL;
+	timestamp = 0;
 
-	mutex_lock(&transaction->peer_info->lock);
-	timestamp = bus1_queue_tick(&transaction->peer_info->queue);
-	bus1_handle_transfer_install(&transaction->handles, transaction->peer);
-	mutex_unlock(&transaction->peer_info->lock);
-
-	/*
-	 * Before queueing a message as staging entry in the destination queue,
-	 * we sync the remote clock with our timestamp, and possible update our
-	 * own timestamp in case we're behind. This guarantees that no peer
-	 * will see events "from the future", and also that we keep the range
-	 * we block as small as possible.
-	 *
-	 * As last step, we perform a clock tick on the remote clock, to make
-	 * sure it actually treated the message as a real unique event. And
-	 * eventually queue the message as staging entry.
-	 */
 	for (message = list; message; message = message->transaction.next) {
-		dest = message->transaction.dest;
-		bus1_active_lockdep_acquired(&dest.raw_peer->active);
-		peer_info = bus1_peer_dereference(dest.raw_peer);
+		peer = message->transaction.dest.raw_peer;
+		bus1_active_lockdep_acquired(&peer->active);
+		peer_info = bus1_peer_dereference(peer);
 
-		/* sync clocks and queue message as staging entry */
 		mutex_lock(&peer_info->lock);
 		timestamp = bus1_queue_sync(&peer_info->queue, timestamp);
 		timestamp = bus1_queue_tick(&peer_info->queue);
 		if (bus1_queue_stage(&peer_info->queue, &message->qnode,
 				     timestamp - 1))
-			bus1_peer_wake(dest.raw_peer);
+			bus1_peer_wake(peer);
 		mutex_unlock(&peer_info->lock);
 
-		bus1_active_lockdep_released(&dest.raw_peer->active);
+		bus1_active_lockdep_released(&peer->active);
 	}
 
-	/*
-	 * We now queued our message on all destinations, and we're guaranteed
-	 * that any racing message is now blocked by our staging entries.
-	 * However, to support side-channel synchronization, we must first sync
-	 * all clocks to the final commit-timestamp, before actually performing
-	 * the final commit. If we didn't do that, then between the first
-	 * commit and the last commit, we're have a short timespan that might
-	 * cause side-channel messages with lower timestamps than our own
-	 * commit. Hence, sync the clocks to at least the commit-timestamp,
-	 * *before* doing the first commit. Any side-channel message generated,
-	 * can only cause messages with a higher commit afterwards.
-	 *
-	 * This step can be skipped if side-channels should not be synced. But
-	 * we actually want to give that guarantee, so here we go..
-	 */
+	mutex_lock(&transaction->peer_info->lock);
+	timestamp = bus1_queue_sync(&transaction->peer_info->queue, timestamp);
+	timestamp = bus1_queue_tick(&transaction->peer_info->queue);
+	bus1_handle_transfer_install(&transaction->handles, transaction->peer);
+	mutex_unlock(&transaction->peer_info->lock);
+
 	for (message = list; message; message = message->transaction.next) {
-		dest = message->transaction.dest;
-		bus1_active_lockdep_acquired(&dest.raw_peer->active);
-		peer_info = bus1_peer_dereference(dest.raw_peer);
+		peer = message->transaction.dest.raw_peer;
+		idp = message->transaction.dest.idp;
+		bus1_active_lockdep_acquired(&peer->active);
+		peer_info = bus1_peer_dereference(peer);
 
 		mutex_lock(&peer_info->lock);
+
 		bus1_queue_sync(&peer_info->queue, timestamp);
+
+		id = bus1_handle_dest_export(&message->transaction.dest,
+					     peer_info, timestamp,
+					     false);
+		if (idp && put_user(id, idp))
+			r = -EFAULT;
+
 		mutex_unlock(&peer_info->lock);
 
-		bus1_active_lockdep_released(&dest.raw_peer->active);
+		bus1_active_lockdep_released(&peer->active);
+
+		if (r < 0)
+			return r;
 	}
 
-	/*
-	 * Our message is queued with the *same* timestamp on all destinations.
-	 * Now do the final commit and release each message.
-	 *
-	 * _Iff_ the target queue was reset in between, then our message might
-	 * have been unlinked. In that case, we still own the message, but
-	 * should silently drop the instance. We must not treat it as failure,
-	 * but rather as an explicit drop of the receiver.
-	 */
-	while ((message = list)) {
-		list = message->transaction.next;
+	idp = (u64 __user *)(unsigned long)param->ptr_handles;
+	mutex_lock(&transaction->peer_info->lock);
+	r = bus1_handle_transfer_export(&transaction->handles,
+					transaction->peer_info,
+					idp, param->n_handles);
+	mutex_unlock(&transaction->peer_info->lock);
+	if (r < 0)
+		return r;
+
+	while ((message = transaction->entries)) {
+		transaction->entries = message->transaction.next;
 		dest = message->transaction.dest;
 
 		message->transaction.next = NULL;
 		message->transaction.dest = (struct bus1_handle_dest){};
 
-		r = bus1_transaction_consume(transaction, message, &dest,
-					     timestamp);
+		bus1_active_lockdep_acquired(&dest.raw_peer->active);
+		peer_info = bus1_peer_dereference(dest.raw_peer);
 
-		/*
-		 * A final commit can fail for two reasons: We either couldn't
-		 * copy the ID back to user-space, or we raced a node
-		 * destruction and couldn't send the message. The former is an
-		 * async error which we simply carry on and return late, as
-		 * there is nothing we can (or should) do about it. The latter,
-		 * though, would preferably be caught early before committing
-		 * anything. That is not possible right now, so we simply
-		 * ignore it. Should be properly fixed some day, though.
-		 */
-		if (r == -EFAULT)
-			res = r;
-		else
-			WARN_ON(r < 0 && r != -EHOSTUNREACH);
+		bus1_handle_inflight_install(&message->handles, dest.raw_peer);
+
+		mutex_lock(&peer_info->lock);
+		res = bus1_transaction_commit_one(transaction, message, &dest,
+						  timestamp);
+		mutex_unlock(&peer_info->lock);
+
+		if (!res)
+			bus1_message_free(message, peer_info);
+		bus1_active_lockdep_released(&dest.raw_peer->active);
+		bus1_handle_dest_destroy(&dest, transaction->peer_info);
 	}
 
-	return res;
+	return 0;
 }
 
 /**
@@ -591,21 +551,11 @@ int bus1_transaction_commit(struct bus1_transaction *transaction)
 int bus1_transaction_commit_for_id(struct bus1_transaction *transaction,
 				   u64 __user *idp)
 {
-	struct bus1_handle_dest dest;
-	struct bus1_message *message;
 	int r;
 
-	bus1_handle_dest_init(&dest);
+	r = bus1_transaction_instantiate_for_id(transaction, idp);
+	if (r < 0)
+		return r;
 
-	message = bus1_transaction_instantiate(transaction, &dest, idp);
-	if (IS_ERR(message)) {
-		r = PTR_ERR(message);
-		goto exit;
-	}
-
-	r = bus1_transaction_consume(transaction, message, &dest, 0);
-
-exit:
-	bus1_handle_dest_destroy(&dest, transaction->peer_info);
-	return r;
+	return bus1_transaction_commit(transaction);
 }
