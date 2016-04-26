@@ -476,7 +476,7 @@ static void bus1_handle_uninstall_owner(struct bus1_handle *handle,
 {
 	WARN_ON(!bus1_handle_is_owner(handle));
 	WARN_ON(handle->node->timestamp & 1);
-	WARN_ON(!list_empty(&handle->link_node));
+	WARN_ON(!list_empty(&handle->node->list_handles));
 
 	/*
 	 * In case of owners, we always leave notifications queued. This
