@@ -1778,7 +1778,6 @@ int bus1_handle_transfer_export(struct bus1_handle_transfer *transfer,
 		if (entry->handle) {
 			bus1_handle_userref_publish(entry->handle, peer_info,
 						    0, true);
-			/* XXX: UNLOCKED! */
 			bus1_handle_release_relock(entry->handle, peer_info,
 						   &list_notify);
 			entry->handle = bus1_handle_unref(entry->handle);
