@@ -38,6 +38,8 @@ static void bus1_peer_info_reset(struct bus1_peer_info *peer_info, bool final)
 {
 	struct bus1_queue_node *node, *t;
 
+	bus1_handle_flush_all(peer_info);
+
 	mutex_lock(&peer_info->lock);
 
 	rbtree_postorder_for_each_entry_safe(node, t,
@@ -69,8 +71,6 @@ static void bus1_peer_info_reset(struct bus1_peer_info *peer_info, bool final)
 	bus1_pool_flush(&peer_info->pool);
 
 	mutex_unlock(&peer_info->lock);
-
-	bus1_handle_flush_all(peer_info);
 }
 
 static struct bus1_peer_info *
