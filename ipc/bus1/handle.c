@@ -228,17 +228,6 @@ static struct bus1_handle *bus1_handle_unref(struct bus1_handle *handle)
 	return NULL;
 }
 
-static void bus1_handle_assert_holder(struct bus1_handle *handle,
-				      struct bus1_peer_info *peer_info)
-{
-	struct bus1_peer *holder;
-
-	/* verify @peer_info is the holder of @handle */
-
-	holder = rcu_access_pointer(handle->holder);
-	WARN_ON(!holder || peer_info != bus1_peer_dereference(holder));
-}
-
 /**
  * bus1_handle_from_queue() - peek or dequeue at queued handle
  * @node:		node to operate on
@@ -379,7 +368,6 @@ bus1_handle_install_internal(struct bus1_handle *handle,
 	struct bus1_handle *iter, *old = NULL;
 	struct rb_node *n, **slot;
 
-	bus1_handle_assert_holder(handle, peer_info);
 	lockdep_assert_held(&peer_info->lock);
 	WARN_ON(!bus1_handle_was_attached(handle));
 	WARN_ON(!RB_EMPTY_NODE(&handle->rb_node));
@@ -452,7 +440,6 @@ bus1_handle_install_holder(struct bus1_handle *handle)
 static void bus1_handle_uninstall_internal(struct bus1_handle *handle,
 					   struct bus1_peer_info *peer_info)
 {
-	bus1_handle_assert_holder(handle, peer_info);
 	lockdep_assert_held(&peer_info->lock);
 	WARN_ON(atomic_read(&handle->n_inflight) > 0);
 
