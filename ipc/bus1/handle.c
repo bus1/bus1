@@ -574,7 +574,8 @@ static void bus1_node_stage_relock(struct bus1_node *node,
 	node->timestamp = timestamp;
 	write_seqcount_end(&peer_info->seqcount);
 
-	if (atomic_read(&node->owner.n_inflight) == 0)
+	if (atomic_read(&node->owner.n_inflight) == 0 &&
+	    rcu_access_pointer(node->owner.holder))
 		bus1_handle_uninstall_owner(&node->owner, peer_info);
 }
 
