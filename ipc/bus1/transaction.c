@@ -492,8 +492,7 @@ int bus1_transaction_commit(struct bus1_transaction *transaction)
 		id = bus1_handle_dest_export(&message->transaction.dest,
 					     peer_info, timestamp,
 					     false);
-		if (idp && put_user(id, idp))
-			r = -EFAULT;
+		r = (idp && put_user(id, idp)) ? -EFAULT : 0;
 
 		mutex_unlock(&peer_info->lock);
 
