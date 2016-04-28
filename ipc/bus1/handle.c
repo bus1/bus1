@@ -1550,12 +1550,10 @@ static size_t bus1_handle_batch_walk(struct bus1_handle_batch *batch,
 {
 	size_t n;
 
-	if (WARN_ON(batch->n_handles > 0))
-		return 0;
-	if (*pos >= batch->n_entries)
+	if (*pos >= batch->n_handles)
 		return 0;
 
-	n = batch->n_entries - *pos;
+	n = batch->n_handles - *pos;
 	if (n > BUS1_HANDLE_BATCH_SIZE)
 		n = BUS1_HANDLE_BATCH_SIZE;
 
