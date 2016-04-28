@@ -258,7 +258,7 @@ u64 bus1_handle_from_queue(struct bus1_queue_node *node,
 	handle = container_of(node, struct bus1_handle, qnode);
 	id = handle->id;
 
-	if (drop && bus1_queue_node_is_committed(node))
+	if (drop)
 		bus1_handle_unref(handle);
 
 	return id;
@@ -494,8 +494,7 @@ static void bus1_handle_uninstall_holder(struct bus1_handle *handle,
 
 	if (bus1_queue_node_is_queued(&handle->qnode)) {
 		bus1_queue_remove(&peer_info->queue, &handle->qnode);
-		if (bus1_queue_node_is_committed(&handle->qnode))
-			bus1_handle_unref(handle);
+		bus1_handle_unref(handle);
 	}
 	bus1_queue_node_destroy(&handle->qnode);
 	INIT_LIST_HEAD(&handle->link_flush);
@@ -536,6 +535,7 @@ static void bus1_node_stage_relock(struct bus1_node *node,
 		if (holder && rcu_access_pointer(h->holder)) {
 			bus1_queue_sync(&holder_info->queue, timestamp);
 			timestamp = bus1_queue_tick(&holder_info->queue);
+			bus1_handle_ref(h);
 			if (bus1_queue_stage(&holder_info->queue, &h->qnode,
 					     timestamp - 1))
 				bus1_peer_wake(holder);
@@ -552,6 +552,7 @@ static void bus1_node_stage_relock(struct bus1_node *node,
 
 	holder = rcu_access_pointer(node->owner.holder);
 	if (holder && rcu_access_pointer(holder->info)) {
+		bus1_handle_ref(&node->owner);
 		if (bus1_queue_stage(&peer_info->queue, &node->owner.qnode,
 				     timestamp - 1))
 			bus1_peer_wake(holder);
@@ -573,7 +574,6 @@ static void bus1_handle_notify(struct list_head *list_notify)
 	struct bus1_peer_info *peer_info;
 	struct bus1_handle *h;
 	struct bus1_peer *peer;
-	bool is_owner;
 
 	/* sync all clocks so side-channels are ordered */
 	list_for_each_entry(h, list_notify, link_node) {
@@ -588,27 +588,26 @@ static void bus1_handle_notify(struct list_head *list_notify)
 	while ((h = list_first_entry_or_null(list_notify, struct bus1_handle,
 					     link_node))) {
 		list_del_init(&h->link_node);
-		is_owner = bus1_handle_is_owner(h);
 
 		peer = bus1_handle_lock_holder(h, &peer_info);
 		if (peer &&
 		    rcu_access_pointer(h->holder) &&
 		    bus1_queue_node_is_queued(&h->qnode)) {
-			/* steal the link-ref; now owned by the queue */
 			if (bus1_queue_stage(&peer_info->queue,
 					     &h->qnode,
 					     h->node->timestamp))
 				bus1_peer_wake(peer);
-		} else {
-			bus1_handle_unref(h);
 		}
 		bus1_handle_unlock_peer(peer, peer_info);
 
-		if (is_owner) {
+		if (bus1_handle_is_owner(h)) {
 			/* nodes pin their owners until destroyed */
 			complete_all(&h->node->completion);
 			bus1_handle_unref(h);
 		}
+
+		/* drop ref owned by @list_notify */
+		bus1_handle_unref(h);
 	}
 }
 
