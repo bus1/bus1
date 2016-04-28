@@ -60,13 +60,15 @@ static size_t bus1_transaction_size(struct bus1_cmd_send *param)
 
 	/* make sure we do not violate alignment rules */
 	BUILD_BUG_ON(__alignof(struct bus1_transaction) <
+		     __alignof(union bus1_handle_entry));
+	BUILD_BUG_ON(__alignof(union bus1_handle_entry) <
 		     __alignof(struct iovec));
 	BUILD_BUG_ON(__alignof(struct iovec) < __alignof(struct file *));
 
 	return sizeof(struct bus1_transaction) +
+	       bus1_handle_batch_inline_size(param->n_handles) +
 	       param->n_vecs * sizeof(struct iovec) +
-	       param->n_fds * sizeof(struct file *) +
-	       bus1_handle_batch_inline_size(param->n_handles);
+	       param->n_fds * sizeof(struct file *);
 }
 
 static void bus1_transaction_init(struct bus1_transaction *transaction,
@@ -80,7 +82,8 @@ static void bus1_transaction_init(struct bus1_transaction *transaction,
 	transaction->pid = task_tgid(current);
 	transaction->tid = task_pid(current);
 
-	transaction->vecs = (void *)(transaction + 1);
+	transaction->vecs = (void *)((u8 *)(transaction + 1) +
+			bus1_handle_batch_inline_size(param->n_handles));
 	transaction->files = (void *)(transaction->vecs + param->n_vecs);
 	memset(transaction->files, 0, param->n_vecs * sizeof(struct file *));
 
