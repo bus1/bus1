@@ -551,18 +551,20 @@ static void bus1_node_stage_relock(struct bus1_node *node,
 	timestamp = bus1_queue_tick(&peer_info->queue);
 
 	holder = rcu_access_pointer(node->owner.holder);
-	if (holder && bus1_queue_stage(&peer_info->queue, &node->owner.qnode,
-				       timestamp - 1))
-		bus1_peer_wake(holder);
+	if (holder && rcu_access_pointer(holder->info)) {
+		if (bus1_queue_stage(&peer_info->queue, &node->owner.qnode,
+				     timestamp - 1))
+			bus1_peer_wake(holder);
+	}
 
+	/* always keep owner at tail; triggers complete_all() during flush */
 	list_add_tail(&node->owner.link_node, list_notify);
 
 	write_seqcount_begin(&peer_info->seqcount);
 	node->timestamp = timestamp;
 	write_seqcount_end(&peer_info->seqcount);
 
-	if (atomic_read(&node->owner.n_inflight) == 0 &&
-	    rcu_access_pointer(node->owner.holder))
+	if (holder && atomic_read(&node->owner.n_inflight) == 0)
 		bus1_handle_uninstall_owner(&node->owner, peer_info);
 }
 
