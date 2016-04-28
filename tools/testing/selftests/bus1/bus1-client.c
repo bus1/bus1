@@ -301,7 +301,7 @@ _public_ int bus1_client_send(struct bus1_client *client,
 			      const int *fds, size_t n_fds)
 {
 	struct bus1_cmd_send send = {
-		.flags = n_destinations > 1 ? BUS1_SEND_FLAG_CONTINUE : 0,
+		.flags = 0,
 		.ptr_destinations = (uintptr_t)destinations,
 		.n_destinations = n_destinations,
 		.ptr_vecs = (uintptr_t)vecs,
