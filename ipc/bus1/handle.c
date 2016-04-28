@@ -1912,8 +1912,10 @@ void bus1_handle_inflight_install(struct bus1_handle_inflight *inflight,
 				continue;
 
 			owner = bus1_handle_lock_owner(h, &owner_info);
-			if (!owner || !bus1_handle_attach_holder(h, dst))
+			if (!owner || !bus1_handle_attach_holder(h, dst)) {
 				e->handle = bus1_handle_unref(h);
+				--n_installs;
+			}
 			bus1_handle_unlock_peer(owner, owner_info);
 
 			if (--inflight->n_new < 1)
