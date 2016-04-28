@@ -288,8 +288,10 @@ int bus1_message_install(struct bus1_message *message,
 		bus1_handle_inflight_commit(&message->handles, peer_info, ts);
 
 	/* commit FDs */
-	while (n_fds-- > 0)
+	while (n_fds > 0) {
+		--n_fds;
 		fd_install(fds[n_fds], get_file(message->files[n_fds]));
+	}
 
 	r = 0;
 
