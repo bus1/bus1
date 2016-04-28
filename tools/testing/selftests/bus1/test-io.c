@@ -13,16 +13,21 @@
 #include <time.h>
 #include "test.h"
 
-static int client_send(struct bus1_client *client, uint64_t *handles,
-		       size_t n_handles, void *data, size_t len)
+static int client_send(struct bus1_client *client, uint64_t *destinations,
+		       size_t n_destinations, void *data, size_t len)
 {
 	struct iovec vec = {
 		.iov_base = data,
 		.iov_len = len,
 	};
+	struct bus1_cmd_send send = {
+		.ptr_destinations = (uintptr_t)destinations,
+		.n_destinations = n_destinations,
+		.ptr_vecs = (uintptr_t)&vec,
+		.n_vecs = 1,
+	};
 
-	return bus1_client_send(client, handles, n_handles, &vec, 1, NULL, 0,
-				NULL, 0);
+	return bus1_client_send(client, &send);
 }
 
 static int client_recv(struct bus1_client *client, void **datap, size_t *lenp)
@@ -33,7 +38,7 @@ static int client_recv(struct bus1_client *client, void **datap, size_t *lenp)
 	assert(datap);
 	assert(lenp);
 
-	r = bus1_client_ioctl(client, BUS1_CMD_RECV, &recv);
+	r = bus1_client_recv(client, &recv);
 	if (r < 0)
 		return r;
 
@@ -56,6 +61,7 @@ static void test_basic(void)
 {
 	struct bus1_client *sender, *receiver1, *receiver2;
 	uint64_t node, handles[2], aux;
+	struct bus1_cmd_send send;
 	struct bus1_cmd_recv recv;
 	char *payload = "WOOFWOOF";
 	char *reply_payload;
@@ -128,13 +134,19 @@ static void test_basic(void)
 
 	/* allocate and send node as auxiliary data */
 	aux = BUS1_NODE_FLAG_MANAGED | BUS1_NODE_FLAG_ALLOCATE;
-	r = bus1_client_send(sender, handles, 1, NULL, 0, &aux, 1, NULL, 0);
+	send = (struct bus1_cmd_send) {
+		.ptr_destinations = handles,
+		.n_destinations = 1,
+		.ptr_handles = &aux,
+		.n_handles = 1,
+	};
+	r = bus1_client_send(sender, &send);
 	assert(r >= 0);
 	assert(!(aux & BUS1_NODE_FLAG_ALLOCATE));
 	assert(aux & BUS1_NODE_FLAG_MANAGED);
 
 	recv = (struct bus1_cmd_recv){};
-	r = bus1_client_ioctl(receiver1, BUS1_CMD_RECV, &recv);
+	r = bus1_client_recv(receiver1, &recv);
 	assert(r >= 0);
 	assert(recv.type == BUS1_MSG_DATA);
 	assert(recv.n_dropped == 0);
