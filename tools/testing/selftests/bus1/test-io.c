@@ -55,7 +55,8 @@ static int client_slice_release(struct bus1_client *client, void *slice)
 static void test_basic(void)
 {
 	struct bus1_client *sender, *receiver1, *receiver2;
-	uint64_t node, handles[2];
+	uint64_t node, handles[2], aux;
+	struct bus1_cmd_recv recv;
 	char *payload = "WOOFWOOF";
 	char *reply_payload;
 	size_t reply_len;
@@ -123,6 +124,24 @@ static void test_basic(void)
 	assert(memcmp(payload, reply_payload, strlen(payload) + 1) == 0);
 
 	r = client_slice_release(receiver2, reply_payload);
+	assert(r >= 0);
+
+	/* allocate and send node as auxiliary data */
+	aux = BUS1_NODE_FLAG_MANAGED | BUS1_NODE_FLAG_ALLOCATE;
+	r = bus1_client_send(sender, handles, 1, NULL, 0, &aux, 1, NULL, 0);
+	assert(r >= 0);
+	assert(!(aux & BUS1_NODE_FLAG_ALLOCATE));
+	assert(aux & BUS1_NODE_FLAG_MANAGED);
+
+	recv = (struct bus1_cmd_recv){};
+	r = bus1_client_ioctl(receiver1, BUS1_CMD_RECV, &recv);
+	assert(r >= 0);
+	assert(recv.type == BUS1_MSG_DATA);
+	assert(recv.n_dropped == 0);
+	assert(recv.data.n_bytes == 0);
+	assert(recv.data.n_fds == 0);
+	assert(recv.data.n_handles == 1);
+	r = bus1_client_slice_release(receiver1, recv.data.offset);
 	assert(r >= 0);
 
 	/* cleanup */
