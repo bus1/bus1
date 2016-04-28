@@ -37,6 +37,7 @@
 static void bus1_peer_info_reset(struct bus1_peer_info *peer_info, bool final)
 {
 	struct bus1_queue_node *node, *t;
+	struct bus1_message *message, *list = NULL;
 
 	bus1_handle_flush_all(peer_info);
 
@@ -46,18 +47,15 @@ static void bus1_peer_info_reset(struct bus1_peer_info *peer_info, bool final)
 					     &peer_info->queue.messages, rb) {
 		switch (bus1_queue_node_get_type(node)) {
 		case BUS1_QUEUE_NODE_MESSAGE_NORMAL:
-		case BUS1_QUEUE_NODE_MESSAGE_SILENT: {
-			struct bus1_message *message;
-
+		case BUS1_QUEUE_NODE_MESSAGE_SILENT:
 			message = bus1_message_from_node(node);
 			RB_CLEAR_NODE(&node->rb); /* mark as dropped */
 			if (bus1_queue_node_is_committed(node)) {
 				bus1_message_deallocate(message, peer_info);
-				bus1_message_free(message, peer_info);
+				message->transaction.next = list;
+				list = message;
 			}
-
 			break;
-		}
 		case BUS1_QUEUE_NODE_HANDLE_DESTRUCTION:
 			RB_CLEAR_NODE(&node->rb);
 			bus1_handle_from_queue(node, peer_info, true);
@@ -71,6 +69,12 @@ static void bus1_peer_info_reset(struct bus1_peer_info *peer_info, bool final)
 	bus1_pool_flush(&peer_info->pool);
 
 	mutex_unlock(&peer_info->lock);
+
+	while ((message = list)) {
+		list = message->transaction.next;
+		message->transaction.next = NULL;
+		bus1_message_free(message, peer_info);
+	}
 }
 
 static struct bus1_peer_info *
