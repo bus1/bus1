@@ -135,9 +135,14 @@ static void test_basic(void)
 	/* allocate and send node as auxiliary data */
 	aux = BUS1_NODE_FLAG_MANAGED | BUS1_NODE_FLAG_ALLOCATE;
 	send = (struct bus1_cmd_send) {
-		.ptr_destinations = handles,
+		.ptr_destinations = (unsigned long)handles,
 		.n_destinations = 1,
-		.ptr_handles = &aux,
+		.ptr_vecs = (unsigned long)&(struct iovec){
+			.iov_base = payload,
+			.iov_len = strlen(payload) + 1,
+		},
+		.n_vecs = 1,
+		.ptr_handles = (unsigned long)&aux,
 		.n_handles = 1,
 	};
 	r = bus1_client_send(sender, &send);
@@ -150,9 +155,14 @@ static void test_basic(void)
 	assert(r >= 0);
 	assert(recv.type == BUS1_MSG_DATA);
 	assert(recv.n_dropped == 0);
-	assert(recv.data.n_bytes == 0);
+	assert(recv.data.n_bytes == strlen(payload) + 1);
 	assert(recv.data.n_fds == 0);
 	assert(recv.data.n_handles == 1);
+
+	reply_payload = bus1_client_slice_from_offset(receiver1,
+						      recv.data.offset);
+	assert(!memcmp(payload, reply_payload, strlen(payload)));
+
 	r = bus1_client_slice_release(receiver1, recv.data.offset);
 	assert(r >= 0);
 
