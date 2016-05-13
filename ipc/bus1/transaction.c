@@ -261,32 +261,31 @@ bus1_transaction_free(struct bus1_transaction *transaction, u8 *stack_buffer)
 	return NULL;
 }
 
-static struct bus1_message *
-bus1_transaction_instantiate(struct bus1_transaction *transaction,
-			     struct bus1_handle_dest *dest,
-			     u64 __user *idp)
+/**
+ * bus1_transaction_instantiate_seed() - instantiate seed message
+ * @transaction:	transaction to operate on
+ * @peer_info:		destination peer to instantiate message for
+ *
+ * This instantiates a single bus1_message object for @peer_info. It is not
+ * linked into any queue or parent context. It is exclusively owned by the
+ * caller.
+ *
+ * Return: Message on success, ERR_PTR on failure.
+ */
+struct bus1_message *
+bus1_transaction_instantiate_message(struct bus1_transaction *transaction,
+				     struct bus1_peer_info *peer_info)
 {
-	struct bus1_peer_info *peer_info = NULL;
 	struct bus1_message *message;
 	size_t i;
 	int r;
-
-	r = bus1_handle_dest_import(dest, transaction->peer, idp);
-	if (r < 0)
-		return ERR_PTR(r);
-
-	bus1_active_lockdep_acquired(&dest->raw_peer->active);
-	peer_info = bus1_peer_dereference(dest->raw_peer);
 
 	message = bus1_message_new(transaction->length_vecs,
 			transaction->param->n_fds,
 			transaction->param->n_handles,
 			transaction->param->flags & BUS1_SEND_FLAG_SILENT);
-	if (IS_ERR(message)) {
-		r = PTR_ERR(message);
-		message = NULL;
-		goto error;
-	}
+	if (IS_ERR(message))
+		return message;
 
 	mutex_lock(&peer_info->lock);
 	r = bus1_message_allocate(message, peer_info,
@@ -329,7 +328,6 @@ bus1_transaction_instantiate(struct bus1_transaction *transaction,
 	for (i = 0; i < transaction->param->n_fds; ++i)
 		message->files[i] = get_file(transaction->files[i]);
 
-	bus1_active_lockdep_released(&dest->raw_peer->active);
 	return message;
 
 error:
@@ -342,7 +340,27 @@ error:
 		bus1_message_free(message, peer_info);
 		message = ERR_PTR(r);
 	}
+	return message;
+}
+
+static struct bus1_message *
+bus1_transaction_instantiate(struct bus1_transaction *transaction,
+			     struct bus1_handle_dest *dest,
+			     u64 __user *idp)
+{
+	struct bus1_peer_info *peer_info = NULL;
+	struct bus1_message *message;
+	int r;
+
+	r = bus1_handle_dest_import(dest, transaction->peer, idp);
+	if (r < 0)
+		return ERR_PTR(r);
+
+	bus1_active_lockdep_acquired(&dest->raw_peer->active);
+	peer_info = bus1_peer_dereference(dest->raw_peer);
+	message = bus1_transaction_instantiate_message(transaction, peer_info);
 	bus1_active_lockdep_released(&dest->raw_peer->active);
+
 	return message;
 }
 

@@ -85,6 +85,13 @@ bus1_peer_info_free(struct bus1_peer_info *peer_info)
 
 	bus1_peer_info_reset(peer_info, true);
 
+	if (peer_info->seed) {
+		mutex_lock(&peer_info->lock);
+		bus1_message_deallocate(peer_info->seed, peer_info);
+		mutex_unlock(&peer_info->lock);
+		peer_info->seed = bus1_message_free(peer_info->seed, peer_info);
+	}
+
 	bus1_queue_destroy(&peer_info->queue);
 	bus1_pool_destroy(&peer_info->pool);
 	bus1_user_quota_destroy(&peer_info->quota);
@@ -122,6 +129,7 @@ static struct bus1_peer_info *bus1_peer_info_new(size_t pool_size)
 	peer_info->cred = get_cred(current_cred());
 	peer_info->pid_ns = get_pid_ns(task_active_pid_ns(current));
 	peer_info->user = NULL;
+	peer_info->seed = NULL;
 	bus1_user_quota_init(&peer_info->quota);
 	peer_info->pool = BUS1_POOL_NULL;
 	bus1_queue_init_for_peer(peer_info);
@@ -478,10 +486,12 @@ static int bus1_peer_ioctl_slice_release(struct bus1_peer *peer,
 
 static int bus1_peer_ioctl_send(struct bus1_peer *peer, unsigned long arg)
 {
+	struct bus1_peer_info *peer_info = bus1_peer_dereference(peer);
 	struct bus1_transaction *transaction = NULL;
 	/* Use a stack-allocated buffer for the transaction object if it fits */
 	u8 buf[512];
 	struct bus1_cmd_send param;
+	struct bus1_message *seed;
 	u64 __user *ptr_dest;
 	bool cont;
 	size_t i;
@@ -494,7 +504,8 @@ static int bus1_peer_ioctl_send(struct bus1_peer *peer, unsigned long arg)
 	if (copy_from_user(&param, (void __user *)arg, sizeof(param)))
 		return -EFAULT;
 	if (unlikely(param.flags & ~(BUS1_SEND_FLAG_CONTINUE |
-				     BUS1_SEND_FLAG_SILENT)))
+				     BUS1_SEND_FLAG_SILENT |
+				     BUS1_SEND_FLAG_SEED)))
 		return -EINVAL;
 
 	/* check basic limits; avoids integer-overflows later on */
@@ -514,18 +525,42 @@ static int bus1_peer_ioctl_send(struct bus1_peer *peer, unsigned long arg)
 		return -EFAULT;
 
 	cont = param.flags & BUS1_SEND_FLAG_CONTINUE;
+	ptr_dest = (u64 __user *)(unsigned long)param.ptr_destinations;
 
 	transaction = bus1_transaction_new_from_user(buf, sizeof(buf), peer,
 						     &param);
 	if (IS_ERR(transaction))
 		return PTR_ERR(transaction);
 
-	ptr_dest = (u64 __user *)(unsigned long)param.ptr_destinations;
-	if (param.n_destinations == 1) { /* Fastpath: unicast */
+	if (param.flags & BUS1_SEND_FLAG_SEED) { /* Special-case: set seed */
+		if (unlikely((param.flags & (BUS1_SEND_FLAG_SILENT |
+					     BUS1_SEND_FLAG_CONTINUE)) ||
+			     param.n_destinations ||
+			     param.ptr_destinations)) {
+			r = -EINVAL;
+			goto exit;
+		}
+
+		seed = bus1_transaction_instantiate_message(transaction,
+							    peer_info);
+		if (IS_ERR(seed)) {
+			r = PTR_ERR(seed);
+			goto exit;
+		}
+
+		mutex_lock(&peer_info->lock);
+		swap(seed, peer_info->seed);
+		if (seed)
+			bus1_message_deallocate(seed, peer_info);
+		mutex_unlock(&peer_info->lock);
+		seed = bus1_message_free(seed, peer_info);
+
+	} else if (param.n_destinations == 1) { /* Fastpath: unicast */
 		r = bus1_transaction_commit_for_id(transaction,
 						   ptr_dest);
 		if (r < 0 && (r != -ENXIO || !cont))
 			goto exit;
+
 	} else { /* Slowpath: any message */
 		for (i = 0; i < param.n_destinations; ++i) {
 			r = bus1_transaction_instantiate_for_id(transaction,
@@ -558,7 +593,11 @@ static int bus1_peer_dequeue_message(struct bus1_peer_info *peer_info,
 	if (r < 0)
 		return r;
 
-	bus1_queue_remove(&peer_info->queue, &message->qnode);
+	if (message == peer_info->seed)
+		peer_info->seed = NULL;
+	else
+		bus1_queue_remove(&peer_info->queue, &message->qnode);
+
 	bus1_pool_publish(&peer_info->pool, message->slice);
 	bus1_message_deallocate(message, peer_info);
 
@@ -572,7 +611,10 @@ static int bus1_peer_dequeue(struct bus1_peer_info *peer_info,
 	int r;
 
 	mutex_lock(&peer_info->lock);
-	node = bus1_queue_peek(&peer_info->queue);
+	if (param->flags & BUS1_RECV_FLAG_SEED)
+		node = peer_info->seed ? &peer_info->seed->qnode : NULL;
+	else
+		node = bus1_queue_peek(&peer_info->queue);
 	if (node) {
 		switch (bus1_queue_node_get_type(node)) {
 		case BUS1_QUEUE_NODE_MESSAGE_NORMAL:
@@ -620,7 +662,10 @@ static void bus1_peer_peek(struct bus1_peer_info *peer_info,
 	struct bus1_message *message;
 
 	mutex_lock(&peer_info->lock);
-	node = bus1_queue_peek(&peer_info->queue);
+	if (param->flags & BUS1_RECV_FLAG_SEED)
+		node = peer_info->seed ? &peer_info->seed->qnode : NULL;
+	else
+		node = bus1_queue_peek(&peer_info->queue);
 	if (node) {
 		switch (bus1_queue_node_get_type(node)) {
 		case BUS1_QUEUE_NODE_MESSAGE_NORMAL:
@@ -656,7 +701,8 @@ static int bus1_peer_ioctl_recv(struct bus1_peer *peer, unsigned long arg)
 
 	if (copy_from_user(&param, (void __user *)arg, sizeof(param)))
 		return -EFAULT;
-	if (unlikely(param.flags & ~BUS1_RECV_FLAG_PEEK ||
+	if (unlikely(param.flags & ~(BUS1_RECV_FLAG_PEEK |
+				     BUS1_RECV_FLAG_SEED) ||
 		     param.type != BUS1_MSG_NONE ||
 		     param.n_dropped != 0))
 		return -EINVAL;

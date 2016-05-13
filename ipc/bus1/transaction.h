@@ -20,6 +20,7 @@
 #include <uapi/linux/bus1.h>
 
 struct bus1_peer;
+struct bus1_peer_info;
 struct bus1_transaction;
 
 struct bus1_transaction *
@@ -30,6 +31,9 @@ bus1_transaction_new_from_user(u8 *stack_buffer,
 struct bus1_transaction *
 bus1_transaction_free(struct bus1_transaction *transaction, u8 *stack_buffer);
 
+struct bus1_message *
+bus1_transaction_instantiate_message(struct bus1_transaction *transaction,
+				     struct bus1_peer_info *peer_info);
 int bus1_transaction_instantiate_for_id(struct bus1_transaction *transaction,
 					u64 __user *idp);
 int bus1_transaction_commit(struct bus1_transaction *transaction);
