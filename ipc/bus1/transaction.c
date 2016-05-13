@@ -262,7 +262,7 @@ bus1_transaction_free(struct bus1_transaction *transaction, u8 *stack_buffer)
 }
 
 /**
- * bus1_transaction_instantiate_seed() - instantiate seed message
+ * bus1_transaction_instantiate_message() - instantiate message
  * @transaction:	transaction to operate on
  * @peer_info:		destination peer to instantiate message for
  *
