@@ -25,6 +25,7 @@
  * contexts on the same file-descriptor, without knowing about each other.
  */
 
+#include <assert.h>
 #include <inttypes.h>
 #include <linux/bus1.h>
 #include <stdlib.h>
