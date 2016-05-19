@@ -132,10 +132,52 @@ static void test_api_connect(void)
 	assert(!c1);
 }
 
+
+/* make sure we can set + get seed */
+static void test_api_seed(void)
+{
+	struct bus1_client *client;
+	char *payload = "WOOF";
+	struct iovec vec = {
+		.iov_base = payload,
+		.iov_len = strlen(payload) + 1,
+	};
+	struct bus1_cmd_send send = {
+		.flags = BUS1_SEND_FLAG_SEED | BUS1_SEND_FLAG_SILENT,
+		.ptr_vecs = (uintptr_t)&vec,
+		.n_vecs = 1,
+	};
+	struct bus1_cmd_recv recv = {
+		.flags = BUS1_RECV_FLAG_SEED | BUS1_RECV_FLAG_PEEK,
+	};
+	int r;
+
+	r = bus1_client_new_from_path(&client, test_path);
+	assert(r >= 0);
+
+	r = bus1_client_init(client, BUS1_CLIENT_POOL_SIZE);
+	assert(r >= 0);
+
+	r = bus1_client_mmap(client);
+	assert(r >= 0);
+
+	r = bus1_client_send(client, &send);
+	assert(r >= 0);
+
+	r = bus1_client_recv(client, &recv);
+	assert(r >= 0);
+	assert(recv.type == BUS1_MSG_DATA);
+	assert(strncmp(bus1_client_slice_from_offset(client, recv.data.offset), payload, strlen(payload)) == 0);
+
+	client = bus1_client_free(client);
+	assert(!client);
+}
+
 int test_api(void)
 {
 	test_api_cdev();
 	test_api_client();
 	test_api_connect();
+	test_api_seed();
 	return TEST_OK;
 }
