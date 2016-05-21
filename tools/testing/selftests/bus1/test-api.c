@@ -143,7 +143,7 @@ static void test_api_seed(void)
 		.iov_len = strlen(payload) + 1,
 	};
 	struct bus1_cmd_send send = {
-		.flags = BUS1_SEND_FLAG_SEED | BUS1_SEND_FLAG_SILENT,
+		.flags = BUS1_SEND_FLAG_SEED,
 		.ptr_vecs = (uintptr_t)&vec,
 		.n_vecs = 1,
 	};
