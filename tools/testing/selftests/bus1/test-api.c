@@ -164,6 +164,15 @@ static void test_api_seed(void)
 	r = bus1_client_send(client, &send);
 	assert(r >= 0);
 
+	/* the seed can be replaced */
+	r = bus1_client_send(client, &send);
+	assert(r >= 0);
+
+	/* the seed can not be passed the SILENT flag */
+	send.flags |= BUS1_SEND_FLAG_SILENT;
+	r = bus1_client_send(client, &send);
+	assert(r == -EINVAL);
+
 	r = bus1_client_recv(client, &recv);
 	assert(r >= 0);
 	assert(recv.type == BUS1_MSG_DATA);
