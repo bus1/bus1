@@ -59,8 +59,8 @@ static int client_slice_release(struct bus1_client *client, void *slice)
 
 static void test_basic(void)
 {
-	struct bus1_client *sender, *receiver1, *receiver2;
-	uint64_t node, handles[2], aux;
+	struct bus1_client *parent, *child1, *child2;
+	uint64_t node, aux, parent_handle, child_handles[2];
 	struct bus1_cmd_send send;
 	struct bus1_cmd_recv recv;
 	char *payload = "WOOFWOOF";
@@ -69,107 +69,119 @@ static void test_basic(void)
 	int r, fd;
 
 	/* create parent */
-	r = bus1_client_new_from_path(&sender, test_path);
+	r = bus1_client_new_from_path(&parent, test_path);
 	assert(r >= 0);
 
-	r = bus1_client_init(sender, BUS1_CLIENT_POOL_SIZE);
+	r = bus1_client_init(parent, BUS1_CLIENT_POOL_SIZE);
+	assert(r >= 0);
+
+	r = bus1_client_mmap(parent);
 	assert(r >= 0);
 
 	/* create first child */
-	r = bus1_client_clone(sender, &node, handles, &fd,
+	r = bus1_client_clone(parent, &node, &parent_handle, &fd,
 			      BUS1_CLIENT_POOL_SIZE);
 	assert(r >= 0);
 
-	r = bus1_client_new_from_fd(&receiver1, fd);
+	r = bus1_client_new_from_fd(&child1, fd);
 	assert(r >= 0);
 
-	r = bus1_client_mmap(receiver1);
+	r = bus1_client_mmap(child1);
 	assert(r >= 0);
 
-	/* unicast */
-	r = client_send(sender, handles, 1, payload, strlen(payload) + 1);
-	assert(r >= 0);
-
-	r = client_recv(receiver1, (void**)&reply_payload, &reply_len);
-	assert(r >= 0);
-
-	assert(reply_len == strlen(payload) + 1);
-	assert(memcmp(payload, reply_payload, strlen(payload) + 1) == 0);
-
-	r = client_slice_release(receiver1, reply_payload);
-	assert(r >= 0);
-
-	/* create second child */
-	r = bus1_client_clone(sender, &node, handles + 1, &fd,
-			      BUS1_CLIENT_POOL_SIZE);
-	assert(r >= 0);
-
-	r = bus1_client_new_from_fd(&receiver2, fd);
-	assert(r >= 0);
-
-	r = bus1_client_mmap(receiver2);
-	assert(r >= 0);
-
-	/* multicast */
-	r = client_send(sender, handles, 2, payload, strlen(payload) + 1);
-	assert(r >= 0);
-
-	r = client_recv(receiver1, (void**)&reply_payload, &reply_len);
-	assert(r >= 0);
-
-	assert(reply_len == strlen(payload) + 1);
-	assert(memcmp(payload, reply_payload, strlen(payload) + 1) == 0);
-
-	r = client_slice_release(receiver1, reply_payload);
-	assert(r >= 0);
-
-	r = client_recv(receiver2, (void**)&reply_payload, &reply_len);
-	assert(r >= 0);
-
-	assert(reply_len == strlen(payload) + 1);
-	assert(memcmp(payload, reply_payload, strlen(payload) + 1) == 0);
-
-	r = client_slice_release(receiver2, reply_payload);
-	assert(r >= 0);
-
-	/* allocate and send node as auxiliary data */
+	/* allocate and send node as auxiliary data to parent */
 	aux = BUS1_NODE_FLAG_MANAGED | BUS1_NODE_FLAG_ALLOCATE;
 	send = (struct bus1_cmd_send) {
-		.ptr_destinations = (unsigned long)handles,
+		.ptr_destinations = (unsigned long)&parent_handle,
 		.n_destinations = 1,
-		.ptr_vecs = (unsigned long)&(struct iovec){
-			.iov_base = payload,
-			.iov_len = strlen(payload) + 1,
-		},
-		.n_vecs = 1,
 		.ptr_handles = (unsigned long)&aux,
 		.n_handles = 1,
 	};
-	r = bus1_client_send(sender, &send);
+	r = bus1_client_send(child1, &send);
 	assert(r >= 0);
 	assert(!(aux & BUS1_NODE_FLAG_ALLOCATE));
 	assert(aux & BUS1_NODE_FLAG_MANAGED);
 
 	recv = (struct bus1_cmd_recv){};
-	r = bus1_client_recv(receiver1, &recv);
+	r = bus1_client_recv(parent, &recv);
 	assert(r >= 0);
 	assert(recv.type == BUS1_MSG_DATA);
 	assert(recv.n_dropped == 0);
-	assert(recv.data.n_bytes == strlen(payload) + 1);
+	assert(recv.data.n_bytes == 0);
 	assert(recv.data.n_fds == 0);
 	assert(recv.data.n_handles == 1);
 
-	reply_payload = bus1_client_slice_from_offset(receiver1,
-						      recv.data.offset);
-	assert(!memcmp(payload, reply_payload, strlen(payload)));
+	child_handles[0] = *(uint64_t*) bus1_client_slice_from_offset(parent,
+							recv.data.offset);
 
-	r = bus1_client_slice_release(receiver1, recv.data.offset);
+	r = bus1_client_slice_release(parent, recv.data.offset);
+	assert(r >= 0);
+
+	/* create second child */
+	r = bus1_client_clone(parent, &node, &parent_handle, &fd,
+			      BUS1_CLIENT_POOL_SIZE);
+	assert(r >= 0);
+
+	r = bus1_client_new_from_fd(&child2, fd);
+	assert(r >= 0);
+
+	r = bus1_client_mmap(child2);
+	assert(r >= 0);
+
+	/* allocate and send node as auxiliary data to parent */
+	aux = BUS1_NODE_FLAG_MANAGED | BUS1_NODE_FLAG_ALLOCATE;
+	send = (struct bus1_cmd_send) {
+		.ptr_destinations = (unsigned long)&parent_handle,
+		.n_destinations = 1,
+		.ptr_handles = (unsigned long)&aux,
+		.n_handles = 1,
+	};
+	r = bus1_client_send(child2, &send);
+	assert(r >= 0);
+	assert(!(aux & BUS1_NODE_FLAG_ALLOCATE));
+	assert(aux & BUS1_NODE_FLAG_MANAGED);
+
+	recv = (struct bus1_cmd_recv){};
+	r = bus1_client_recv(parent, &recv);
+	assert(r >= 0);
+	assert(recv.type == BUS1_MSG_DATA);
+	assert(recv.n_dropped == 0);
+	assert(recv.data.n_bytes == 0);
+	assert(recv.data.n_fds == 0);
+	assert(recv.data.n_handles == 1);
+
+	child_handles[1] = *(uint64_t*) bus1_client_slice_from_offset(parent,
+							recv.data.offset);
+
+	r = bus1_client_slice_release(parent, recv.data.offset);
+	assert(r >= 0);
+
+	/* multicast */
+	r = client_send(parent, child_handles, 2, payload, strlen(payload) + 1);
+	assert(r >= 0);
+
+	r = client_recv(child1, (void**)&reply_payload, &reply_len);
+	assert(r >= 0);
+
+	assert(reply_len == strlen(payload) + 1);
+	assert(memcmp(payload, reply_payload, strlen(payload) + 1) == 0);
+
+	r = client_slice_release(child1, reply_payload);
+	assert(r >= 0);
+
+	r = client_recv(child2, (void**)&reply_payload, &reply_len);
+	assert(r >= 0);
+
+	assert(reply_len == strlen(payload) + 1);
+	assert(memcmp(payload, reply_payload, strlen(payload) + 1) == 0);
+
+	r = client_slice_release(child2, reply_payload);
 	assert(r >= 0);
 
 	/* cleanup */
-	sender = bus1_client_free(sender);
-	receiver1 = bus1_client_free(receiver1);
-	receiver2 = bus1_client_free(receiver2);
+	parent = bus1_client_free(parent);
+	child1 = bus1_client_free(child1);
+	child2 = bus1_client_free(child2);
 }
 
 static inline uint64_t nsec_from_clock(clockid_t clock)
@@ -186,8 +198,8 @@ static uint64_t test_iterate(unsigned int iterations,
 			     unsigned int n_destinations,
 			     size_t n_bytes)
 {
-	struct bus1_client *sender, *receivers[n_destinations];
-	uint64_t handles[n_destinations];
+	struct bus1_client *parent, *children[n_destinations];
+	uint64_t child_handles[n_destinations];
 	char payload[n_bytes];
 	char *reply_payload;
 	size_t reply_len;
@@ -196,48 +208,83 @@ static uint64_t test_iterate(unsigned int iterations,
 	int r, fd;
 
 	/* create parent */
-	r = bus1_client_new_from_path(&sender, test_path);
+	r = bus1_client_new_from_path(&parent, test_path);
 	assert(r >= 0);
 
-	r = bus1_client_init(sender, BUS1_CLIENT_POOL_SIZE);
+	r = bus1_client_init(parent, BUS1_CLIENT_POOL_SIZE);
+	assert(r >= 0);
+
+	r = bus1_client_mmap(parent);
 	assert(r >= 0);
 
 	/* create children */
 	for (i = 0; i < n_destinations; i++) {
-		r = bus1_client_clone(sender, &node, handles + i,
+		uint64_t parent_handle, aux;
+		struct bus1_cmd_send send;
+		struct bus1_cmd_recv recv;
+
+		r = bus1_client_clone(parent, &node, &parent_handle,
 				      &fd, BUS1_CLIENT_POOL_SIZE);
 		assert(r >= 0);
 
-		r = bus1_client_new_from_fd(receivers + i, fd);
+		r = bus1_client_new_from_fd(children + i, fd);
 		assert(r >= 0);
 
-		r = bus1_client_mmap(receivers[i]);
+		r = bus1_client_mmap(children[i]);
+		assert(r >= 0);
+
+		/* allocate and send node as auxiliary data to parent */
+		aux = BUS1_NODE_FLAG_MANAGED | BUS1_NODE_FLAG_ALLOCATE;
+		send = (struct bus1_cmd_send) {
+			.ptr_destinations = (unsigned long)&parent_handle,
+			.n_destinations = 1,
+			.ptr_handles = (unsigned long)&aux,
+			.n_handles = 1,
+		};
+		r = bus1_client_send(children[i], &send);
+		assert(r >= 0);
+		assert(!(aux & BUS1_NODE_FLAG_ALLOCATE));
+		assert(aux & BUS1_NODE_FLAG_MANAGED);
+
+		recv = (struct bus1_cmd_recv){};
+		r = bus1_client_recv(parent, &recv);
+		assert(r >= 0);
+		assert(recv.type == BUS1_MSG_DATA);
+		assert(recv.n_dropped == 0);
+		assert(recv.data.n_bytes == 0);
+		assert(recv.data.n_fds == 0);
+		assert(recv.data.n_handles == 1);
+
+		child_handles[i] = *(uint64_t*) bus1_client_slice_from_offset(parent,
+								recv.data.offset);
+
+		r = bus1_client_slice_release(parent, recv.data.offset);
 		assert(r >= 0);
 	}
 
 	time_start = nsec_from_clock(CLOCK_THREAD_CPUTIME_ID);
 	for (j = 0; j < iterations; j++) {
 		/* send */
-		r = client_send(sender, handles, n_destinations, payload, n_bytes);
+		r = client_send(parent, child_handles, n_destinations, payload, n_bytes);
 		assert(r >= 0);
 
 		/* receive */
 		for (i = 0; i < n_destinations; i++) {
-			r = client_recv(receivers[i], (void**)&reply_payload,
+			r = client_recv(children[i], (void**)&reply_payload,
 					&reply_len);
 			assert(r >= 0);
 
-			r = client_slice_release(receivers[i], reply_payload);
+			r = client_slice_release(children[i], reply_payload);
 			assert(r >= 0);
 		}
 	}
 	time_end = nsec_from_clock(CLOCK_THREAD_CPUTIME_ID);
 
 	/* cleanup */
-	sender = bus1_client_free(sender);
+	parent = bus1_client_free(parent);
 
 	for (i = 0; i < n_destinations; i++)
-		receivers[i] = bus1_client_free(receivers[i]);
+		children[i] = bus1_client_free(children[i]);
 
 	return (time_end - time_start) / iterations;
 }

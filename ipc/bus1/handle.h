@@ -192,8 +192,8 @@ struct bus1_handle_inflight {
 u64 bus1_handle_from_queue(struct bus1_queue_node *node,
 			   struct bus1_peer_info *peer_info,
 			   bool drop);
-int bus1_handle_pair(struct bus1_peer *clone,
-		     struct bus1_peer *peer,
+int bus1_handle_pair(struct bus1_peer *peer,
+		     struct bus1_peer *clone,
 		     u64 *node_idp,
 		     u64 *handle_idp);
 int bus1_handle_release_by_id(struct bus1_peer_info *peer_info, u64 id);

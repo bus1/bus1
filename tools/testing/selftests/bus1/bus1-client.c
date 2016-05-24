@@ -216,8 +216,8 @@ _public_ int bus1_client_init(struct bus1_client *client, size_t pool_size)
 }
 
 _public_ int bus1_client_clone(struct bus1_client *client,
-			       uint64_t *nodep,
-			       uint64_t *handlep,
+			       uint64_t *parent_handlep,
+			       uint64_t *child_handlep,
 			       int *fdp,
 			       size_t pool_size)
 {
@@ -226,8 +226,9 @@ _public_ int bus1_client_clone(struct bus1_client *client,
 
 	peer_clone.flags = 0;
 	peer_clone.pool_size = pool_size;
-	peer_clone.node = BUS1_HANDLE_INVALID;
-	peer_clone.handle = BUS1_HANDLE_INVALID;
+	peer_clone.parent_handle = BUS1_NODE_FLAG_MANAGED |
+				   BUS1_NODE_FLAG_ALLOCATE;
+	peer_clone.child_handle = BUS1_HANDLE_INVALID;
 	peer_clone.fd = (uint64_t)-1;
 
 	static_assert(_IOC_SIZE(BUS1_CMD_PEER_CLONE) == sizeof(peer_clone),
@@ -237,12 +238,12 @@ _public_ int bus1_client_clone(struct bus1_client *client,
 	if (r < 0)
 		return r;
 
-	assert(peer_clone.node != BUS1_HANDLE_INVALID);
-	assert(peer_clone.handle != BUS1_HANDLE_INVALID);
+	assert(peer_clone.parent_handle != BUS1_HANDLE_INVALID);
+	assert(peer_clone.child_handle != BUS1_HANDLE_INVALID);
 	assert(peer_clone.fd != (uint64_t)-1);
 
-	*nodep = peer_clone.node;
-	*handlep = peer_clone.handle;
+	*parent_handlep = peer_clone.parent_handle;
+	*child_handlep = peer_clone.child_handle;
 	*fdp = peer_clone.fd;
 	return 0;
 }

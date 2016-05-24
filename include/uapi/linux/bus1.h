@@ -70,8 +70,8 @@ struct bus1_cmd_peer_reset {
 struct bus1_cmd_peer_clone {
 	__u64 flags;
 	__u64 pool_size;
-	__u64 node;
-	__u64 handle;
+	__u64 parent_handle;
+	__u64 child_handle;
 	__u64 fd;
 } __attribute__((__aligned__(8)));
 

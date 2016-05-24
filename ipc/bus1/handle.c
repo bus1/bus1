@@ -1006,59 +1006,59 @@ bus1_handle_find_by_node(struct bus1_peer_info *peer_info,
 /**
  * bus1_handle_pair() - XXX
  */
-int bus1_handle_pair(struct bus1_peer *clone,
-		     struct bus1_peer *peer,
+int bus1_handle_pair(struct bus1_peer *peer,
+		     struct bus1_peer *clone,
 		     u64 *node_idp,
 		     u64 *handle_idp)
 {
-	struct bus1_peer_info *clone_info = bus1_peer_dereference(clone);
 	struct bus1_peer_info *peer_info = bus1_peer_dereference(peer);
-	struct bus1_handle *root = NULL, *export = NULL;
+	struct bus1_peer_info *clone_info = bus1_peer_dereference(clone);
+	struct bus1_handle *peer_handle = NULL, *clone_handle = NULL;
 	u64 id_node, id_handle;
 	int r;
 
 	/*
-	 * This allocates a new node on @clone and imports a handle to it into
-	 * @peer. The ID of both are then returned.
+	 * This allocates a new node on @peer and imports a handle to it into
+	 * @clone. The ID of both are then returned.
 	 */
 
-	root = bus1_handle_new_owner(BUS1_NODE_FLAG_ALLOCATE |
-				     BUS1_NODE_FLAG_MANAGED);
-	if (IS_ERR(root))
-		return PTR_ERR(root);
+	peer_handle = bus1_handle_new_owner(BUS1_NODE_FLAG_ALLOCATE |
+					    BUS1_NODE_FLAG_MANAGED);
+	if (IS_ERR(peer_handle))
+		return PTR_ERR(peer_handle);
 
-	export = bus1_handle_new_holder(root->node);
-	if (IS_ERR(export)) {
-		r = PTR_ERR(export);
-		export = NULL;
+	clone_handle = bus1_handle_new_holder(peer_handle->node);
+	if (IS_ERR(clone_handle)) {
+		r = PTR_ERR(clone_handle);
+		clone_handle = NULL;
 		goto exit;
 	}
 
-	if (clone_info < peer_info) {
-		mutex_lock(&clone_info->lock);
-		mutex_lock_nested(&peer_info->lock, 1);
-	} else {
+	if (peer_info < clone_info) {
 		mutex_lock(&peer_info->lock);
 		mutex_lock_nested(&clone_info->lock, 1);
+	} else {
+		mutex_lock(&clone_info->lock);
+		mutex_lock_nested(&peer_info->lock, 1);
 	}
 
-	bus1_handle_attach_owner(root, clone);
-	bus1_handle_install_owner(root);
-	WARN_ON(!bus1_handle_attach_holder(export, peer));
-	WARN_ON(export != bus1_handle_install_holder(export));
-	id_node = bus1_handle_userref_publish(root, clone_info, 0, true);
-	id_handle = bus1_handle_userref_publish(export, peer_info, 0, true);
+	bus1_handle_attach_owner(peer_handle, peer);
+	bus1_handle_install_owner(peer_handle);
+	WARN_ON(!bus1_handle_attach_holder(clone_handle, clone));
+	WARN_ON(clone_handle != bus1_handle_install_holder(clone_handle));
+	id_node = bus1_handle_userref_publish(peer_handle, peer_info, 0, true);
+	id_handle = bus1_handle_userref_publish(clone_handle, clone_info, 0, true);
 
-	mutex_unlock(&clone_info->lock);
 	mutex_unlock(&peer_info->lock);
+	mutex_unlock(&clone_info->lock);
 
 	r = 0;
 	*node_idp = id_node;
 	*handle_idp = id_handle;
 
 exit:
-	bus1_handle_unref(export);
-	bus1_handle_unref(root);
+	bus1_handle_unref(peer_handle);
+	bus1_handle_unref(clone_handle);
 	return r;
 }
 
