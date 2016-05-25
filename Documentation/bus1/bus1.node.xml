@@ -86,7 +86,7 @@
   <refsect1>
     <title>Reachability</title>
     <para>
-      A peer can only send a message to another peer if it holds a hanlde to one
+      A peer can only send a message to another peer if it holds a handle to one
       of its nodes. A handle to a node can be obtained from another peer who
       holds such a handle by passing it with a message. It follows that two
       peers that are disconnected (i.e., there are no path of handles, nodes and
