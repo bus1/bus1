@@ -536,8 +536,7 @@ static int bus1_peer_ioctl_send(struct bus1_peer *peer, unsigned long arg)
 	if (param.flags & BUS1_SEND_FLAG_SEED) { /* Special-case: set seed */
 		if (unlikely((param.flags & (BUS1_SEND_FLAG_SILENT |
 					     BUS1_SEND_FLAG_CONTINUE)) ||
-			     param.n_destinations ||
-			     param.ptr_destinations)) {
+			     param.n_destinations)) {
 			r = -EINVAL;
 			goto exit;
 		}
