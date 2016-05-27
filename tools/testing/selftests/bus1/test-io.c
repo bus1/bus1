@@ -291,19 +291,23 @@ static uint64_t test_iterate(unsigned int iterations,
 
 int test_io(void)
 {
+	unsigned long base;
+
 	test_basic();
-	fprintf(stderr, "it took %lu ns to send nothing to no one\n",
-		test_iterate(10000, 0, 0));
-	fprintf(stderr, "it took %lu ns for no dests\n",
-		test_iterate(10000, 0, 1024));
-	fprintf(stderr, "it took %lu ns for one dest\n",
-		test_iterate(10000, 1, 1024));
-	fprintf(stderr, "it took %lu ns per dest for 32 dests\n",
-		test_iterate(10000, 32, 1024) / 32);
-	fprintf(stderr, "it took %lu ns per dest for 64 dests\n",
-		test_iterate(10000, 64, 1024) / 64);
-	fprintf(stderr, "it took %lu ns per dest for 1000 dests\n",
-		test_iterate(1000, 1000, 1024) / 1000);
+
+	base = test_iterate(10000, 0, 1024);
+
+	fprintf(stderr, "it took %lu ns for no destinations\n", base);
+	fprintf(stderr, "it took %lu ns + %lu ns for one destination\n", base,
+		test_iterate(10000, 1, 1024) - base);
+	for (unsigned int i = 1; i < 10; ++i) {
+		unsigned int dests = 1UL << i;
+
+		fprintf(stderr, "it took %lu ns + %lu ns per destination for %u destinations\n",
+			base, (test_iterate(10000, dests, 1024) - base) / dests, dests);
+	}
+	fprintf(stderr, "it took %lu ns + %lu ns per destination for 1000 destinations\n",
+		base, (test_iterate(1000, 1000, 1024) - base) / 1000);
 
 	fprintf(stderr, "\n\n");
 
