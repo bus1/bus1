@@ -83,6 +83,23 @@ _public_ struct bus1_client *bus1_client_free(struct bus1_client *client)
 	return NULL;
 }
 
+_public_ int bus1_client_replace(struct bus1_client *old_client, struct bus1_client *new_client)
+{
+	int fd;
+
+	fd = dup3(new_client->fd, old_client->fd, O_CLOEXEC);
+	if (fd < 0)
+		return -errno;
+	else
+		old_client->fd = -1;
+
+	close(new_client->fd);
+	new_client->fd = fd;
+	bus1_client_free(old_client);
+
+	return 0;
+}
+
 _public_ int bus1_client_get_fd(struct bus1_client *client)
 {
 	return client ? client->fd : -1;
