@@ -66,6 +66,7 @@ struct bus1_handle {
  *			destruction is committed
  * @list_handles:	linked list of registered handles
  * @completion:		destruction wait-queue
+ * @persistent:		whether node survives RESETs
  * @owner:		embedded handle of node owner
  */
 struct bus1_node {
@@ -73,6 +74,7 @@ struct bus1_node {
 	u64 timestamp;
 	struct list_head list_handles;
 	struct completion completion;
+	bool persistent : 1;
 	struct bus1_handle owner;
 };
 
@@ -162,8 +164,12 @@ static struct bus1_handle *bus1_handle_new_owner(u64 id)
 {
 	struct bus1_node *node;
 
-	if ((id & ~BUS1_NODE_FLAG_ALLOCATE) != BUS1_NODE_FLAG_MANAGED)
+	if (id & ~(BUS1_NODE_FLAG_MANAGED |
+		   BUS1_NODE_FLAG_ALLOCATE |
+		   BUS1_NODE_FLAG_PERSISTENT))
 		return ERR_PTR(-EINVAL);
+	if (!(id & BUS1_NODE_FLAG_MANAGED))
+		return ERR_PTR(-EOPNOTSUPP);
 
 	node = kmalloc(sizeof(*node), GFP_KERNEL);
 	if (!node)
@@ -174,6 +180,7 @@ static struct bus1_handle *bus1_handle_new_owner(u64 id)
 	init_completion(&node->completion);
 	node->timestamp = 0;
 	bus1_handle_init(&node->owner, node);
+	node->persistent = id & BUS1_NODE_FLAG_PERSISTENT;
 
 	/* node->owner owns a reference to the node, drop the initial one */
 	kref_put(&node->ref, bus1_node_no_free);
@@ -1156,7 +1163,7 @@ int bus1_handle_destroy_by_id(struct bus1_peer_info *peer_info, u64 id)
 /**
  * bus1_handle_flush_all() - XXX
  */
-void bus1_handle_flush_all(struct bus1_peer_info *peer_info)
+void bus1_handle_flush_all(struct bus1_peer_info *peer_info, bool final)
 {
 	struct bus1_handle *h;
 	struct rb_node *n, *next;
@@ -1171,6 +1178,11 @@ void bus1_handle_flush_all(struct bus1_peer_info *peer_info)
 		/* XXX: ignore entries with an ID higher than our start id */
 
 		if (bus1_handle_is_owner(h)) {
+			if (!final && h->node->persistent) {
+				next = rb_next(n);
+				continue;
+			}
+
 			bus1_handle_ref(h);
 			live = !!(h->node->timestamp & 1);
 			if (live) {

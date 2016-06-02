@@ -39,7 +39,7 @@ static void bus1_peer_info_reset(struct bus1_peer_info *peer_info, bool final)
 	struct bus1_queue_node *node, *t;
 	struct bus1_message *message, *list = NULL;
 
-	bus1_handle_flush_all(peer_info);
+	bus1_handle_flush_all(peer_info, final);
 
 	mutex_lock(&peer_info->lock);
 

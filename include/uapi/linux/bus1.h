@@ -56,6 +56,7 @@
 enum {
 	BUS1_NODE_FLAG_MANAGED		= 1ULL <<  0,
 	BUS1_NODE_FLAG_ALLOCATE		= 1ULL <<  1,
+	BUS1_NODE_FLAG_PERSISTENT	= 1ULL <<  2,
 };
 
 struct bus1_cmd_peer_init {

@@ -198,7 +198,7 @@ int bus1_handle_pair(struct bus1_peer *peer,
 		     u64 *handle_idp);
 int bus1_handle_release_by_id(struct bus1_peer_info *peer_info, u64 id);
 int bus1_handle_destroy_by_id(struct bus1_peer_info *peer_info, u64 id);
-void bus1_handle_flush_all(struct bus1_peer_info *peer_info);
+void bus1_handle_flush_all(struct bus1_peer_info *peer_info, bool final);
 
 /* destination context */
 void bus1_handle_dest_init(struct bus1_handle_dest *dest);
