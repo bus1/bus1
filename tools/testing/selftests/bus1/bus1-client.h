@@ -42,7 +42,6 @@ struct bus1_client;
 int bus1_client_new_from_fd(struct bus1_client **clientp, int fd);
 int bus1_client_new_from_path(struct bus1_client **clientp, const char *path);
 struct bus1_client *bus1_client_free(struct bus1_client *client);
-int bus1_client_replace(struct bus1_client *old_client, struct bus1_client *new_client);
 
 int bus1_client_get_fd(struct bus1_client *client);
 size_t bus1_client_get_pool_size(struct bus1_client *client);
