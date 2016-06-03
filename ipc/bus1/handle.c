@@ -176,11 +176,11 @@ static struct bus1_handle *bus1_handle_new_owner(u64 id)
 		return ERR_PTR(-ENOMEM);
 
 	kref_init(&node->ref);
+	node->timestamp = 0;
 	INIT_LIST_HEAD(&node->list_handles);
 	init_completion(&node->completion);
-	node->timestamp = 0;
-	bus1_handle_init(&node->owner, node);
 	node->persistent = id & BUS1_NODE_FLAG_PERSISTENT;
+	bus1_handle_init(&node->owner, node);
 
 	/* node->owner owns a reference to the node, drop the initial one */
 	kref_put(&node->ref, bus1_node_no_free);
