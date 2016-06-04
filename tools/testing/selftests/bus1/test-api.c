@@ -142,14 +142,19 @@ static void test_api_seed(void)
 		.iov_base = payload,
 		.iov_len = strlen(payload) + 1,
 	};
+	uint64_t handles[] = { BUS1_NODE_FLAG_MANAGED | BUS1_NODE_FLAG_ALLOCATE };
 	struct bus1_cmd_send send = {
 		.flags = BUS1_SEND_FLAG_SEED,
 		.ptr_vecs = (uintptr_t)&vec,
 		.n_vecs = 1,
+		.ptr_handles = (uintptr_t)&handles,
+		.n_handles = 1,
 	};
 	struct bus1_cmd_recv recv = {
-		.flags = BUS1_RECV_FLAG_SEED | BUS1_RECV_FLAG_PEEK,
+		.flags = BUS1_RECV_FLAG_SEED,
 	};
+	void *slice;
+	uint64_t handle_id;
 	int r;
 
 	r = bus1_client_new_from_path(&client, test_path);
@@ -164,6 +169,10 @@ static void test_api_seed(void)
 	r = bus1_client_send(client, &send);
 	assert(r >= 0);
 
+	assert(handles[0] != 0);
+	assert(handles[0] != BUS1_HANDLE_INVALID);
+	assert(!(handles[0] & BUS1_NODE_FLAG_ALLOCATE));
+
 	/* the seed can be replaced */
 	r = bus1_client_send(client, &send);
 	assert(r >= 0);
@@ -176,7 +185,16 @@ static void test_api_seed(void)
 	r = bus1_client_recv(client, &recv);
 	assert(r >= 0);
 	assert(recv.type == BUS1_MSG_DATA);
-	assert(strncmp(bus1_client_slice_from_offset(client, recv.data.offset), payload, strlen(payload)) == 0);
+
+	slice = bus1_client_slice_from_offset(client, recv.data.offset);
+	assert(slice);
+
+	assert(recv.data.n_bytes == strlen(payload) + 1);
+	assert(strncmp(slice, payload, recv.data.n_bytes) == 0);
+	handle_id = *(uint64_t*)((uint8_t*)slice + ((recv.data.n_bytes + 7) & ~(7ULL)));
+	assert(handle_id != 0);
+	assert(handle_id != BUS1_HANDLE_INVALID);
+	assert(!(handle_id & BUS1_NODE_FLAG_ALLOCATE));
 
 	client = bus1_client_free(client);
 	assert(!client);
