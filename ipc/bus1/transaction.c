@@ -579,3 +579,32 @@ int bus1_transaction_commit_for_id(struct bus1_transaction *transaction,
 
 	return bus1_transaction_commit(transaction);
 }
+
+int bus1_transaction_commit_seed(struct bus1_transaction *transaction)
+{
+	struct bus1_message *seed;
+	u64 __user *idp;
+	int r;
+
+	idp = (u64 __user *)(unsigned long)transaction->param->ptr_handles;
+
+	seed = bus1_transaction_instantiate_message(transaction,
+						    transaction->peer_info);
+	if (IS_ERR(seed))
+		return PTR_ERR(seed);
+
+	mutex_lock(&transaction->peer_info->lock);
+	bus1_handle_transfer_install(&transaction->handles, transaction->peer);
+	r = bus1_handle_transfer_export(&transaction->handles,
+					transaction->peer_info,
+					idp, transaction->param->n_handles);
+	if (r >= 0)
+		swap(seed, transaction->peer_info->seed);
+	if (seed)
+		bus1_message_deallocate(seed, transaction->peer_info);
+	mutex_unlock(&transaction->peer_info->lock);
+
+	bus1_message_free(seed, transaction->peer_info);
+
+	return r;
+}

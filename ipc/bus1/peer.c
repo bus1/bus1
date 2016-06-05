@@ -487,12 +487,10 @@ static int bus1_peer_ioctl_slice_release(struct bus1_peer *peer,
 
 static int bus1_peer_ioctl_send(struct bus1_peer *peer, unsigned long arg)
 {
-	struct bus1_peer_info *peer_info = bus1_peer_dereference(peer);
 	struct bus1_transaction *transaction = NULL;
 	/* Use a stack-allocated buffer for the transaction object if it fits */
 	u8 buf[512];
 	struct bus1_cmd_send param;
-	struct bus1_message *seed;
 	u64 __user *ptr_dest;
 	bool cont;
 	size_t i;
@@ -541,19 +539,9 @@ static int bus1_peer_ioctl_send(struct bus1_peer *peer, unsigned long arg)
 			goto exit;
 		}
 
-		seed = bus1_transaction_instantiate_message(transaction,
-							    peer_info);
-		if (IS_ERR(seed)) {
-			r = PTR_ERR(seed);
+		r = bus1_transaction_commit_seed(transaction);
+		if (r < 0)
 			goto exit;
-		}
-
-		mutex_lock(&peer_info->lock);
-		swap(seed, peer_info->seed);
-		if (seed)
-			bus1_message_deallocate(seed, peer_info);
-		mutex_unlock(&peer_info->lock);
-		seed = bus1_message_free(seed, peer_info);
 
 	} else if (param.n_destinations == 1) { /* Fastpath: unicast */
 		r = bus1_transaction_commit_for_id(transaction,
