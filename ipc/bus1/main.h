@@ -106,6 +106,13 @@
  */
 #define BUS1_FDS_MAX (65535)
 
+/**
+ * bus1_fops - file-operations of bus1 character devices
+ *
+ * All bus1 peers are backed by a character device with @bus1_fops used as
+ * file-operations. That is, a file is a bus1 peer if, and only if, its f_ops
+ * pointer contains @bus1_fops.
+ */
 extern const struct file_operations bus1_fops;
 
 #endif /* __BUS1_MAIN_H */
