@@ -362,7 +362,6 @@ static int bus1_peer_ioctl_clone(struct bus1_peer *peer,
 	struct bus1_peer_info *peer_info, *clone_info = NULL;
 	struct bus1_peer *clone = NULL;
 	struct file *clone_file = NULL;
-	u64 node_id, handle_id;
 	int r, fd;
 
 	lockdep_assert_held(&peer->active);
@@ -373,8 +372,6 @@ static int bus1_peer_ioctl_clone(struct bus1_peer *peer,
 		return -EFAULT;
 	if (unlikely(param.flags) ||
 	    unlikely(param.pool_size == 0) ||
-	    unlikely(param.parent_handle != (BUS1_NODE_FLAG_MANAGED |
-					     BUS1_NODE_FLAG_ALLOCATE)) ||
 	    unlikely(param.child_handle != BUS1_HANDLE_INVALID) ||
 	    unlikely(param.fd != (u64)-1))
 		return -EINVAL;
@@ -412,15 +409,16 @@ static int bus1_peer_ioctl_clone(struct bus1_peer *peer,
 	bus1_active_activate(&clone->active);
 	WARN_ON(!bus1_peer_acquire(clone));
 
-	r = bus1_handle_pair(peer, clone, &node_id, &handle_id);
+	r = bus1_handle_pair(peer, clone, &param.parent_handle,
+			     &param.child_handle);
 	if (r < 0)
 		goto error;
 
 	fd_install(fd, clone_file); /* consumes file reference */
 	bus1_peer_release(clone);
 
-	if (put_user(node_id, &uparam->parent_handle) ||
-	    put_user(handle_id, &uparam->child_handle) ||
+	if (put_user(param.parent_handle, &uparam->parent_handle) ||
+	    put_user(param.child_handle, &uparam->child_handle) ||
 	    put_user(fd, &uparam->fd))
 		return -EFAULT; /* We don't care, keep what we did */
 
