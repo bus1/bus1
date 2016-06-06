@@ -65,6 +65,7 @@ struct bus1_handle {
  *			3 if selected for destruction; even timestamp if
  *			destruction is committed
  * @list_handles:	linked list of registered handles
+ * @qnode:		queue entry for release notification
  * @completion:		destruction wait-queue
  * @persistent:		whether node survives RESETs
  * @owner:		embedded handle of node owner
@@ -73,6 +74,7 @@ struct bus1_node {
 	struct kref ref;
 	u64 timestamp;
 	struct list_head list_handles;
+	struct bus1_queue_node qnode;
 	struct completion completion;
 	bool persistent : 1;
 	struct bus1_handle owner;
@@ -85,6 +87,7 @@ static void bus1_node_free(struct kref *ref)
 	WARN_ON(rcu_access_pointer(node->owner.holder));
 	WARN_ON(!list_empty(&node->list_handles));
 	WARN_ON(node->timestamp & 1);
+	bus1_queue_node_destroy(&node->qnode);
 	kfree_rcu(node, owner.qnode.rcu);
 }
 
@@ -178,6 +181,7 @@ static struct bus1_handle *bus1_handle_new_owner(u64 id)
 	kref_init(&node->ref);
 	node->timestamp = 0;
 	INIT_LIST_HEAD(&node->list_handles);
+	bus1_queue_node_init(&node->qnode, BUS1_QUEUE_NODE_HANDLE_RELEASE);
 	init_completion(&node->completion);
 	node->persistent = id & BUS1_NODE_FLAG_PERSISTENT;
 	bus1_handle_init(&node->owner, node);

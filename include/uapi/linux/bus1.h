@@ -98,6 +98,7 @@ enum {
 	BUS1_MSG_NONE,
 	BUS1_MSG_DATA,
 	BUS1_MSG_NODE_DESTROY,
+	BUS1_MSG_NODE_RELEASE,
 };
 
 struct bus1_msg_data {
@@ -116,6 +117,10 @@ struct bus1_msg_node_destroy {
 	__u64 handle;
 } __attribute__((__aligned__(8)));
 
+struct bus1_msg_node_release {
+	__u64 handle;
+} __attribute__((__aligned__(8)));
+
 enum {
 	BUS1_RECV_FLAG_PEEK		= 1ULL <<  0,
 	BUS1_RECV_FLAG_SEED		= 1ULL <<  1,
@@ -128,6 +133,7 @@ struct bus1_cmd_recv {
 	union {
 		struct bus1_msg_data data;
 		struct bus1_msg_node_destroy node_destroy;
+		struct bus1_msg_node_release node_release;
 	};
 } __attribute__((__aligned__(8)));
 
