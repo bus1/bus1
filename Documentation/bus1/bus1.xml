@@ -158,57 +158,47 @@
     </para>
 
     <informaltable frame="none">
-      <tgroup cols="3" colsep="1">
+      <tgroup cols="2" colsep="1">
         <thead>
           <row>
-            <entry>ioctl signature</entry>
             <entry>command</entry>
             <entry>transported struct</entry>
           </row>
         </thead>
         <tbody>
           <row>
-            <entry><constant>0x0</constant></entry> <!-- XXX -->
             <entry><constant>BUS1_CMD_PEER_INIT</constant></entry>
             <entry><type>struct bus1_cmd_peer_init *</type></entry>
           </row>
           <row>
-            <entry><constant>0x0</constant></entry>
             <entry><constant>BUS1_CMD_PEER_QUERY</constant></entry>
             <entry><type>struct bus1_cmd_peer_init *</type></entry>
           </row>
           <row>
-            <entry><constant>0x0</constant></entry>
             <entry><constant>BUS1_CMD_PEER_RESET</constant></entry>
             <entry><type>struct bus1_cmd_peer_reset *</type></entry>
           </row>
           <row>
-            <entry><constant>0x0</constant></entry>
             <entry><constant>BUS1_CMD_PEER_CLONE</constant></entry>
             <entry><type>struct bus1_cmd_peer_clone *</type></entry>
           </row>
           <row>
-            <entry><constant>0x0</constant></entry>
             <entry><constant>BUS1_CMD_NODE_DESTROY</constant></entry>
             <entry><type>__u64</type></entry>
           </row>
           <row>
-            <entry><constant>0x0</constant></entry>
             <entry><constant>BUS1_CMD_HANDLE_RELEASE</constant></entry>
             <entry><type>__u64</type></entry>
           </row>
           <row>
-            <entry><constant>0x0</constant></entry>
             <entry><constant>BUS1_CMD_SLICE_RELEASE</constant></entry>
             <entry><type>__u64</type></entry>
           </row>
           <row>
-            <entry><constant>0x0</constant></entry>
             <entry><constant>BUS1_CMD_SEND</constant></entry>
             <entry><type>struct bus1_cmd_send *</type></entry>
           </row>
           <row>
-            <entry><constant>0x0</constant></entry>
             <entry><constant>BUS1_CMD_RECV</constant></entry>
             <entry><type>struct bus1_cmd_recv *</type></entry>
           </row>
@@ -226,15 +216,12 @@
     <title>Return values</title>
 
     <para>
-      On success all bus1 ioctls return <errorcode>0</errorcode>; on failure,
-      <errorcode>-1</errorcode> is returned and <varname>errno</varname> set to
-      indicate the error.
+      On success, all bus1 ioctls return an integer greater than, or equal to,
+      <errorcode>0</errorcode>. On failure, a negative error code is returned.
     </para>
 
     <refsect2>
-      <title>
-        The following error codes are well defined and used throughout
-      </title>
+      <title>Common error codes</title>
 
       <variablelist>
         <varlistentry>
