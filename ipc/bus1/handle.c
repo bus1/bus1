@@ -262,11 +262,18 @@ u64 bus1_handle_from_queue(struct bus1_queue_node *node,
 
 	lockdep_assert_held(&peer_info->lock);
 
-	if (WARN_ON(bus1_queue_node_get_type(node) !=
-					BUS1_QUEUE_NODE_HANDLE_DESTRUCTION))
+	switch (bus1_queue_node_get_type(node)) {
+	case BUS1_QUEUE_NODE_HANDLE_DESTRUCTION:
+		handle = container_of(node, struct bus1_handle, qnode);
+		break;
+	case BUS1_QUEUE_NODE_HANDLE_RELEASE:
+		handle = &container_of(node, struct bus1_node, qnode)->owner;
+		break;
+	default:
+		WARN(1, "Invalid queue-node type");
 		return BUS1_HANDLE_INVALID;
+	}
 
-	handle = container_of(node, struct bus1_handle, qnode);
 	id = handle->id;
 
 	if (drop)

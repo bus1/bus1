@@ -57,6 +57,7 @@ static void bus1_peer_info_reset(struct bus1_peer_info *peer_info, bool final)
 			}
 			break;
 		case BUS1_QUEUE_NODE_HANDLE_DESTRUCTION:
+		case BUS1_QUEUE_NODE_HANDLE_RELEASE:
 			RB_CLEAR_NODE(&node->rb);
 			bus1_handle_from_queue(node, peer_info, true);
 			break;
@@ -629,6 +630,13 @@ static int bus1_peer_dequeue(struct bus1_peer_info *peer_info,
 				bus1_handle_from_queue(node, peer_info, true);
 			mutex_unlock(&peer_info->lock);
 			return 0;
+		case BUS1_QUEUE_NODE_HANDLE_RELEASE:
+			bus1_queue_remove(&peer_info->queue, node);
+			param->type = BUS1_MSG_NODE_RELEASE;
+			param->node_release.handle =
+				bus1_handle_from_queue(node, peer_info, true);
+			mutex_unlock(&peer_info->lock);
+			return 0;
 		default:
 			mutex_unlock(&peer_info->lock);
 
@@ -665,6 +673,11 @@ static void bus1_peer_peek(struct bus1_peer_info *peer_info,
 		case BUS1_QUEUE_NODE_HANDLE_DESTRUCTION:
 			param->type = BUS1_MSG_NODE_DESTROY;
 			param->node_destroy.handle =
+				bus1_handle_from_queue(node, peer_info, false);
+			break;
+		case BUS1_QUEUE_NODE_HANDLE_RELEASE:
+			param->type = BUS1_MSG_NODE_RELEASE;
+			param->node_release.handle =
 				bus1_handle_from_queue(node, peer_info, false);
 			break;
 		default:
