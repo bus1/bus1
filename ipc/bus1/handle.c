@@ -358,6 +358,12 @@ static void bus1_handle_attach_internal(struct bus1_handle *handle,
 	WARN_ON(!owner);
 	owner_info = bus1_peer_dereference(owner);
 	lockdep_assert_held(&owner_info->lock);
+
+	/* flush any release-notification whenever a new handle is attached */
+	if (bus1_queue_node_is_queued(&handle->node->qnode)) {
+		bus1_queue_remove(&owner_info->queue, &handle->node->qnode);
+		bus1_handle_unref(&handle->node->owner);
+	}
 }
 
 static void bus1_handle_attach_owner(struct bus1_handle *handle,
@@ -701,14 +707,21 @@ bus1_handle_acquire(struct bus1_handle *handle,
 		if (!bus1_handle_is_owner(handle))
 			return NULL;
 
+		/* in case of OWNERs, we allow re-attach */
 		mutex_lock(&peer_info->lock);
 		if (handle->node->timestamp > 1) {
 			handle = NULL;
 		} else {
 			atomic_inc(&handle->n_inflight);
-			WARN_ON(list_empty(&handle->node->list_handles));
 			list_add_tail(&handle->link_node,
 				      &handle->node->list_handles);
+
+			/* flush any release-notification */
+			if (bus1_queue_node_is_queued(&handle->node->qnode)) {
+				bus1_queue_remove(&peer_info->queue,
+						  &handle->node->qnode);
+				bus1_handle_unref(handle);
+			}
 		}
 		mutex_unlock(&peer_info->lock);
 	}
