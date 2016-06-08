@@ -336,6 +336,9 @@ bus1_handle_unlock_peer(struct bus1_peer *peer,
 static void bus1_handle_attach_internal(struct bus1_handle *handle,
 					struct bus1_peer *peer)
 {
+	struct bus1_peer_info *owner_info;
+	struct bus1_peer *owner;
+
 	WARN_ON(rcu_access_pointer(handle->holder));
 	WARN_ON(bus1_handle_was_attached(handle));
 	WARN_ON(!(handle->node->timestamp & 1));
@@ -346,6 +349,15 @@ static void bus1_handle_attach_internal(struct bus1_handle *handle,
 	rcu_assign_pointer(handle->holder, peer);
 	list_add_tail(&handle->link_node, &handle->node->list_handles);
 	bus1_handle_ref(handle);
+
+	/*
+	 * This WARN_ON and lockdep must be after the attach operation, since
+	 * otherwise the holder would be unset for owner attachments.
+	 */
+	owner = rcu_access_pointer(handle->node->owner.holder);
+	WARN_ON(!owner);
+	owner_info = bus1_peer_dereference(owner);
+	lockdep_assert_held(&owner_info->lock);
 }
 
 static void bus1_handle_attach_owner(struct bus1_handle *handle,
@@ -365,15 +377,10 @@ static void bus1_handle_attach_owner(struct bus1_handle *handle,
 static bool bus1_handle_attach_holder(struct bus1_handle *handle,
 				      struct bus1_peer *holder)
 {
-	struct bus1_peer *owner;
-
 	if (!(handle->node->timestamp & 1))
 		return false;
 
-	owner = rcu_access_pointer(handle->node->owner.holder);
-	lockdep_assert_held(&bus1_peer_dereference(owner)->lock);
 	WARN_ON(bus1_handle_is_owner(handle));
-
 	bus1_handle_attach_internal(handle, holder);
 
 	return true;
