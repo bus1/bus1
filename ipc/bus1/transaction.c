@@ -580,6 +580,15 @@ int bus1_transaction_commit_for_id(struct bus1_transaction *transaction,
 	return bus1_transaction_commit(transaction);
 }
 
+/**
+ * bus1_transaction_commit_seed() - instantiate and commit seed
+ * @transaction:	transaction to use
+ *
+ * This instantiates a new message with the given transaction, and commits it
+ * as new seed on the owner-peer of the transaction.
+ *
+ * Return: 0 on success, negative error code on failure.
+ */
 int bus1_transaction_commit_seed(struct bus1_transaction *transaction)
 {
 	struct bus1_message *seed;
@@ -598,13 +607,22 @@ int bus1_transaction_commit_seed(struct bus1_transaction *transaction)
 	r = bus1_handle_transfer_export(&transaction->handles,
 					transaction->peer_info,
 					idp, transaction->param->n_handles);
-	if (r >= 0)
-		swap(seed, transaction->peer_info->seed);
+	if (r < 0) {
+		bus1_message_deallocate(seed, transaction->peer_info);
+		mutex_unlock(&transaction->peer_info->lock);
+		goto exit;
+	}
+	mutex_unlock(&transaction->peer_info->lock);
+
+	bus1_handle_inflight_install(&seed->handles, transaction->peer);
+
+	mutex_lock(&transaction->peer_info->lock);
+	swap(seed, transaction->peer_info->seed);
 	if (seed)
 		bus1_message_deallocate(seed, transaction->peer_info);
 	mutex_unlock(&transaction->peer_info->lock);
 
+exit:
 	bus1_message_free(seed, transaction->peer_info);
-
 	return r;
 }
