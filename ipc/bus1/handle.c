@@ -540,8 +540,11 @@ static void bus1_node_stage_relock(struct bus1_node *node,
 	}
 
 	list_del_init(&node->owner.link_node);
-	node->timestamp = 3;
-	timestamp = 3;
+	timestamp = 4;
+
+	write_seqcount_begin(&peer_info->seqcount);
+	node->timestamp = timestamp - 1;
+	write_seqcount_end(&peer_info->seqcount);
 
 	while ((h = list_first_entry_or_null(&node->list_handles,
 					     struct bus1_handle,
