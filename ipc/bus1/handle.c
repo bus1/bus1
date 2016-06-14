@@ -346,6 +346,50 @@ static struct bus1_peer *bus1_handle_qlock(struct bus1_handle *handle,
 	return NULL;
 }
 
+static void bus1_node_queue(struct bus1_node *node,
+			    struct bus1_peer_info *owner_info)
+{
+	u64 timestamp;
+
+	/*
+	 * Queue a node-release notification on @owner_info if not already
+	 * queued. Note that the caller must make sure to never call this on
+	 * uninstalled nodes, as the peer could not make any sense of the
+	 * notification.
+	 */
+
+	WARN_ON(RB_EMPTY_NODE(&node->owner.rb_id));
+
+	mutex_lock(&owner_info->qlock);
+	if (!bus1_queue_node_is_queued(&node->qnode)) {
+		bus1_queue_sync(&owner_info->queue, 0);
+		timestamp = bus1_queue_tick(&owner_info->queue);
+		bus1_handle_ref(&node->owner);
+		if (bus1_queue_stage(&owner_info->queue, &node->owner.qnode,
+				     timestamp))
+			wake_up_interruptible(owner_info->waitq);
+	}
+	mutex_unlock(&owner_info->qlock);
+}
+
+static void bus1_node_dequeue(struct bus1_node *node,
+			      struct bus1_peer_info *owner_info)
+{
+	/*
+	 * Dequeue any node-release notification on @owner_info if queued,
+	 * regardless whether it is already committed or not. It is simply
+	 * flushed from the message queue and then dropped.
+	 */
+
+	mutex_lock(&owner_info->qlock);
+	if (bus1_queue_node_is_queued(&node->qnode)) {
+		if (bus1_queue_remove(&owner_info->queue, &node->qnode))
+			wake_up_interruptible(owner_info->waitq);
+		bus1_handle_unref(&node->owner);
+	}
+	mutex_unlock(&owner_info->qlock);
+}
+
 static void bus1_handle_attach_internal(struct bus1_handle *handle,
 					struct bus1_peer *peer)
 {
@@ -373,12 +417,7 @@ static void bus1_handle_attach_internal(struct bus1_handle *handle,
 	lockdep_assert_held(&owner_info->lock);
 
 	/* flush any release-notification whenever a new handle is attached */
-	mutex_lock(&owner_info->qlock);
-	if (bus1_queue_node_is_queued(&handle->node->qnode)) {
-		bus1_queue_remove(&owner_info->queue, &handle->node->qnode);
-		bus1_handle_unref(&handle->node->owner);
-	}
-	mutex_unlock(&owner_info->qlock);
+	bus1_node_dequeue(handle->node, owner_info);
 }
 
 static void bus1_handle_attach_owner(struct bus1_handle *handle,
@@ -693,17 +732,31 @@ static void bus1_handle_detach_internal(struct bus1_handle *handle,
 					struct bus1_peer_info *owner_info,
 					struct list_head *list_notify)
 {
-
 	lockdep_assert_held(&owner_info->lock);
 
+	/*
+	 * Unlink from node. If destruction is already staged, we must not
+	 * touch @link_node. The destruction will clear all stale handles when
+	 * done, so we can simply ignore it in that case.
+	 */
 	if (handle->node->timestamp == 1 && !list_empty(&handle->link_node)) {
 		list_del_init(&handle->link_node);
 		if (!bus1_handle_is_owner(handle))
 			bus1_handle_unref(handle);
 	}
 
+	/*
+	 * Once the last handle was detached, we queue a notification for the
+	 * node owner. However, if the owner handle was never installed, we
+	 * know it is inaccessible, and so we rather trigger an immediate node
+	 * destruction.
+	 */
 	if (list_empty(&handle->node->list_handles)) {
-		bus1_node_stage_relock(handle->node, owner_info, list_notify);
+		if (1 || RB_EMPTY_NODE(&handle->node->owner.rb_id))
+			bus1_node_stage_relock(handle->node, owner_info,
+					       list_notify);
+		else
+			bus1_node_queue(handle->node, owner_info);
 	}
 }
 
@@ -751,13 +804,7 @@ bus1_handle_acquire(struct bus1_handle *handle,
 				      &handle->node->list_handles);
 
 			/* flush any release-notification */
-			mutex_lock(&peer_info->qlock);
-			if (bus1_queue_node_is_queued(&handle->node->qnode)) {
-				bus1_queue_remove(&peer_info->queue,
-						  &handle->node->qnode);
-				bus1_handle_unref(handle);
-			}
-			mutex_unlock(&peer_info->qlock);
+			bus1_node_dequeue(handle->node, peer_info);
 		}
 		mutex_unlock(&peer_info->lock);
 	}
