@@ -548,13 +548,16 @@ static void bus1_node_stage_relock(struct bus1_node *node,
 		 * now), wait for it to complete and then return. There is
 		 * nothing for us to do.
 		 */
-		if (!try_wait_for_completion(&node->completion)) {
+		if (list_notify &&
+		    !try_wait_for_completion(&node->completion)) {
 			mutex_unlock(&peer_info->lock);
 			wait_for_completion(&node->completion);
 			mutex_lock(&peer_info->lock);
 		}
-		return;
+		goto done;
 	}
+
+	WARN_ON(!list_notify);
 
 	list_del_init(&node->owner.link_node);
 	timestamp = 4;
@@ -610,7 +613,17 @@ static void bus1_node_stage_relock(struct bus1_node *node,
 	node->timestamp = timestamp;
 	write_seqcount_end(&peer_info->seqcount);
 
-	if (atomic_read(&node->owner.n_inflight) == 0)
+done:
+	/*
+	 * If either we successfully committed the destruction, or if we waited
+	 * for someone else to commit it, we must check n_inflight afterwards.
+	 * If we were the last one, we must also trigger uninstall of the owner
+	 * handle.
+	 * Note that not all paths here are guaranteed that node->owner.holder
+	 * is non-NULL, so we must check it again to avoid double uninstall.
+	 */
+	if (atomic_read(&node->owner.n_inflight) == 0 &&
+	    rcu_access_pointer(node->owner.holder))
 		bus1_handle_uninstall_owner(&node->owner, peer_info);
 }
 
@@ -656,11 +669,10 @@ static void bus1_handle_notify(struct list_head *list_notify)
 	}
 }
 
-static bool bus1_handle_detach_internal(struct bus1_handle *handle,
+static void bus1_handle_detach_internal(struct bus1_handle *handle,
 					struct bus1_peer_info *owner_info,
 					struct list_head *list_notify)
 {
-	bool destroyed = false;
 
 	lockdep_assert_held(&owner_info->lock);
 
@@ -671,40 +683,31 @@ static bool bus1_handle_detach_internal(struct bus1_handle *handle,
 	}
 
 	if (list_empty(&handle->node->list_handles)) {
-		if (list_notify)
-			bus1_node_stage_relock(handle->node, owner_info,
-					       list_notify);
-		destroyed = true;
+		bus1_node_stage_relock(handle->node, owner_info, list_notify);
 	}
-
-	return destroyed;
 }
 
-static bool bus1_handle_detach_owner(struct bus1_handle *handle,
+static void bus1_handle_detach_owner(struct bus1_handle *handle,
 				     struct bus1_peer_info *peer_info,
 				     struct list_head *list_notify)
 {
 	WARN_ON(!bus1_handle_is_owner(handle));
-	return bus1_handle_detach_internal(handle, peer_info, list_notify);
+	bus1_handle_detach_internal(handle, peer_info, list_notify);
 }
 
-static bool bus1_handle_detach_holder(struct bus1_handle *handle,
+static void bus1_handle_detach_holder(struct bus1_handle *handle,
 				      struct list_head *list_notify)
 {
 	struct bus1_peer_info *owner_info;
 	struct bus1_peer *owner;
-	bool destroyed = false;
 
 	WARN_ON(bus1_handle_is_owner(handle));
 	WARN_ON(rcu_access_pointer(handle->holder));
 
 	owner = bus1_handle_lock_owner(handle, &owner_info);
 	if (owner)
-		destroyed = bus1_handle_detach_internal(handle, owner_info,
-							list_notify);
+		bus1_handle_detach_internal(handle, owner_info, list_notify);
 	bus1_handle_unlock_peer(owner, owner_info);
-
-	return destroyed;
 }
 
 static struct bus1_handle *
@@ -761,17 +764,12 @@ static bool bus1_handle_release_internal(struct bus1_handle *handle,
 			/*
 			 * An owner can be detached and re-attached many times.
 			 * Only if the node destruction is committed, and it is
-			 * detached, then it is uninstalled. This might be
-			 * triggered either by the destruction *or* the detach.
-			 * So here we detach it, and if the node is destroyed
-			 * (which might be triggered by the detach), and the
-			 * destruction itself didn't uninstall it, then we
-			 * uninstall the handle.
+			 * detached, then it is uninstalled. This is always
+			 * triggered by the destruction during detach. We never
+			 * call it directly here.
 			 */
-			if (bus1_handle_detach_owner(handle, peer_info,
-						     list_notify) &&
-			    rcu_access_pointer(handle->holder))
-				bus1_handle_uninstall_owner(handle, peer_info);
+			bus1_handle_detach_owner(handle, peer_info,
+						 list_notify);
 		} else {
 			bus1_handle_uninstall_holder(handle, peer_info);
 			mutex_unlock(&peer_info->lock);
