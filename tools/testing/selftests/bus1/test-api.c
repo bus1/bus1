@@ -131,17 +131,21 @@ static void test_api_seed(void)
 {
 	struct bus1_client *client;
 	char *payload = "WOOF";
-	struct iovec vec = {
-		.iov_base = payload,
-		.iov_len = strlen(payload) + 1,
+	struct iovec vecs[] = {
+		{
+			.iov_base = payload,
+			.iov_len = strlen(payload) + 1,
+		},
 	};
-	uint64_t handles[] = { BUS1_NODE_FLAG_MANAGED | BUS1_NODE_FLAG_ALLOCATE };
+	uint64_t handles[] = {
+		BUS1_NODE_FLAG_MANAGED | BUS1_NODE_FLAG_ALLOCATE,
+	};
 	struct bus1_cmd_send send = {
 		.flags = BUS1_SEND_FLAG_SEED,
-		.ptr_vecs = (uintptr_t)&vec,
-		.n_vecs = 1,
-		.ptr_handles = (uintptr_t)&handles,
-		.n_handles = 1,
+		.ptr_vecs = (uintptr_t)vecs,
+		.n_vecs = sizeof(vecs) / sizeof(*vecs),
+		.ptr_handles = (uintptr_t)handles,
+		.n_handles = sizeof(handles) / sizeof(*handles),
 	};
 	struct bus1_cmd_recv recv = {
 		.flags = BUS1_RECV_FLAG_SEED,
