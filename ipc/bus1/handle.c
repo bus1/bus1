@@ -1226,41 +1226,60 @@ exit:
 /**
  * bus1_handle_release_by_id() - release a user handle
  * @peer_info:		peer to operate on
- * @id:			handle ID
+ * @idp:		pointer to handle ID
  *
  * This releases a *user* visible reference to the handle with the given ID.
+ * The usual allocation rules for @idp apply. If @idp was modified, 1 is
+ * returned. If @idp was not modified, 0 is returned. On error, a negative
+ * error code is returned.
  *
- * Return: 0 on success, negative error code on failure.
+ * Return: >=0 on success, negative error code on failure.
  */
-int bus1_handle_release_by_id(struct bus1_peer_info *peer_info, u64 id)
+int bus1_handle_release_by_id(struct bus1_peer *peer, u64 *idp)
 {
+	struct bus1_peer_info *peer_info = bus1_peer_dereference(peer);
 	struct bus1_handle *handle;
 	int r, n_user;
 
-	handle = bus1_handle_find_by_id(peer_info, id);
-	if (!handle)
-		return -ENXIO;
+	if (*idp & BUS1_NODE_FLAG_ALLOCATE) {
+		handle = bus1_handle_new_owner(*idp);
+		if (IS_ERR(handle))
+			return PTR_ERR(handle);
 
-	/* returns "old_value - 1", regardless whether it succeeded or not */
-	n_user = atomic_dec_if_positive(&handle->n_user);
-	if (n_user >= 0) {
-		/* DEC happened, but didn't drop to -1 */
-		r = 0;
-	} else if (n_user < -1) {
-		/* DEC did not happen, no ref owned */
-		r = -ENXIO;
-	} else {
-		/* DEC did not happen, try again locked */
 		mutex_lock(&peer_info->lock);
-		if (atomic_read(&handle->n_user) < 0) {
-			mutex_unlock(&peer_info->lock);
+		bus1_handle_attach_owner(handle, peer);
+		bus1_handle_install_owner(handle);
+		*idp = bus1_handle_userref_publish(handle, peer_info, 0, true);
+		WARN_ON(atomic_dec_return(&handle->n_user) != -1);
+		bus1_handle_release_unlock(handle, peer_info);
+
+		r = 1;
+	} else {
+		handle = bus1_handle_find_by_id(peer_info, *idp);
+		if (!handle)
+			return -ENXIO;
+
+		/* returns "old_value - 1", regardless whether it succeeded */
+		n_user = atomic_dec_if_positive(&handle->n_user);
+		if (n_user >= 0) {
+			/* DEC happened, but didn't drop to -1 */
+			r = 0;
+		} else if (n_user < -1) {
+			/* DEC did not happen, no ref owned */
 			r = -ENXIO;
-		} else if (atomic_dec_return(&handle->n_user) > -1) {
-			mutex_unlock(&peer_info->lock);
-			r = 0;
 		} else {
-			bus1_handle_release_unlock(handle, peer_info);
-			r = 0;
+			/* DEC did not happen, try again locked */
+			mutex_lock(&peer_info->lock);
+			if (atomic_read(&handle->n_user) < 0) {
+				mutex_unlock(&peer_info->lock);
+				r = -ENXIO;
+			} else if (atomic_dec_return(&handle->n_user) > -1) {
+				mutex_unlock(&peer_info->lock);
+				r = 0;
+			} else {
+				bus1_handle_release_unlock(handle, peer_info);
+				r = 0;
+			}
 		}
 	}
 
@@ -1271,33 +1290,51 @@ int bus1_handle_release_by_id(struct bus1_peer_info *peer_info, u64 id)
 /**
  * bus1_handle_destroy_by_id() - destroy a user handle
  * @peer_info:		peer to operate on
- * @id:			handle ID
+ * @idp:		pointer to handle ID
  *
- * This destroys the underlying node of the handle with the given ID.
+ * This destroys the underlying node of the handle with the given ID. The usual
+ * allocation rules for @idp apply. If @idp was modified, 1 is returned. If
+ * @idp was not modified, 0 is returned. On error, a negative error code is
+ * returned.
  *
- * Return: 0 on success, negative error code on failure.
+ * Return: >=0 on success, negative error code on failure.
  */
-int bus1_handle_destroy_by_id(struct bus1_peer_info *peer_info, u64 id)
+int bus1_handle_destroy_by_id(struct bus1_peer *peer, u64 *idp)
 {
+	struct bus1_peer_info *peer_info = bus1_peer_dereference(peer);
 	struct bus1_handle *handle;
 	int r;
 
-	handle = bus1_handle_find_by_id(peer_info, id);
-	if (!handle)
-		return -ENXIO;
+	if (*idp & BUS1_NODE_FLAG_ALLOCATE) {
+		handle = bus1_handle_new_owner(*idp);
+		if (IS_ERR(handle))
+			return PTR_ERR(handle);
 
-	mutex_lock(&peer_info->lock);
-	if (!bus1_handle_is_owner(handle) ||
-	    bus1_node_is_committed(handle->node)) {
-		r = -ENXIO;
-	} else {
+		mutex_lock(&peer_info->lock);
+		bus1_handle_attach_owner(handle, peer);
+		bus1_handle_install_owner(handle);
+		*idp = bus1_handle_userref_publish(handle, peer_info, 0, true);
 		bus1_node_stage(handle->node, peer_info);
-		r = 0;
+		mutex_unlock(&peer_info->lock);
+
+		r = 1;
+	} else {
+		handle = bus1_handle_find_by_id(peer_info, *idp);
+		if (!handle)
+			return -ENXIO;
+
+		mutex_lock(&peer_info->lock);
+		if (!bus1_handle_is_owner(handle) ||
+		    bus1_node_is_committed(handle->node)) {
+			r = -ENXIO;
+		} else {
+			bus1_node_stage(handle->node, peer_info);
+			r = 0;
+		}
+		mutex_unlock(&peer_info->lock);
 	}
-	mutex_unlock(&peer_info->lock);
 
 	bus1_handle_unref(handle);
-
 	return r;
 }
 
