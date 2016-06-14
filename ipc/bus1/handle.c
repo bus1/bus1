@@ -10,7 +10,6 @@
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 #include <linux/atomic.h>
 #include <linux/bitops.h>
-#include <linux/completion.h>
 #include <linux/err.h>
 #include <linux/kernel.h>
 #include <linux/kref.h>
@@ -71,7 +70,6 @@ enum {
  *			destruction is committed
  * @list_handles:	linked list of registered handles
  * @qnode:		queue entry for release notification
- * @completion:		destruction wait-queue
  * @owner:		embedded handle of node owner
  */
 struct bus1_node {
@@ -80,7 +78,6 @@ struct bus1_node {
 	u64 timestamp;
 	struct list_head list_handles;
 	struct bus1_queue_node qnode;
-	struct completion completion;
 	struct bus1_handle owner;
 };
 
@@ -192,7 +189,6 @@ static struct bus1_handle *bus1_handle_new_owner(u64 id)
 	node->timestamp = 0;
 	INIT_LIST_HEAD(&node->list_handles);
 	bus1_queue_node_init(&node->qnode, BUS1_QUEUE_NODE_HANDLE_RELEASE);
-	init_completion(&node->completion);
 	bus1_handle_init(&node->owner, node);
 
 	if (id & BUS1_NODE_FLAG_PERSISTENT)
@@ -633,11 +629,9 @@ static void bus1_node_stage_flush(struct list_head *list_notify)
 			bus1_handle_qunlock(peer, peer_info);
 		}
 
-		if (bus1_handle_is_owner(h)) {
-			/* nodes pin their owners until destroyed */
-			complete_all(&h->node->completion);
+		/* nodes pin their owners until destroyed */
+		if (bus1_handle_is_owner(h))
 			bus1_handle_unref(h);
-		}
 
 		/* drop ref owned by @list_notify */
 		bus1_handle_unref(h);
@@ -657,15 +651,11 @@ static void bus1_node_stage(struct bus1_node *node,
 
 	if (unlikely(node->timestamp > 1)) {
 		/*
-		 * If someone else already staged it (or is staging it right
-		 * now), wait for it to complete and then return. There is
-		 * nothing for us to do.
+		 * If someone else already staged it, we simply verify they
+		 * also committed it and return. There is nothing else for us
+		 * to do.
 		 */
-		if (!try_wait_for_completion(&node->completion)) {
-			mutex_unlock(&peer_info->lock);
-			wait_for_completion(&node->completion);
-			mutex_lock(&peer_info->lock);
-		}
+		WARN_ON(node->timestamp & 1);
 		goto done;
 	}
 
@@ -705,7 +695,7 @@ static void bus1_node_stage(struct bus1_node *node,
 	 * Queue owner notification only if the owner was ever accessible. If
 	 * it never got any ID assigned, the peer does not know about it and we
 	 * better skip the notification. We still queue it on @list_notify to
-	 * trigger the completion, though.
+	 * trigger the cleanup.
 	 */
 	if (likely(!RB_EMPTY_NODE(&node->owner.rb_id))) {
 		bus1_handle_ref(&node->owner);
@@ -714,7 +704,6 @@ static void bus1_node_stage(struct bus1_node *node,
 			wake_up_interruptible(peer_info->waitq);
 	}
 
-	/* always keep owner at tail; triggers complete_all() during flush */
 	list_add_tail(&node->owner.link_node, &list_notify);
 
 	write_seqcount_begin(&peer_info->seqcount);
@@ -1305,8 +1294,8 @@ int bus1_handle_destroy_by_id(struct bus1_peer_info *peer_info, u64 id)
 	} else {
 		/*
 		 * If we're not the first to destroy the node, pretend the node
-		 * does not exist, but still wait for the destruction to
-		 * complete.
+		 * does not exist, but still call into the destruction to make
+		 * sure we are in-sync.
 		 */
 		if (handle->node->timestamp != 1)
 			r = -ENXIO;
