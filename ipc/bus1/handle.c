@@ -9,6 +9,7 @@
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 #include <linux/atomic.h>
+#include <linux/bitops.h>
 #include <linux/completion.h>
 #include <linux/err.h>
 #include <linux/kernel.h>
@@ -58,6 +59,10 @@ struct bus1_handle {
 	};
 };
 
+enum {
+	BUS1_NODE_BIT_PERSISTENT,
+};
+
 /**
  * struct bus1_node - node objects
  * @ref:		object ref-count
@@ -67,18 +72,22 @@ struct bus1_handle {
  * @list_handles:	linked list of registered handles
  * @qnode:		queue entry for release notification
  * @completion:		destruction wait-queue
- * @persistent:		whether node survives RESETs
  * @owner:		embedded handle of node owner
  */
 struct bus1_node {
 	struct kref ref;
+	unsigned long flags;
 	u64 timestamp;
 	struct list_head list_handles;
 	struct bus1_queue_node qnode;
 	struct completion completion;
-	bool persistent : 1;
 	struct bus1_handle owner;
 };
+
+static bool bus1_node_is_persistent(struct bus1_node *node)
+{
+	return node && test_bit(BUS1_NODE_BIT_PERSISTENT, &node->flags);
+}
 
 static void bus1_node_free(struct kref *ref)
 {
@@ -179,12 +188,15 @@ static struct bus1_handle *bus1_handle_new_owner(u64 id)
 		return ERR_PTR(-ENOMEM);
 
 	kref_init(&node->ref);
+	node->flags = 0;
 	node->timestamp = 0;
 	INIT_LIST_HEAD(&node->list_handles);
 	bus1_queue_node_init(&node->qnode, BUS1_QUEUE_NODE_HANDLE_RELEASE);
 	init_completion(&node->completion);
-	node->persistent = id & BUS1_NODE_FLAG_PERSISTENT;
 	bus1_handle_init(&node->owner, node);
+
+	if (id & BUS1_NODE_FLAG_PERSISTENT)
+		__set_bit(BUS1_NODE_BIT_PERSISTENT, &node->flags);
 
 	/* node->owner owns a reference to the node, drop the initial one */
 	kref_put(&node->ref, bus1_node_no_free);
@@ -1345,7 +1357,7 @@ void bus1_handle_flush_all(struct bus1_peer_info *peer_info, bool final)
 		/* XXX: ignore entries with an ID higher than our start id */
 
 		if (bus1_handle_is_owner(h)) {
-			if (!final && h->node->persistent) {
+			if (!final && bus1_node_is_persistent(h->node)) {
 				next = rb_next(n);
 				continue;
 			}
