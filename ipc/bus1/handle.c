@@ -192,7 +192,8 @@ static struct bus1_handle *bus1_handle_new_owner(u64 id)
 	node->flags = 0;
 	node->timestamp = 0;
 	INIT_LIST_HEAD(&node->list_handles);
-	bus1_queue_node_init(&node->qnode, BUS1_QUEUE_NODE_HANDLE_RELEASE);
+	bus1_queue_node_init(&node->qnode, BUS1_QUEUE_NODE_HANDLE_RELEASE,
+			     (unsigned long)node);
 	bus1_handle_init(&node->owner, node);
 
 	if (id & BUS1_NODE_FLAG_PERSISTENT)
@@ -413,7 +414,8 @@ static void bus1_handle_attach_internal(struct bus1_handle *handle,
 	WARN_ON(bus1_node_is_committed(handle->node));
 
 	bus1_queue_node_init(&handle->qnode,
-			     BUS1_QUEUE_NODE_HANDLE_DESTRUCTION);
+			     BUS1_QUEUE_NODE_HANDLE_DESTRUCTION,
+			     (unsigned long)handle);
 	atomic_set(&handle->n_inflight, 1);
 	rcu_assign_pointer(handle->holder, peer);
 	list_add_tail(&handle->link_node, &handle->node->list_handles);

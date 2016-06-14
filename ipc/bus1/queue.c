@@ -147,6 +147,55 @@ void bus1_queue_post_flush(struct bus1_queue *queue)
 	queue->n_committed = 0;
 }
 
+static int bus1_queue_node_compare(struct bus1_queue_node *a,
+				   struct bus1_queue_node *b)
+{
+	u64 ts_a, ts_b;
+
+	/*
+	 * This compares two nodes. As first-level ordering we use the
+	 * timestamps, as second-level ordering we use the sender-tag.
+	 *
+	 * Timestamp-based ordering should be obvious. We simply make sure that
+	 * any message with a lower timestamp is always considered to be first.
+	 * However, due to the distributed nature of the queue-clocks, multiple
+	 * messages might end up with the same timestamp. A multicast picks the
+	 * highest of its destination clocks and bumps everyone else. As such,
+	 * the picked timestamp for a multicast might not be unique, if another
+	 * multicast with only partial destination overlap races it and happens
+	 * to get the same timestamp via a distinct destination clock. If that
+	 * happens, we guarantee a stable order by comparing the sender-tag of
+	 * the nodes. The sender-tag can never be equal, since we allocate
+	 * the unique final timestamp via the sender-clock (i.e., if the
+	 * sender-tag matches, the timestamp must be distinct).
+	 *
+	 * Note that we strictly rely on any multicast to be staged before its
+	 * final commit. This guarantees that if a node is queued with a commit
+	 * timestamp, it can never be lower than the commit timestamp of any
+	 * other committed node, except if it was already staged with a lower
+	 * staging timestamp (as such it blocks the conflicting entry). This
+	 * also implies that if two nodes share a timestamp, both will
+	 * necessarily block each other until both are committed (since shared
+	 * timestamps imply that an entry is guaranteed to be staged before a
+	 * conflicting entry is committed).
+	 */
+
+	ts_a = bus1_queue_node_get_timestamp(a);
+	ts_b = bus1_queue_node_get_timestamp(b);
+
+	if (ts_a < ts_b)
+		return -1;
+	else if (ts_a > ts_b)
+		return 1;
+	else if (a->sender < b->sender)
+		return -1;
+	else if (a->sender > b->sender)
+		return 1;
+
+	WARN_ON(a != b);
+	return 0;
+}
+
 /**
  * bus1_queue_stage() - stage queue entry with new timestamp
  * @queue:		queue to operate on
@@ -176,6 +225,7 @@ bool bus1_queue_stage(struct bus1_queue *queue,
 	struct bus1_queue_node *iter;
 	bool is_leftmost, readable;
 	u64 ts;
+	int r;
 
 	bus1_queue_assert_held(queue);
 	ts = bus1_queue_node_get_timestamp(node);
@@ -197,7 +247,9 @@ bool bus1_queue_stage(struct bus1_queue *queue,
 	/*
 	 * On updates, we remove our entry and re-insert it with a higher
 	 * timestamp. Hence, _iff_ we were the first entry, we might uncover
-	 * some new front entry. Make sure we mark it as front entry then.
+	 * some new front entry. Make sure we mark it as front entry then. Note
+	 * that we know that our entry must be marked staging, so it cannot be
+	 * set as front, yet. If there is a front, it is some other node.
 	 */
 	front = rcu_dereference_protected(queue->front,
 					  bus1_queue_is_held(queue));
@@ -219,12 +271,9 @@ bool bus1_queue_stage(struct bus1_queue *queue,
 		n = rb_next(&node->rb);
 		if (n) {
 			iter = container_of(n, struct bus1_queue_node, rb);
-			ts = bus1_queue_node_get_timestamp(iter);
-			if (!(ts & 1)) {
-				if (ts < timestamp ||
-				    (ts == timestamp && iter < node))
-					rcu_assign_pointer(queue->front, n);
-			}
+			if (bus1_queue_node_is_committed(iter) &&
+			    bus1_queue_node_compare(iter, node) < 0)
+				rcu_assign_pointer(queue->front, n);
 		}
 	}
 
@@ -233,6 +282,8 @@ bool bus1_queue_stage(struct bus1_queue *queue,
 		/* must be staging, so no need to adjust queue->n_committed */
 	}
 
+	bus1_queue_node_set_timestamp(node, timestamp);
+
 	/* re-insert into sorted rb-tree with new timestamp */
 	slot = &queue->messages.rb_node;
 	n = NULL;
@@ -240,8 +291,8 @@ bool bus1_queue_stage(struct bus1_queue *queue,
 	while (*slot) {
 		n = *slot;
 		iter = container_of(n, struct bus1_queue_node, rb);
-		ts = bus1_queue_node_get_timestamp(iter);
-		if (timestamp < ts || (timestamp == ts && node < iter)) {
+		r = bus1_queue_node_compare(node, iter);
+		if (r < 0) {
 			slot = &n->rb_left;
 		} else {
 			slot = &n->rb_right;
@@ -251,7 +302,6 @@ bool bus1_queue_stage(struct bus1_queue *queue,
 
 	rb_link_node(&node->rb, n, slot);
 	rb_insert_color(&node->rb, &queue->messages);
-	bus1_queue_node_set_timestamp(node, timestamp);
 
 	if (!(timestamp & 1)) {
 		if (!bus1_queue_node_is_silent(node))
@@ -283,7 +333,6 @@ bool bus1_queue_remove(struct bus1_queue *queue,
 	struct bus1_queue_node *iter;
 	struct rb_node *front, *n;
 	bool readable;
-	u64 ts;
 
 	bus1_queue_assert_held(queue);
 
@@ -305,8 +354,7 @@ bool bus1_queue_remove(struct bus1_queue *queue,
 		n = rb_next(&node->rb);
 		if (n) {
 			iter = container_of(n, struct bus1_queue_node, rb);
-			ts = bus1_queue_node_get_timestamp(iter);
-			if (ts & 1)
+			if (!bus1_queue_node_is_committed(iter))
 				n = NULL;
 		}
 		rcu_assign_pointer(queue->front, n);
@@ -349,15 +397,19 @@ struct bus1_queue_node *bus1_queue_peek(struct bus1_queue *queue)
  * bus1_queue_node_init() - initialize queue node
  * @node:		node to initialize
  * @type:		message type
+ * @sender:		sender tag
  *
  * This initializes a previously unused node, and prepares it for use with a
  * message queue.
  */
-void bus1_queue_node_init(struct bus1_queue_node *node, unsigned int type)
+void bus1_queue_node_init(struct bus1_queue_node *node,
+			  unsigned int type,
+			  unsigned long sender)
 {
 	RB_CLEAR_NODE(&node->rb);
 	node->timestamp_and_type = 0;
 	bus1_queue_node_set_type(node, type);
+	node->sender = sender;
 }
 
 /**

@@ -76,7 +76,10 @@
  *       destination of the message might fail with EAGAIN. That is, a message
  *       might be in-flight for an undefined amount of time.
  *
- *       In other words: Message transmission is not instantaneous.
+ *       In other words: Message transmission is not instantaneous. This is
+ *       purely by choice, though. If required, transmissions could be easily
+ *       made instantaneous, at the cost of shortly blocking on other
+ *       conflicting tasks.
  *
  * The queue implementation uses an rb-tree (ordered by timestamps), with a
  * cached pointer to the front of the queue. The front pointer is only set if
@@ -123,6 +126,7 @@ struct bus1_queue {
  * @rb:				link into sorted message queue
  * @rcu:			rcu
  * @timestamp_and_type:		message timestamp and type of parent object
+ * @sender:			sender tag
  */
 struct bus1_queue_node {
 	union {
@@ -130,6 +134,7 @@ struct bus1_queue_node {
 		struct rcu_head rcu;
 	};
 	u64 timestamp_and_type;
+	unsigned long sender;
 };
 
 /* queue */
@@ -144,7 +149,9 @@ bool bus1_queue_remove(struct bus1_queue *queue,
 struct bus1_queue_node *bus1_queue_peek(struct bus1_queue *queue);
 
 /* nodes */
-void bus1_queue_node_init(struct bus1_queue_node *node, unsigned int type);
+void bus1_queue_node_init(struct bus1_queue_node *node,
+			  unsigned int type,
+			  unsigned long sender);
 void bus1_queue_node_destroy(struct bus1_queue_node *node);
 bool bus1_queue_node_is_queued(struct bus1_queue_node *node);
 bool bus1_queue_node_is_committed(struct bus1_queue_node *node);

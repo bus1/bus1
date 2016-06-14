@@ -286,6 +286,7 @@ bus1_transaction_instantiate_message(struct bus1_transaction *transaction,
 	message = bus1_message_new(transaction->length_vecs,
 			transaction->param->n_fds,
 			transaction->param->n_handles,
+			(unsigned long)transaction->peer_info,
 			transaction->param->flags & BUS1_SEND_FLAG_SILENT);
 	if (IS_ERR(message))
 		return message;

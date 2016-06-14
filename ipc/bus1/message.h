@@ -58,6 +58,7 @@ struct bus1_message {
 struct bus1_message *bus1_message_new(size_t n_bytes,
 				      size_t n_files,
 				      size_t n_handles,
+				      unsigned long sender,
 				      bool silent);
 struct bus1_message *bus1_message_free(struct bus1_message *message,
 				       struct bus1_peer_info *peer_info);
