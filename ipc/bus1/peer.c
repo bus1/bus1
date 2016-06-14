@@ -440,27 +440,27 @@ error:
 static int bus1_peer_ioctl_node_destroy(struct bus1_peer *peer,
 					unsigned long arg)
 {
-	u64 offset;
+	u64 id;
 
-	BUILD_BUG_ON(_IOC_SIZE(BUS1_CMD_NODE_DESTROY) != sizeof(offset));
+	BUILD_BUG_ON(_IOC_SIZE(BUS1_CMD_NODE_DESTROY) != sizeof(id));
 
-	if (get_user(offset, (const u64 __user *)arg))
+	if (get_user(id, (const u64 __user *)arg))
 		return -EFAULT;
 
-	return bus1_handle_destroy_by_id(bus1_peer_dereference(peer), offset);
+	return bus1_handle_destroy_by_id(bus1_peer_dereference(peer), id);
 }
 
 static int bus1_peer_ioctl_handle_release(struct bus1_peer *peer,
 					  unsigned long arg)
 {
-	u64 offset;
+	u64 id;
 
-	BUILD_BUG_ON(_IOC_SIZE(BUS1_CMD_HANDLE_RELEASE) != sizeof(offset));
+	BUILD_BUG_ON(_IOC_SIZE(BUS1_CMD_HANDLE_RELEASE) != sizeof(id));
 
-	if (get_user(offset, (const u64 __user *)arg))
+	if (get_user(id, (const u64 __user *)arg))
 		return -EFAULT;
 
-	return bus1_handle_release_by_id(bus1_peer_dereference(peer), offset);
+	return bus1_handle_release_by_id(bus1_peer_dereference(peer), id);
 }
 
 static int bus1_peer_ioctl_slice_release(struct bus1_peer *peer,
