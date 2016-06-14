@@ -541,9 +541,13 @@ static void bus1_node_stage_relock(struct bus1_node *node,
 	u64 timestamp;
 
 	lockdep_assert_held(&peer_info->lock);
-	WARN_ON(!node->owner.holder);
 
 	if (unlikely(node->timestamp > 1)) {
+		/*
+		 * If someone else already staged it (or is staging it right
+		 * now), wait for it to complete and then return. There is
+		 * nothing for us to do.
+		 */
 		if (!try_wait_for_completion(&node->completion)) {
 			mutex_unlock(&peer_info->lock);
 			wait_for_completion(&node->completion);
@@ -583,9 +587,16 @@ static void bus1_node_stage_relock(struct bus1_node *node,
 
 	bus1_queue_sync(&peer_info->queue, timestamp);
 	timestamp = bus1_queue_tick(&peer_info->queue);
-
 	holder = rcu_access_pointer(node->owner.holder);
-	if (holder && rcu_access_pointer(holder->info)) {
+	WARN_ON(!holder);
+
+	/*
+	 * Queue owner notification only if the owner was ever accessible. If
+	 * it never got any ID assigned, the peer does not know about it and we
+	 * better skip the notification. We still queue it on @list_notify to
+	 * trigger the completion, though.
+	 */
+	if (likely(!RB_EMPTY_NODE(&node->owner.rb_id))) {
 		bus1_handle_ref(&node->owner);
 		if (bus1_queue_stage(&peer_info->queue, &node->owner.qnode,
 				     timestamp - 1))
@@ -599,7 +610,7 @@ static void bus1_node_stage_relock(struct bus1_node *node,
 	node->timestamp = timestamp;
 	write_seqcount_end(&peer_info->seqcount);
 
-	if (holder && atomic_read(&node->owner.n_inflight) == 0)
+	if (atomic_read(&node->owner.n_inflight) == 0)
 		bus1_handle_uninstall_owner(&node->owner, peer_info);
 }
 
