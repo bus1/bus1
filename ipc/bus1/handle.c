@@ -65,6 +65,7 @@ enum {
 /**
  * struct bus1_node - node objects
  * @ref:		object ref-count
+ * @flags:		node flags
  * @timestamp:		destruction timestamp; 0 if not live yet; 1 if live;
  *			even timestamp if destruction is committed
  * @list_handles:	linked list of registered handles
