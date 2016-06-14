@@ -54,7 +54,7 @@ static void test_api_client(void)
 	assert(!c);
 }
 
-int client_query(struct bus1_client *client)
+static int client_query(struct bus1_client *client)
 {
 	struct bus1_cmd_peer_init query = {};
 	int r;
