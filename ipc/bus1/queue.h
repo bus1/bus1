@@ -86,7 +86,7 @@
  *
  * The queue itself must be embedded into the parent peer structure. We do not
  * access any of the peer-data from within the queue, but we rely on the
- * peer-lock to be held by the caller (see each function for details of which
+ * peer-qlock to be held by the caller (see each function for details of which
  * locks are required). Therefore, the lockdep annotations might access the
  * surrounding peer object that the queue is embedded in. See
  * bus1_queue_init_internal() for details.
@@ -165,7 +165,7 @@ u64 bus1_queue_node_get_timestamp(struct bus1_queue_node *node);
  * and its predecessor (odd numbered). Both are uniquely allocated to the
  * caller.
  *
- * The caller must hold the peer lock.
+ * The caller must hold the peer qlock.
  *
  * Return: New clock value is returned.
  */
@@ -187,7 +187,7 @@ static inline u64 bus1_queue_tick(struct bus1_queue *queue)
  * This function works with even *and* odd timestamps. It is internally
  * converted to the corresponding even timestamp, in case it is odd.
  *
- * The caller must hold the peer lock.
+ * The caller must hold the peer qlock.
  *
  * Return: New clock value is returned.
  */

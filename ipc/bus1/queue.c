@@ -20,10 +20,10 @@
 /* lockdep assertion to verify the parent peer is locked */
 #define bus1_queue_assert_held(_queue)				\
 	lockdep_assert_held(&container_of((_queue),		\
-					  struct bus1_peer_info, queue)->lock)
+					  struct bus1_peer_info, queue)->qlock)
 #define bus1_queue_is_held(_queue)				\
 	lockdep_is_held(&container_of((_queue),			\
-				      struct bus1_peer_info, queue)->lock)
+				      struct bus1_peer_info, queue)->qlock)
 
 /* distinguish different node types via these masks */
 #define BUS1_QUEUE_TYPE_SHIFT (62)
@@ -35,7 +35,7 @@
  *
  * This queries the node type that was provided via the node constructor. A
  * node never changes its type during its entire lifetime.
- * The caller must hold the peer lock or own the queue-node.
+ * The caller must hold the peer qlock or own the queue-node.
  *
  * Return: Type of @node is returned.
  */
@@ -50,7 +50,7 @@ unsigned int bus1_queue_node_get_type(struct bus1_queue_node *node)
  * @node:		node to query
  *
  * This queries the node timestamp that is currently set on this node. The
- * caller must hold the peer lock or own the queue-node.
+ * caller must hold the peer qlock or own the queue-node.
  *
  * Return: Timestamp of @node is returned.
  */
@@ -332,7 +332,7 @@ bool bus1_queue_remove(struct bus1_queue *queue,
  * This only returns entries that are ready to be dequeued. Entries that are
  * still in staging mode will not be considered.
  *
- * The caller must hold the read-side peer-lock of the parent peer.
+ * The caller must hold the read-side peer-qlock of the parent peer.
  *
  * Return: Pointer to first available entry, NULL if none available.
  */
@@ -340,14 +340,9 @@ struct bus1_queue_node *bus1_queue_peek(struct bus1_queue *queue)
 {
 	struct rb_node *n;
 
-	bus1_queue_assert_held(queue);
-
 	n = rcu_dereference_protected(queue->front,
 				      bus1_queue_is_held(queue));
-	if (!n)
-		return NULL;
-
-	return container_of(n, struct bus1_queue_node, rb);
+	return n ? container_of(n, struct bus1_queue_node, rb) : NULL;
 }
 
 /**

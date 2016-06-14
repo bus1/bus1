@@ -108,9 +108,12 @@ static void bus1_transaction_destroy(struct bus1_transaction *transaction)
 		message->transaction.next = NULL;
 		message->transaction.dest = (struct bus1_handle_dest){};
 
-		mutex_lock(&peer_info->lock);
+		mutex_lock(&peer_info->qlock);
 		if (bus1_queue_remove(&peer_info->queue, &message->qnode))
 			wake_up_interruptible(peer_info->waitq);
+		mutex_unlock(&peer_info->qlock);
+
+		mutex_lock(&peer_info->lock);
 		bus1_message_deallocate(message, peer_info);
 		mutex_unlock(&peer_info->lock);
 
@@ -426,7 +429,6 @@ bus1_transaction_commit_one(struct bus1_transaction *transaction,
 
 	if (id == BUS1_HANDLE_INVALID) {
 		bus1_queue_remove(&peer_info->queue, &message->qnode);
-		bus1_message_deallocate(message, peer_info);
 		return false;
 	}
 
@@ -483,20 +485,23 @@ int bus1_transaction_commit(struct bus1_transaction *transaction)
 		bus1_active_lockdep_acquired(&peer->active);
 		peer_info = bus1_peer_dereference(peer);
 
-		mutex_lock(&peer_info->lock);
+		mutex_lock(&peer_info->qlock);
 		timestamp = bus1_queue_sync(&peer_info->queue, timestamp);
 		timestamp = bus1_queue_tick(&peer_info->queue);
 		if (bus1_queue_stage(&peer_info->queue, &message->qnode,
 				     timestamp - 1))
 			wake_up_interruptible(peer_info->waitq);
-		mutex_unlock(&peer_info->lock);
+		mutex_unlock(&peer_info->qlock);
 
 		bus1_active_lockdep_released(&peer->active);
 	}
 
-	mutex_lock(&transaction->peer_info->lock);
+	mutex_lock(&transaction->peer_info->qlock);
 	timestamp = bus1_queue_sync(&transaction->peer_info->queue, timestamp);
 	timestamp = bus1_queue_tick(&transaction->peer_info->queue);
+	mutex_unlock(&transaction->peer_info->qlock);
+
+	mutex_lock(&transaction->peer_info->lock);
 	bus1_handle_transfer_install(&transaction->handles, transaction->peer);
 	mutex_unlock(&transaction->peer_info->lock);
 
@@ -507,6 +512,7 @@ int bus1_transaction_commit(struct bus1_transaction *transaction)
 		peer_info = bus1_peer_dereference(peer);
 
 		mutex_lock(&peer_info->lock);
+		mutex_lock(&peer_info->qlock);
 
 		bus1_queue_sync(&peer_info->queue, timestamp);
 
@@ -515,6 +521,7 @@ int bus1_transaction_commit(struct bus1_transaction *transaction)
 					     false);
 		r = (idp && put_user(id, idp)) ? -EFAULT : 0;
 
+		mutex_unlock(&peer_info->qlock);
 		mutex_unlock(&peer_info->lock);
 
 		bus1_active_lockdep_released(&peer->active);
@@ -545,8 +552,12 @@ int bus1_transaction_commit(struct bus1_transaction *transaction)
 		bus1_handle_inflight_install(&message->handles, dest.raw_peer);
 
 		mutex_lock(&peer_info->lock);
+		mutex_lock(&peer_info->qlock);
 		res = bus1_transaction_commit_one(transaction, message, &dest,
 						  timestamp);
+		mutex_unlock(&peer_info->qlock);
+		if (!res)
+			bus1_message_deallocate(message, peer_info);
 		mutex_unlock(&peer_info->lock);
 
 		if (!res)
