@@ -66,8 +66,7 @@ enum {
  * struct bus1_node - node objects
  * @ref:		object ref-count
  * @timestamp:		destruction timestamp; 0 if not live yet; 1 if live;
- *			3 if selected for destruction; even timestamp if
- *			destruction is committed
+ *			even timestamp if destruction is committed
  * @list_handles:	linked list of registered handles
  * @qnode:		queue entry for release notification
  * @owner:		embedded handle of node owner
@@ -86,13 +85,18 @@ static bool bus1_node_is_persistent(struct bus1_node *node)
 	return node && test_bit(BUS1_NODE_BIT_PERSISTENT, &node->flags);
 }
 
+static bool bus1_node_is_committed(struct bus1_node *node)
+{
+	return node && !(node->timestamp & 1);
+}
+
 static void bus1_node_free(struct kref *ref)
 {
 	struct bus1_node *node = container_of(ref, struct bus1_node, ref);
 
 	WARN_ON(rcu_access_pointer(node->owner.holder));
 	WARN_ON(!list_empty(&node->list_handles));
-	WARN_ON(node->timestamp & 1);
+	WARN_ON(!bus1_node_is_committed(node));
 	bus1_queue_node_destroy(&node->qnode);
 	kfree_rcu(node, owner.qnode.rcu);
 }
@@ -406,7 +410,7 @@ static void bus1_handle_attach_internal(struct bus1_handle *handle,
 
 	WARN_ON(rcu_access_pointer(handle->holder));
 	WARN_ON(bus1_handle_was_attached(handle));
-	WARN_ON(!(handle->node->timestamp & 1));
+	WARN_ON(bus1_node_is_committed(handle->node));
 
 	bus1_queue_node_init(&handle->qnode,
 			     BUS1_QUEUE_NODE_HANDLE_DESTRUCTION);
@@ -445,9 +449,10 @@ static void bus1_handle_attach_owner(struct bus1_handle *handle,
 static bool bus1_handle_attach_holder(struct bus1_handle *handle,
 				      struct bus1_peer *holder)
 {
-	if (!(handle->node->timestamp & 1))
+	if (bus1_node_is_committed(handle->node))
 		return false;
 
+	WARN_ON(handle->node->timestamp != 1);
 	WARN_ON(bus1_handle_is_owner(handle));
 	bus1_handle_attach_internal(handle, holder);
 
@@ -555,7 +560,7 @@ static void bus1_handle_uninstall_owner(struct bus1_handle *handle,
 					struct bus1_peer_info *peer_info)
 {
 	WARN_ON(!bus1_handle_is_owner(handle));
-	WARN_ON(handle->node->timestamp & 1);
+	WARN_ON(!bus1_node_is_committed(handle->node));
 	WARN_ON(!list_empty(&handle->node->list_handles));
 
 	/*
@@ -649,22 +654,11 @@ static void bus1_node_stage(struct bus1_node *node,
 
 	lockdep_assert_held(&peer_info->lock);
 
-	if (unlikely(node->timestamp > 1)) {
-		/*
-		 * If someone else already staged it, we simply verify they
-		 * also committed it and return. There is nothing else for us
-		 * to do.
-		 */
-		WARN_ON(node->timestamp & 1);
+	if (bus1_node_is_committed(node))
 		goto done;
-	}
 
 	list_del_init(&node->owner.link_node);
-	timestamp = 4;
-
-	write_seqcount_begin(&peer_info->seqcount);
-	node->timestamp = timestamp - 1;
-	write_seqcount_end(&peer_info->seqcount);
+	timestamp = 2;
 
 	while ((h = list_first_entry_or_null(&node->list_handles,
 					     struct bus1_handle,
@@ -738,7 +732,8 @@ static void bus1_handle_detach_internal(struct bus1_handle *handle,
 	 * touch @link_node. The destruction will clear all stale handles when
 	 * done, so we can simply ignore it in that case.
 	 */
-	if (handle->node->timestamp == 1 && !list_empty(&handle->link_node)) {
+	if (!bus1_node_is_committed(handle->node) &&
+	    !list_empty(&handle->link_node)) {
 		list_del_init(&handle->link_node);
 		if (!bus1_handle_is_owner(handle))
 			bus1_handle_unref(handle);
@@ -792,7 +787,7 @@ bus1_handle_acquire(struct bus1_handle *handle,
 
 		/* in case of OWNERs, we allow re-attach */
 		mutex_lock(&peer_info->lock);
-		if (handle->node->timestamp > 1) {
+		if (bus1_node_is_committed(handle->node)) {
 			handle = NULL;
 		} else {
 			atomic_inc(&handle->n_inflight);
@@ -1289,20 +1284,12 @@ int bus1_handle_destroy_by_id(struct bus1_peer_info *peer_info, u64 id)
 		return -ENXIO;
 
 	mutex_lock(&peer_info->lock);
-	if (!bus1_handle_is_owner(handle)) {
+	if (!bus1_handle_is_owner(handle) ||
+	    bus1_node_is_committed(handle->node)) {
 		r = -ENXIO;
 	} else {
-		/*
-		 * If we're not the first to destroy the node, pretend the node
-		 * does not exist, but still call into the destruction to make
-		 * sure we are in-sync.
-		 */
-		if (handle->node->timestamp != 1)
-			r = -ENXIO;
-		else
-			r = 0;
-
 		bus1_node_stage(handle->node, peer_info);
+		r = 0;
 	}
 	mutex_unlock(&peer_info->lock);
 
@@ -1334,7 +1321,7 @@ void bus1_handle_flush_all(struct bus1_peer_info *peer_info, bool final)
 			}
 
 			bus1_handle_ref(h);
-			live = !!(h->node->timestamp & 1);
+			live = !bus1_node_is_committed(h->node);
 			if (live) {
 				atomic_inc_return(&h->n_inflight);
 				bus1_node_stage(h->node, peer_info);
