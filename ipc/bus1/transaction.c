@@ -110,7 +110,7 @@ static void bus1_transaction_destroy(struct bus1_transaction *transaction)
 
 		mutex_lock(&peer_info->lock);
 		if (bus1_queue_remove(&peer_info->queue, &message->qnode))
-			bus1_peer_wake(dest.raw_peer);
+			wake_up_interruptible(peer_info->waitq);
 		bus1_message_deallocate(message, peer_info);
 		mutex_unlock(&peer_info->lock);
 
@@ -419,7 +419,7 @@ bus1_transaction_commit_one(struct bus1_transaction *transaction,
 
 	if (!message->slice) {
 		if (atomic_inc_return(&peer_info->n_dropped) == 1)
-			bus1_peer_wake(dest->raw_peer);
+			wake_up_interruptible(peer_info->waitq);
 	} else if (bus1_queue_node_is_queued(&message->qnode)) {
 		id = bus1_handle_dest_export(dest, peer_info, timestamp, true);
 	}
@@ -432,7 +432,7 @@ bus1_transaction_commit_one(struct bus1_transaction *transaction,
 
 	message->data.destination = id;
 	if (bus1_queue_stage(&peer_info->queue, &message->qnode, timestamp))
-		bus1_peer_wake(dest->raw_peer);
+		wake_up_interruptible(peer_info->waitq);
 
 	return true;
 }
@@ -488,7 +488,7 @@ int bus1_transaction_commit(struct bus1_transaction *transaction)
 		timestamp = bus1_queue_tick(&peer_info->queue);
 		if (bus1_queue_stage(&peer_info->queue, &message->qnode,
 				     timestamp - 1))
-			bus1_peer_wake(peer);
+			wake_up_interruptible(peer_info->waitq);
 		mutex_unlock(&peer_info->lock);
 
 		bus1_active_lockdep_released(&peer->active);

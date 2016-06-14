@@ -114,7 +114,8 @@ bus1_peer_info_free(struct bus1_peer_info *peer_info)
 	return NULL;
 }
 
-static struct bus1_peer_info *bus1_peer_info_new(size_t pool_size)
+static struct bus1_peer_info *bus1_peer_info_new(wait_queue_head_t *waitq,
+						 size_t pool_size)
 {
 	struct bus1_peer_info *peer_info;
 	int r;
@@ -129,6 +130,7 @@ static struct bus1_peer_info *bus1_peer_info_new(size_t pool_size)
 	mutex_init(&peer_info->lock);
 	peer_info->cred = get_cred(current_cred());
 	peer_info->pid_ns = get_pid_ns(task_active_pid_ns(current));
+	peer_info->waitq = waitq;
 	peer_info->user = NULL;
 	peer_info->seed = NULL;
 	bus1_user_quota_init(&peer_info->quota);
@@ -289,7 +291,7 @@ int bus1_peer_ioctl_init(struct bus1_peer *peer, unsigned long arg)
 	 * bus1_active_activate() for details). Hence, borrowing the waitq-lock
 	 * is perfectly fine.
 	 */
-	peer_info = bus1_peer_info_new(param.pool_size);
+	peer_info = bus1_peer_info_new(&peer->waitq, param.pool_size);
 	if (IS_ERR(peer_info))
 		return PTR_ERR(peer_info);
 
@@ -400,7 +402,7 @@ static int bus1_peer_ioctl_clone(struct bus1_peer *peer,
 	}
 	clone_file->private_data = clone; /* released via f_op->release() */
 
-	clone_info = bus1_peer_info_new(param.pool_size);
+	clone_info = bus1_peer_info_new(&clone->waitq, param.pool_size);
 	if (IS_ERR(clone_info)) {
 		r = PTR_ERR(clone_info);
 		clone_info = NULL;

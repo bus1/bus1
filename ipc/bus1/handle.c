@@ -579,7 +579,7 @@ static void bus1_node_stage_relock(struct bus1_node *node,
 			bus1_handle_ref(h);
 			if (bus1_queue_stage(&holder_info->queue, &h->qnode,
 					     timestamp - 1))
-				bus1_peer_wake(holder);
+				wake_up_interruptible(holder_info->waitq);
 			list_add(&h->link_node, list_notify);
 		} else {
 			bus1_handle_unref(h);
@@ -603,7 +603,7 @@ static void bus1_node_stage_relock(struct bus1_node *node,
 		bus1_handle_ref(&node->owner);
 		if (bus1_queue_stage(&peer_info->queue, &node->owner.qnode,
 				     timestamp - 1))
-			bus1_peer_wake(holder);
+			wake_up_interruptible(peer_info->waitq);
 	}
 
 	/* always keep owner at tail; triggers complete_all() during flush */
@@ -654,7 +654,7 @@ static void bus1_handle_notify(struct list_head *list_notify)
 			if (bus1_queue_stage(&peer_info->queue,
 					     &h->qnode,
 					     h->node->timestamp))
-				bus1_peer_wake(peer);
+				wake_up_interruptible(peer_info->waitq);
 		}
 		bus1_handle_unlock_peer(peer, peer_info);
 

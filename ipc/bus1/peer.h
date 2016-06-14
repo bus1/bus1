@@ -41,6 +41,7 @@ struct bus1_message;
  * @rcu:			rcu
  * @cred:			user creds
  * @pid_ns:			user pid namespace
+ * @waitq:			assigned wait-queue
  * @user:			object owner
  * @seed:			seed message
  * @quota:			quota handling
@@ -63,6 +64,7 @@ struct bus1_peer_info {
 	};
 	const struct cred *cred;
 	struct pid_namespace *pid_ns;
+	wait_queue_head_t *waitq;
 	struct bus1_user *user;
 	struct bus1_message *seed;
 	struct bus1_user_quota quota;
@@ -171,17 +173,6 @@ bus1_peer_dereference(struct bus1_peer *peer)
 {
 	return rcu_dereference_protected(peer->info,
 					 lockdep_is_held(&peer->active));
-}
-
-/**
- * bus1_peer_wake() - wake up peer
- * @peer:		peer to wake up
- *
- * This wakes up a peer and notifies user-space about poll() events.
- */
-static inline void bus1_peer_wake(struct bus1_peer *peer)
-{
-	wake_up_interruptible(&peer->waitq);
 }
 
 #endif /* __BUS1_PEER_H */
