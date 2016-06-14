@@ -601,103 +601,7 @@ static void bus1_handle_uninstall_holder(struct bus1_handle *handle,
 	INIT_LIST_HEAD(&handle->link_flush);
 }
 
-static void bus1_node_stage(struct bus1_node *node,
-			    struct bus1_peer_info *peer_info,
-			    struct list_head *list_notify)
-{
-	struct bus1_peer_info *holder_info;
-	struct bus1_peer *holder;
-	struct bus1_handle *h;
-	u64 timestamp;
-
-	lockdep_assert_held(&peer_info->lock);
-
-	if (unlikely(node->timestamp > 1)) {
-		/*
-		 * If someone else already staged it (or is staging it right
-		 * now), wait for it to complete and then return. There is
-		 * nothing for us to do.
-		 */
-		if (list_notify &&
-		    !try_wait_for_completion(&node->completion)) {
-			mutex_unlock(&peer_info->lock);
-			wait_for_completion(&node->completion);
-			mutex_lock(&peer_info->lock);
-		}
-		goto done;
-	}
-
-	WARN_ON(!list_notify);
-
-	list_del_init(&node->owner.link_node);
-	timestamp = 4;
-
-	write_seqcount_begin(&peer_info->seqcount);
-	node->timestamp = timestamp - 1;
-	write_seqcount_end(&peer_info->seqcount);
-
-	while ((h = list_first_entry_or_null(&node->list_handles,
-					     struct bus1_handle,
-					     link_node))) {
-		list_del_init(&h->link_node);
-
-		holder = bus1_handle_qlock(h, &holder_info);
-		if (holder) {
-			bus1_queue_sync(&holder_info->queue, timestamp);
-			timestamp = bus1_queue_tick(&holder_info->queue);
-			bus1_handle_ref(h);
-			if (bus1_queue_stage(&holder_info->queue, &h->qnode,
-					     timestamp - 1))
-				wake_up_interruptible(holder_info->waitq);
-			list_add(&h->link_node, list_notify);
-			bus1_handle_qunlock(holder, holder_info);
-		} else {
-			bus1_handle_unref(h);
-		}
-	}
-
-	mutex_lock(&peer_info->qlock);
-
-	bus1_queue_sync(&peer_info->queue, timestamp);
-	timestamp = bus1_queue_tick(&peer_info->queue);
-
-	/*
-	 * Queue owner notification only if the owner was ever accessible. If
-	 * it never got any ID assigned, the peer does not know about it and we
-	 * better skip the notification. We still queue it on @list_notify to
-	 * trigger the completion, though.
-	 */
-	if (likely(!RB_EMPTY_NODE(&node->owner.rb_id))) {
-		bus1_handle_ref(&node->owner);
-		if (bus1_queue_stage(&peer_info->queue, &node->owner.qnode,
-				     timestamp - 1))
-			wake_up_interruptible(peer_info->waitq);
-	}
-
-	/* always keep owner at tail; triggers complete_all() during flush */
-	list_add_tail(&node->owner.link_node, list_notify);
-
-	write_seqcount_begin(&peer_info->seqcount);
-	node->timestamp = timestamp;
-	write_seqcount_end(&peer_info->seqcount);
-
-	mutex_unlock(&peer_info->qlock);
-
-done:
-	/*
-	 * If either we successfully committed the destruction, or if we waited
-	 * for someone else to commit it, we must check n_inflight afterwards.
-	 * If we were the last one, we must also trigger uninstall of the owner
-	 * handle.
-	 * Note that not all paths here are guaranteed that node->owner.holder
-	 * is non-NULL, so we must check it again to avoid double uninstall.
-	 */
-	if (atomic_read(&node->owner.n_inflight) == 0 &&
-	    rcu_access_pointer(node->owner.holder))
-		bus1_handle_uninstall_owner(&node->owner, peer_info);
-}
-
-static void bus1_handle_notify(struct list_head *list_notify)
+static void bus1_node_stage_flush(struct list_head *list_notify)
 {
 	struct bus1_peer_info *peer_info;
 	struct bus1_handle *h;
@@ -740,9 +644,103 @@ static void bus1_handle_notify(struct list_head *list_notify)
 	}
 }
 
+static void bus1_node_stage(struct bus1_node *node,
+			    struct bus1_peer_info *peer_info)
+{
+	struct bus1_peer_info *holder_info;
+	struct bus1_peer *holder;
+	LIST_HEAD(list_notify);
+	struct bus1_handle *h;
+	u64 timestamp;
+
+	lockdep_assert_held(&peer_info->lock);
+
+	if (unlikely(node->timestamp > 1)) {
+		/*
+		 * If someone else already staged it (or is staging it right
+		 * now), wait for it to complete and then return. There is
+		 * nothing for us to do.
+		 */
+		if (!try_wait_for_completion(&node->completion)) {
+			mutex_unlock(&peer_info->lock);
+			wait_for_completion(&node->completion);
+			mutex_lock(&peer_info->lock);
+		}
+		goto done;
+	}
+
+	list_del_init(&node->owner.link_node);
+	timestamp = 4;
+
+	write_seqcount_begin(&peer_info->seqcount);
+	node->timestamp = timestamp - 1;
+	write_seqcount_end(&peer_info->seqcount);
+
+	while ((h = list_first_entry_or_null(&node->list_handles,
+					     struct bus1_handle,
+					     link_node))) {
+		list_del_init(&h->link_node);
+
+		holder = bus1_handle_qlock(h, &holder_info);
+		if (holder) {
+			bus1_queue_sync(&holder_info->queue, timestamp);
+			timestamp = bus1_queue_tick(&holder_info->queue);
+			bus1_handle_ref(h);
+			if (bus1_queue_stage(&holder_info->queue, &h->qnode,
+					     timestamp - 1))
+				wake_up_interruptible(holder_info->waitq);
+			list_add(&h->link_node, &list_notify);
+			bus1_handle_qunlock(holder, holder_info);
+		} else {
+			bus1_handle_unref(h);
+		}
+	}
+
+	mutex_lock(&peer_info->qlock);
+
+	bus1_queue_sync(&peer_info->queue, timestamp);
+	timestamp = bus1_queue_tick(&peer_info->queue);
+
+	/*
+	 * Queue owner notification only if the owner was ever accessible. If
+	 * it never got any ID assigned, the peer does not know about it and we
+	 * better skip the notification. We still queue it on @list_notify to
+	 * trigger the completion, though.
+	 */
+	if (likely(!RB_EMPTY_NODE(&node->owner.rb_id))) {
+		bus1_handle_ref(&node->owner);
+		if (bus1_queue_stage(&peer_info->queue, &node->owner.qnode,
+				     timestamp - 1))
+			wake_up_interruptible(peer_info->waitq);
+	}
+
+	/* always keep owner at tail; triggers complete_all() during flush */
+	list_add_tail(&node->owner.link_node, &list_notify);
+
+	write_seqcount_begin(&peer_info->seqcount);
+	node->timestamp = timestamp;
+	write_seqcount_end(&peer_info->seqcount);
+
+	mutex_unlock(&peer_info->qlock);
+
+done:
+	/*
+	 * If either we successfully committed the destruction, or if we waited
+	 * for someone else to commit it, we must check n_inflight afterwards.
+	 * If we were the last one, we must also trigger uninstall of the owner
+	 * handle.
+	 * Note that not all paths here are guaranteed that node->owner.holder
+	 * is non-NULL, so we must check it again to avoid double uninstall.
+	 */
+	if (atomic_read(&node->owner.n_inflight) == 0 &&
+	    rcu_access_pointer(node->owner.holder))
+		bus1_handle_uninstall_owner(&node->owner, peer_info);
+
+	bus1_node_stage_flush(&list_notify);
+}
+
 static void bus1_handle_detach_internal(struct bus1_handle *handle,
-					struct bus1_peer_info *owner_info,
-					struct list_head *list_notify)
+					struct bus1_peer_info *owner_info)
 {
 	lockdep_assert_held(&owner_info->lock);
 
@@ -765,22 +763,20 @@ static void bus1_handle_detach_internal(struct bus1_handle *handle,
 	 */
 	if (list_empty(&handle->node->list_handles)) {
 		if (1 || RB_EMPTY_NODE(&handle->node->owner.rb_id))
-			bus1_node_stage(handle->node, owner_info, list_notify);
+			bus1_node_stage(handle->node, owner_info);
 		else
 			bus1_node_queue(handle->node, owner_info);
 	}
 }
 
 static void bus1_handle_detach_owner(struct bus1_handle *handle,
-				     struct bus1_peer_info *peer_info,
-				     struct list_head *list_notify)
+				     struct bus1_peer_info *peer_info)
 {
 	WARN_ON(!bus1_handle_is_owner(handle));
-	bus1_handle_detach_internal(handle, peer_info, list_notify);
+	bus1_handle_detach_internal(handle, peer_info);
 }
 
-static void bus1_handle_detach_holder(struct bus1_handle *handle,
-				      struct list_head *list_notify)
+static void bus1_handle_detach_holder(struct bus1_handle *handle)
 {
 	struct bus1_peer_info *owner_info;
 	struct bus1_peer *owner;
@@ -790,7 +786,7 @@ static void bus1_handle_detach_holder(struct bus1_handle *handle,
 
 	owner = bus1_handle_lock_owner(handle, &owner_info);
 	if (owner)
-		bus1_handle_detach_internal(handle, owner_info, list_notify);
+		bus1_handle_detach_internal(handle, owner_info);
 	bus1_handle_unlock_peer(owner, owner_info);
 }
 
@@ -823,8 +819,7 @@ bus1_handle_acquire(struct bus1_handle *handle,
 }
 
 static bool bus1_handle_release_internal(struct bus1_handle *handle,
-					 struct bus1_peer_info *peer_info,
-					 struct list_head *list_notify)
+					 struct bus1_peer_info *peer_info)
 {
 	/*
 	 * Release a single inflight reference. This is the slow-path that
@@ -848,12 +843,11 @@ static bool bus1_handle_release_internal(struct bus1_handle *handle,
 			 * triggered by the destruction during detach. We never
 			 * call it directly here.
 			 */
-			bus1_handle_detach_owner(handle, peer_info,
-						 list_notify);
+			bus1_handle_detach_owner(handle, peer_info);
 		} else {
 			bus1_handle_uninstall_holder(handle, peer_info);
 			mutex_unlock(&peer_info->lock);
-			bus1_handle_detach_holder(handle, list_notify);
+			bus1_handle_detach_holder(handle);
 			return true;
 		}
 	}
@@ -872,43 +866,40 @@ bus1_handle_release_staged(struct bus1_handle *handle,
 	 * Caller must hold the peer-lock and have already staged the node.
 	 */
 	WARN_ON(!bus1_handle_is_owner(handle));
-	WARN_ON(bus1_handle_release_internal(handle, peer_info, NULL));
+	WARN_ON(bus1_handle_release_internal(handle, peer_info));
 	return NULL;
 }
 
 static struct bus1_handle *
 bus1_handle_release_unlock(struct bus1_handle *handle,
-			   struct bus1_peer_info *peer_info,
-			   struct list_head *list_notify)
+			   struct bus1_peer_info *peer_info)
 {
 	/*
 	 * See bus1_handle_release(). This expects the caller to have already
 	 * locked @peer_info, and it will return with the peer unlocked.
 	 */
-	if (!bus1_handle_release_internal(handle, peer_info, list_notify))
+	if (!bus1_handle_release_internal(handle, peer_info))
 		mutex_unlock(&peer_info->lock);
 	return NULL;
 }
 
 static struct bus1_handle *
 bus1_handle_release_relock(struct bus1_handle *handle,
-			   struct bus1_peer_info *peer_info,
-			   struct list_head *list_notify)
+			   struct bus1_peer_info *peer_info)
 {
 	/*
 	 * See bus1_handle_release(). This expects the caller to have already
 	 * locked @peer_info, and it will return with the peer still (or again)
 	 * locked.
 	 */
-	if (bus1_handle_release_internal(handle, peer_info, list_notify))
+	if (bus1_handle_release_internal(handle, peer_info))
 		mutex_lock(&peer_info->lock);
 	return NULL;
 }
 
 static struct bus1_handle *
 bus1_handle_release(struct bus1_handle *handle,
-		    struct bus1_peer_info *peer_info,
-		    struct list_head *list_notify)
+		    struct bus1_peer_info *peer_info)
 {
 	/*
 	 * This is the inverse of bus1_handle_acquire(). It drops a single
@@ -921,7 +912,7 @@ bus1_handle_release(struct bus1_handle *handle,
 	 */
 	if (handle && !atomic_add_unless(&handle->n_inflight, -1, 1)) {
 		mutex_lock(&peer_info->lock);
-		bus1_handle_release_unlock(handle, peer_info, list_notify);
+		bus1_handle_release_unlock(handle, peer_info);
 	}
 	return NULL;
 }
@@ -1157,7 +1148,6 @@ int bus1_handle_pair(struct bus1_peer *peer,
 	struct bus1_peer_info *owner_info;
 	struct bus1_handle *peer_handle = NULL, *clone_handle = NULL, *t;
 	struct bus1_peer *owner = NULL;
-	LIST_HEAD(list_notify);
 	int r;
 
 	if (*peer_idp & BUS1_NODE_FLAG_ALLOCATE) {
@@ -1233,9 +1223,8 @@ int bus1_handle_pair(struct bus1_peer *peer,
 	mutex_unlock(&clone_info->lock);
 
 	if (clone_handle != t) {
-		bus1_handle_release(t, clone_info, &list_notify);
+		bus1_handle_release(t, clone_info);
 		bus1_handle_unref(t);
-		bus1_handle_notify(&list_notify);
 	}
 
 	r = 0;
@@ -1283,10 +1272,7 @@ int bus1_handle_release_by_id(struct bus1_peer_info *peer_info, u64 id)
 			mutex_unlock(&peer_info->lock);
 			r = 0;
 		} else {
-			LIST_HEAD(list_notify);
-			bus1_handle_release_unlock(handle, peer_info,
-						   &list_notify);
-			bus1_handle_notify(&list_notify);
+			bus1_handle_release_unlock(handle, peer_info);
 			r = 0;
 		}
 	}
@@ -1307,7 +1293,6 @@ int bus1_handle_release_by_id(struct bus1_peer_info *peer_info, u64 id)
 int bus1_handle_destroy_by_id(struct bus1_peer_info *peer_info, u64 id)
 {
 	struct bus1_handle *handle;
-	LIST_HEAD(list_notify);
 	int r;
 
 	handle = bus1_handle_find_by_id(peer_info, id);
@@ -1328,12 +1313,11 @@ int bus1_handle_destroy_by_id(struct bus1_peer_info *peer_info, u64 id)
 		else
 			r = 0;
 
-		bus1_node_stage(handle->node, peer_info, &list_notify);
+		bus1_node_stage(handle->node, peer_info);
 	}
 	mutex_unlock(&peer_info->lock);
 
 	bus1_handle_unref(handle);
-	bus1_handle_notify(&list_notify);
 
 	return r;
 }
@@ -1345,7 +1329,6 @@ void bus1_handle_flush_all(struct bus1_peer_info *peer_info, bool final)
 {
 	struct bus1_handle *h;
 	struct rb_node *n, *next;
-	LIST_HEAD(list_notify);
 	LIST_HEAD(list_remote);
 	bool live;
 
@@ -1365,8 +1348,7 @@ void bus1_handle_flush_all(struct bus1_peer_info *peer_info, bool final)
 			live = !!(h->node->timestamp & 1);
 			if (live) {
 				atomic_inc_return(&h->n_inflight);
-				bus1_node_stage(h->node, peer_info,
-						&list_notify);
+				bus1_node_stage(h->node, peer_info);
 			}
 			next = rb_next(n);
 			if (atomic_xchg(&h->n_user, -1) != -1)
@@ -1394,12 +1376,9 @@ void bus1_handle_flush_all(struct bus1_peer_info *peer_info, bool final)
 	while ((h = list_first_entry_or_null(&list_remote, struct bus1_handle,
 					     link_flush))) {
 		list_del_init(&h->link_flush);
-		bus1_handle_detach_holder(h, &list_notify);
+		bus1_handle_detach_holder(h);
 		bus1_handle_unref(h);
 	}
-
-	/* as last step, commit notifications as usual */
-	bus1_handle_notify(&list_notify);
 }
 
 /**
@@ -1418,15 +1397,12 @@ void bus1_handle_dest_init(struct bus1_handle_dest *dest)
 void bus1_handle_dest_destroy(struct bus1_handle_dest *dest,
 			      struct bus1_peer_info *peer_info)
 {
-	LIST_HEAD(list_notify);
-
 	if (!dest)
 		return;
 
 	if (dest->handle) {
-		bus1_handle_release(dest->handle, peer_info, &list_notify);
+		bus1_handle_release(dest->handle, peer_info);
 		dest->handle = bus1_handle_unref(dest->handle);
-		bus1_handle_notify(&list_notify);
 	}
 	if (dest->raw_peer) {
 		bus1_active_lockdep_acquired(&dest->raw_peer->active);
@@ -1679,7 +1655,6 @@ static void bus1_handle_batch_destroy(struct bus1_handle_batch *batch,
 				      struct bus1_peer_info *peer_info)
 {
 	union bus1_handle_entry *e;
-	LIST_HEAD(list_notify);
 	size_t pos;
 
 	if (!batch || !batch->n_entries)
@@ -1688,13 +1663,10 @@ static void bus1_handle_batch_destroy(struct bus1_handle_batch *batch,
 	BUS1_HANDLE_BATCH_FOREACH_HANDLE(e, pos, batch) {
 		if (e->handle) {
 			if (bus1_handle_was_attached(e->handle))
-				bus1_handle_release(e->handle, peer_info,
-						    &list_notify);
+				bus1_handle_release(e->handle, peer_info);
 			bus1_handle_unref(e->handle);
 		}
 	}
-
-	bus1_handle_notify(&list_notify);
 
 	if (unlikely(batch->n_entries > BUS1_HANDLE_BATCH_SIZE)) {
 		e = batch->entries[BUS1_HANDLE_BATCH_SIZE].next;
@@ -1930,7 +1902,6 @@ int bus1_handle_transfer_export(struct bus1_handle_transfer *transfer,
 				size_t n_ids)
 {
 	union bus1_handle_entry *entry;
-	LIST_HEAD(list_notify);
 	size_t pos;
 	u64 id;
 
@@ -1941,8 +1912,7 @@ int bus1_handle_transfer_export(struct bus1_handle_transfer *transfer,
 		WARN_ON(!entry->handle);
 		if (entry->handle->id != BUS1_HANDLE_INVALID) {
 			WARN_ON(!bus1_handle_was_attached(entry->handle));
-			bus1_handle_release_relock(entry->handle, peer_info,
-						   &list_notify);
+			bus1_handle_release_relock(entry->handle, peer_info);
 			entry->handle = bus1_handle_unref(entry->handle);
 		} else {
 			WARN_ON(!bus1_handle_is_owner(entry->handle));
@@ -1962,7 +1932,6 @@ int bus1_handle_transfer_export(struct bus1_handle_transfer *transfer,
 	}
 
 	transfer->batch.n_handles = 0;
-	bus1_handle_notify(&list_notify);
 
 	return 0;
 }
@@ -2087,7 +2056,6 @@ void bus1_handle_inflight_install(struct bus1_handle_inflight *inflight,
 	struct bus1_handle *h, *t;
 	struct bus1_peer *owner;
 	size_t pos, n_installs;
-	LIST_HEAD(list_notify);
 
 	if (inflight->batch.n_handles < 1)
 		return;
@@ -2126,7 +2094,7 @@ void bus1_handle_inflight_install(struct bus1_handle_inflight *inflight,
 			t = bus1_handle_install_holder(h);
 			if (t != h) {
 				mutex_unlock(&dst_info->lock);
-				bus1_handle_release(h, dst_info, &list_notify);
+				bus1_handle_release(h, dst_info);
 				bus1_handle_unref(h);
 				e->handle = t;
 				mutex_lock(&dst_info->lock);
@@ -2138,8 +2106,6 @@ void bus1_handle_inflight_install(struct bus1_handle_inflight *inflight,
 		mutex_unlock(&dst_info->lock);
 		WARN_ON(n_installs > 0);
 	}
-
-	bus1_handle_notify(&list_notify);
 }
 
 /**
