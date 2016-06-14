@@ -126,7 +126,6 @@ static void test_api_connect(void)
 	assert(!c1);
 }
 
-
 /* make sure we can set + get seed */
 static void test_api_seed(void)
 {
