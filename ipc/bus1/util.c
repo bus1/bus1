@@ -55,17 +55,7 @@ int bus1_import_vecs(struct iovec *out_vecs,
 		return 0;
 	}
 
-	/*
-	 * XXX: in_compat_syscall() was introduced in v4.5-rc1, but for us it
-	 *      is totally fine to fall back to is_compat_task() on older
-	 *      kernels. But make sure to remove this fallback once v4.5 is
-	 *      released.
-	 */
-#ifdef in_compat_syscall
 	if (IS_ENABLED(CONFIG_COMPAT) && in_compat_syscall()) {
-#else
-	if (IS_ENABLED(CONFIG_COMPAT) && is_compat_task()) {
-#endif
 		/*
 		 * Compat types and macros are protected by CONFIG_COMPAT,
 		 * rather than providing a fallback. We want compile-time
