@@ -540,7 +540,8 @@ static void bus1_handle_uninstall_holder(struct bus1_handle *handle,
 
 	mutex_lock(&peer_info->qlock);
 	if (bus1_queue_node_is_queued(&handle->qnode)) {
-		bus1_queue_remove(&peer_info->queue, &handle->qnode);
+		if (bus1_queue_remove(&peer_info->queue, &handle->qnode))
+			wake_up_interruptible(peer_info->waitq);
 		bus1_handle_unref(handle);
 	}
 	mutex_unlock(&peer_info->qlock);
