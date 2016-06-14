@@ -601,9 +601,9 @@ static void bus1_handle_uninstall_holder(struct bus1_handle *handle,
 	INIT_LIST_HEAD(&handle->link_flush);
 }
 
-static void bus1_node_stage_relock(struct bus1_node *node,
-				   struct bus1_peer_info *peer_info,
-				   struct list_head *list_notify)
+static void bus1_node_stage(struct bus1_node *node,
+			    struct bus1_peer_info *peer_info,
+			    struct list_head *list_notify)
 {
 	struct bus1_peer_info *holder_info;
 	struct bus1_peer *holder;
@@ -765,8 +765,7 @@ static void bus1_handle_detach_internal(struct bus1_handle *handle,
 	 */
 	if (list_empty(&handle->node->list_handles)) {
 		if (1 || RB_EMPTY_NODE(&handle->node->owner.rb_id))
-			bus1_node_stage_relock(handle->node, owner_info,
-					       list_notify);
+			bus1_node_stage(handle->node, owner_info, list_notify);
 		else
 			bus1_node_queue(handle->node, owner_info);
 	}
@@ -1329,7 +1328,7 @@ int bus1_handle_destroy_by_id(struct bus1_peer_info *peer_info, u64 id)
 		else
 			r = 0;
 
-		bus1_node_stage_relock(handle->node, peer_info, &list_notify);
+		bus1_node_stage(handle->node, peer_info, &list_notify);
 	}
 	mutex_unlock(&peer_info->lock);
 
@@ -1366,8 +1365,8 @@ void bus1_handle_flush_all(struct bus1_peer_info *peer_info, bool final)
 			live = !!(h->node->timestamp & 1);
 			if (live) {
 				atomic_inc_return(&h->n_inflight);
-				bus1_node_stage_relock(h->node, peer_info,
-						       &list_notify);
+				bus1_node_stage(h->node, peer_info,
+						&list_notify);
 			}
 			next = rb_next(n);
 			if (atomic_xchg(&h->n_user, -1) != -1)
