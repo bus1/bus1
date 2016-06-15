@@ -10,6 +10,7 @@
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 #include <linux/atomic.h>
 #include <linux/cred.h>
+#include <linux/debugfs.h>
 #include <linux/err.h>
 #include <linux/file.h>
 #include <linux/fs.h>
@@ -211,6 +212,23 @@ struct bus1_peer *bus1_peer_new(void)
 	bus1_active_init(&peer->active);
 	rcu_assign_pointer(peer->info, NULL);
 	peer->id = atomic64_inc_return(&bus1_peer_ids);
+	peer->debugdir = NULL;
+
+	if (!IS_ERR_OR_NULL(bus1_debugdir)) {
+		char idstr[17];
+
+		snprintf(idstr, sizeof(idstr), "%llx", peer->id);
+
+		peer->debugdir = debugfs_create_dir(idstr, bus1_debugdir);
+		if (!peer->debugdir) {
+			pr_err("cannot create debugfs dir for peer %llx\n",
+			       peer->id);
+		} else if (!IS_ERR_OR_NULL(peer->debugdir)) {
+			bus1_debugfs_create_atomic_x("active", S_IRUGO,
+						     peer->debugdir,
+						     &peer->active.count);
+		}
+	}
 
 	return peer;
 }
@@ -233,6 +251,7 @@ struct bus1_peer *bus1_peer_free(struct bus1_peer *peer)
 		return NULL;
 
 	WARN_ON(rcu_access_pointer(peer->info));
+	debugfs_remove_recursive(peer->debugdir);
 	bus1_active_destroy(&peer->active);
 	kfree_rcu(peer, rcu);
 

@@ -21,6 +21,7 @@
 
 #include <linux/atomic.h>
 #include <linux/err.h>
+#include <linux/fs.h>
 #include <linux/kernel.h>
 #include <linux/uio.h>
 
@@ -30,6 +31,27 @@ int bus1_import_vecs(struct iovec *out_vecs,
 		     size_t n_vecs);
 struct file *bus1_import_fd(const u32 __user *user_fd);
 struct file *bus1_clone_file(struct file *file);
+
+#if defined(CONFIG_DEBUG_FS)
+
+struct dentry *
+bus1_debugfs_create_atomic_x(const char *name,
+			     umode_t mode,
+			     struct dentry *parent,
+			     atomic_t *value);
+
+#else
+
+static inline struct dentry *
+bus1_debugfs_create_atomic_x(const char *name,
+			     umode_t mode,
+			     struct dentry *parent,
+			     atomic_t *value)
+{
+	return ERR_PTR(-ENODEV);
+}
+
+#endif
 
 /**
  * bus1_atomic_sub_if_ge() - subtract, if above threshold

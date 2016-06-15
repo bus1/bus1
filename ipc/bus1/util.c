@@ -8,8 +8,10 @@
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+#include <linux/atomic.h>
 #include <linux/cdev.h>
 #include <linux/compat.h>
+#include <linux/debugfs.h>
 #include <linux/err.h>
 #include <linux/file.h>
 #include <linux/fs.h>
@@ -250,3 +252,54 @@ error:
 	fops_put(fops);
 	return ERR_PTR(r);
 }
+
+#if defined(CONFIG_DEBUG_FS)
+
+static int bus1_debugfs_atomic_t_get(void *data, u64 *val)
+{
+	*val = atomic_read((atomic_t *)data);
+	return 0;
+}
+
+#if defined(DEFINE_DEBUGFS_ATTRIBUTE)
+DEFINE_DEBUGFS_ATTRIBUTE(bus1_debugfs_atomic_x_ro,
+			 bus1_debugfs_atomic_t_get,
+			 NULL,
+			 "%llx\n");
+#else
+DEFINE_SIMPLE_ATTRIBUTE(bus1_debugfs_atomic_x_ro,
+			bus1_debugfs_atomic_t_get,
+			NULL,
+			"%llx\n");
+#endif
+
+/**
+ * bus1_debugfs_create_atomic_x() - create debugfs file for hex atomic_t
+ * @name:	file name to use
+ * @mode:	permissions for the file
+ * @parent:	parent directory
+ * @value:	variable to read from, or write to
+ *
+ * This is almost equivalent to debugfs_create_atomic_t() but prints/reads the
+ * data as hexadecimal value. So far, only read-only attributes are supported.
+ *
+ * XXX: With linux-4.7 srcu-protected debugfs files are introduced. Switch over
+ *      once released and drop the #ifdef guards we have in place right now.
+ *
+ * Return: Pointer to new dentry, NULL/ERR_PTR if disabled or on failure.
+ */
+struct dentry *bus1_debugfs_create_atomic_x(const char *name,
+					    umode_t mode,
+					    struct dentry *parent,
+					    atomic_t *value)
+{
+#if defined(DEFINE_DEBUGFS_ATTRIBUTE)
+	return debugfs_create_file_unsafe(name, mode, parent, value,
+					  &bus1_debugfs_atomic_x_ro);
+#else
+	return debugfs_create_file(name, mode, parent, value,
+				   &bus1_debugfs_atomic_x_ro);
+#endif
+}
+
+#endif /* defined(CONFIG_DEBUG_FS) */

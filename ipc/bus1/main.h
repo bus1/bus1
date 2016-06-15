@@ -64,6 +64,9 @@
  *       bus1_user_lock
  */
 
+#include <linux/fs.h>
+#include <linux/kernel.h>
+
 /**
  * BUS1_MESSAGES_MAX - per-user limit for maximum number of messages
  *
@@ -114,5 +117,15 @@
  * pointer contains @bus1_fops.
  */
 extern const struct file_operations bus1_fops;
+
+/**
+ * bus1_debugdir - debugfs root directory
+ *
+ * If debugfs is enabled, this is set to point to the debugfs root directory
+ * for this module. If debugfs is disabled, or if the root directory could not
+ * be created, this is set to NULL or ERR_PTR (which debugfs functions can deal
+ * with seamlessly).
+ */
+extern struct dentry *bus1_debugdir;
 
 #endif /* __BUS1_MAIN_H */

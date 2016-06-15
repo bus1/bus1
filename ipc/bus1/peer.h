@@ -18,6 +18,7 @@
 
 #include <linux/atomic.h>
 #include <linux/cred.h>
+#include <linux/fs.h>
 #include <linux/kernel.h>
 #include <linux/lockdep.h>
 #include <linux/mutex.h>
@@ -87,13 +88,17 @@ struct bus1_peer_info {
 /**
  * struct bus1_peer - peer handle
  * @rcu:		rcu
+ * @debugdir:		debugfs directory, or NULL/ERR_PTR
  * @waitq:		peer wide wait queue
  * @active:		active references
  * @info:		underlying peer information
  * @id:			unique peer ID
  */
 struct bus1_peer {
-	struct rcu_head rcu;
+	union {
+		struct rcu_head rcu;
+		struct dentry *debugdir;
+	};
 	wait_queue_head_t waitq;
 	struct bus1_active active;
 	struct bus1_peer_info __rcu *info;

@@ -8,6 +8,7 @@
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+#include <linux/debugfs.h>
 #include <linux/err.h>
 #include <linux/file.h>
 #include <linux/fs.h>
@@ -176,18 +177,28 @@ static struct miscdevice bus1_misc = {
 	.mode		= S_IRUGO | S_IWUGO,
 };
 
+struct dentry *bus1_debugdir;
+
 static int __init bus1_init(void)
 {
 	int r;
 
 	bus1_tests_run();
 
+	bus1_debugdir = debugfs_create_dir(KBUILD_MODNAME, NULL);
+	if (!bus1_debugdir)
+		pr_err("cannot create debugfs root\n");
+
 	r = misc_register(&bus1_misc);
 	if (r < 0)
-		return r;
+		goto error;
 
 	pr_info("initialized\n");
 	return 0;
+
+error:
+	debugfs_remove(bus1_debugdir);
+	return r;
 }
 
 static void __exit bus1_exit(void)
@@ -196,6 +207,7 @@ static void __exit bus1_exit(void)
 	WARN_ON(!idr_is_empty(&bus1_user_idr));
 
 	misc_deregister(&bus1_misc);
+	debugfs_remove(bus1_debugdir);
 	ida_destroy(&bus1_user_ida);
 	idr_destroy(&bus1_user_idr);
 }
