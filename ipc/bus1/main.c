@@ -165,9 +165,7 @@ const struct file_operations bus1_fops = {
 	.llseek =		noop_llseek,
 	.mmap =			bus1_fop_mmap,
 	.unlocked_ioctl =	bus1_fop_ioctl,
-#ifdef CONFIG_COMPAT
 	.compat_ioctl =		bus1_fop_ioctl,
-#endif
 	.show_fdinfo =		bus1_fop_show_fdinfo,
 };
 
