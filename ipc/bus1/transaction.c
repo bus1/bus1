@@ -264,18 +264,7 @@ bus1_transaction_free(struct bus1_transaction *transaction, u8 *stack_buffer)
 	return NULL;
 }
 
-/**
- * bus1_transaction_instantiate_message() - instantiate message
- * @transaction:	transaction to operate on
- * @peer_info:		destination peer to instantiate message for
- *
- * This instantiates a single bus1_message object for @peer_info. It is not
- * linked into any queue or parent context. It is exclusively owned by the
- * caller.
- *
- * Return: Message on success, ERR_PTR on failure.
- */
-struct bus1_message *
+static struct bus1_message *
 bus1_transaction_instantiate_message(struct bus1_transaction *transaction,
 				     struct bus1_peer_info *peer_info)
 {
