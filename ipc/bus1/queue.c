@@ -76,11 +76,6 @@ static void bus1_queue_node_set_timestamp(struct bus1_queue_node *node, u64 ts)
 	node->timestamp_and_type |= ts;
 }
 
-static bool bus1_queue_node_is_silent(struct bus1_queue_node *node)
-{
-	return bus1_queue_node_get_type(node) == BUS1_QUEUE_NODE_MESSAGE_SILENT;
-}
-
 /**
  * bus1_queue_init_internal() - initialize queue
  * @queue:	queue to initialize
@@ -97,7 +92,6 @@ void bus1_queue_init_internal(struct bus1_queue *queue)
 {
 	queue->messages = RB_ROOT;
 	rcu_assign_pointer(queue->front, NULL);
-	queue->n_committed = 0;
 	queue->clock = 0;
 }
 
@@ -119,7 +113,6 @@ void bus1_queue_destroy(struct bus1_queue *queue)
 	if (!queue)
 		return;
 
-	WARN_ON(queue->n_committed);
 	WARN_ON(rcu_access_pointer(queue->front));
 	WARN_ON(!RB_EMPTY_ROOT(&queue->messages));
 }
@@ -144,7 +137,6 @@ void bus1_queue_post_flush(struct bus1_queue *queue)
 
 	queue->messages = RB_ROOT;
 	rcu_assign_pointer(queue->front, NULL);
-	queue->n_committed = 0;
 }
 
 static int bus1_queue_node_compare(struct bus1_queue_node *a,
@@ -279,7 +271,7 @@ bool bus1_queue_stage(struct bus1_queue *queue,
 
 	if (!RB_EMPTY_NODE(&node->rb)) {
 		rb_erase(&node->rb, &queue->messages);
-		/* must be staging, so no need to adjust queue->n_committed */
+		/* must be staging, so no need to adjust queue->front */
 	}
 
 	bus1_queue_node_set_timestamp(node, timestamp);
@@ -304,8 +296,6 @@ bool bus1_queue_stage(struct bus1_queue *queue,
 	rb_insert_color(&node->rb, &queue->messages);
 
 	if (!(timestamp & 1)) {
-		if (!bus1_queue_node_is_silent(node))
-			++queue->n_committed;
 		if (is_leftmost)
 			rcu_assign_pointer(queue->front, &node->rb);
 	}
@@ -362,9 +352,6 @@ bool bus1_queue_remove(struct bus1_queue *queue,
 
 	rb_erase(&node->rb, &queue->messages);
 	RB_CLEAR_NODE(&node->rb);
-	if (!(bus1_queue_node_get_timestamp(node) & 1) &&
-	    !bus1_queue_node_is_silent(node))
-		--queue->n_committed;
 
 	return !readable && bus1_queue_is_readable(queue);
 }

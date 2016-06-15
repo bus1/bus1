@@ -58,7 +58,6 @@ bus1_peer_info_flush(struct bus1_peer_info *peer_info)
 					     &peer_info->queue.messages, rb) {
 		switch (bus1_queue_node_get_type(node)) {
 		case BUS1_QUEUE_NODE_MESSAGE_NORMAL:
-		case BUS1_QUEUE_NODE_MESSAGE_SILENT:
 			message = bus1_message_from_node(node);
 			RB_CLEAR_NODE(&node->rb); /* mark as dropped */
 			if (bus1_queue_node_is_committed(node)) {
@@ -564,7 +563,6 @@ static int bus1_peer_ioctl_send(struct bus1_peer *peer, unsigned long arg)
 	if (copy_from_user(&param, (void __user *)arg, sizeof(param)))
 		return -EFAULT;
 	if (unlikely(param.flags & ~(BUS1_SEND_FLAG_CONTINUE |
-				     BUS1_SEND_FLAG_SILENT |
 				     BUS1_SEND_FLAG_SEED)))
 		return -EINVAL;
 
@@ -593,8 +591,7 @@ static int bus1_peer_ioctl_send(struct bus1_peer *peer, unsigned long arg)
 		return PTR_ERR(transaction);
 
 	if (param.flags & BUS1_SEND_FLAG_SEED) { /* Special-case: set seed */
-		if (unlikely((param.flags & (BUS1_SEND_FLAG_SILENT |
-					     BUS1_SEND_FLAG_CONTINUE)) ||
+		if (unlikely((param.flags & BUS1_SEND_FLAG_CONTINUE) ||
 			     param.n_destinations)) {
 			r = -EINVAL;
 			goto exit;
@@ -644,8 +641,7 @@ static int bus1_peer_dequeue(struct bus1_peer_info *peer_info,
 		node = bus1_queue_peek(&peer_info->queue);
 	if (node) {
 		switch (bus1_queue_node_get_type(node)) {
-		case BUS1_QUEUE_NODE_MESSAGE_NORMAL:
-		case BUS1_QUEUE_NODE_MESSAGE_SILENT: {
+		case BUS1_QUEUE_NODE_MESSAGE_NORMAL: {
 			struct bus1_message *message;
 
 			message = bus1_message_from_node(node);
@@ -721,7 +717,6 @@ static void bus1_peer_peek(struct bus1_peer_info *peer_info,
 	if (node) {
 		switch (bus1_queue_node_get_type(node)) {
 		case BUS1_QUEUE_NODE_MESSAGE_NORMAL:
-		case BUS1_QUEUE_NODE_MESSAGE_SILENT:
 			message = bus1_message_from_node(node);
 			bus1_pool_publish(&peer_info->pool, message->slice);
 			param->type = BUS1_MSG_DATA;

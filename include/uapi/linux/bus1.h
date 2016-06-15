@@ -78,8 +78,7 @@ struct bus1_cmd_peer_clone {
 
 enum {
 	BUS1_SEND_FLAG_CONTINUE		= 1ULL <<  0,
-	BUS1_SEND_FLAG_SILENT		= 1ULL <<  1,
-	BUS1_SEND_FLAG_SEED		= 1ULL <<  2,
+	BUS1_SEND_FLAG_SEED		= 1ULL <<  1,
 };
 
 struct bus1_cmd_send {

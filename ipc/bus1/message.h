@@ -58,8 +58,7 @@ struct bus1_message {
 struct bus1_message *bus1_message_new(size_t n_bytes,
 				      size_t n_files,
 				      size_t n_handles,
-				      unsigned long sender,
-				      bool silent);
+				      unsigned long sender);
 struct bus1_message *bus1_message_free(struct bus1_message *message,
 				       struct bus1_peer_info *peer_info);
 int bus1_message_allocate(struct bus1_message *message,
@@ -84,8 +83,7 @@ bus1_message_from_node(struct bus1_queue_node *node)
 {
 	unsigned int type = bus1_queue_node_get_type(node);
 
-	if (WARN_ON(type != BUS1_QUEUE_NODE_MESSAGE_NORMAL &&
-		    type != BUS1_QUEUE_NODE_MESSAGE_SILENT))
+	if (WARN_ON(type != BUS1_QUEUE_NODE_MESSAGE_NORMAL))
 		return NULL;
 
 	return container_of(node, struct bus1_message, qnode);

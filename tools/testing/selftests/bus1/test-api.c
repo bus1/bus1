@@ -177,13 +177,6 @@ static void test_api_seed(void)
 	r = bus1_client_send(client, &send);
 	assert(r >= 0);
 
-	/* SEED with SILENT flag is bound to fail */
-
-	send.flags |= BUS1_SEND_FLAG_SILENT;
-	r = bus1_client_send(client, &send);
-	assert(r == -EINVAL);
-	send.flags &= ~BUS1_SEND_FLAG_SILENT;
-
 	/* retrieve SEED and verify its content */
 
 	r = bus1_client_recv(client, &recv);

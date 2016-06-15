@@ -26,7 +26,6 @@
  * @n_files:		number of files to pre-allocate
  * @n_handles:		number of handles to pre-allocate
  * @sender:		sender tag
- * @silent:		is this a silent message?
  *
  * This allocates a new, unused message for free use to the caller. Storage for
  * files and handles is (partially) pre-allocated. The number of embedded
@@ -38,8 +37,7 @@
 struct bus1_message *bus1_message_new(size_t n_bytes,
 				      size_t n_files,
 				      size_t n_handles,
-				      unsigned long sender,
-				      bool silent)
+				      unsigned long sender)
 {
 	struct bus1_message *message;
 	size_t base_size, fds_size;
@@ -52,9 +50,7 @@ struct bus1_message *bus1_message_new(size_t n_bytes,
 	if (!message)
 		return ERR_PTR(-ENOMEM);
 
-	bus1_queue_node_init(&message->qnode,
-			     silent ? BUS1_QUEUE_NODE_MESSAGE_SILENT :
-				      BUS1_QUEUE_NODE_MESSAGE_NORMAL,
+	bus1_queue_node_init(&message->qnode, BUS1_QUEUE_NODE_MESSAGE_NORMAL,
 			     sender);
 	message->data.destination = 0;
 	message->data.uid = -1;
