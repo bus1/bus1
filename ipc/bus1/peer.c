@@ -200,6 +200,7 @@ error:
  */
 struct bus1_peer *bus1_peer_new(void)
 {
+	static atomic64_t bus1_peer_ids = ATOMIC64_INIT(0);
 	struct bus1_peer *peer;
 
 	peer = kmalloc(sizeof(*peer), GFP_KERNEL);
@@ -209,6 +210,7 @@ struct bus1_peer *bus1_peer_new(void)
 	init_waitqueue_head(&peer->waitq);
 	bus1_active_init(&peer->active);
 	rcu_assign_pointer(peer->info, NULL);
+	peer->id = atomic64_inc_return(&bus1_peer_ids);
 
 	return peer;
 }

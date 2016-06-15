@@ -90,12 +90,14 @@ struct bus1_peer_info {
  * @waitq:		peer wide wait queue
  * @active:		active references
  * @info:		underlying peer information
+ * @id:			unique peer ID
  */
 struct bus1_peer {
 	struct rcu_head rcu;
 	wait_queue_head_t waitq;
 	struct bus1_active active;
 	struct bus1_peer_info __rcu *info;
+	u64 id;
 };
 
 struct bus1_peer *bus1_peer_new(void);

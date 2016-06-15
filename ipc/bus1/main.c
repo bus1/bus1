@@ -20,6 +20,7 @@
 #include <linux/poll.h>
 #include <linux/rcupdate.h>
 #include <linux/sched.h>
+#include <linux/seq_file.h>
 #include <linux/slab.h>
 #include <uapi/linux/bus1.h>
 #include "active.h"
@@ -149,6 +150,13 @@ static long bus1_fop_ioctl(struct file *file,
 	return -ENOTTY;
 }
 
+static void bus1_fop_show_fdinfo(struct seq_file *m, struct file *file)
+{
+	struct bus1_peer *peer = file->private_data;
+
+	seq_printf(m, KBUILD_MODNAME "-peer:\t%16llx\n", peer->id);
+}
+
 const struct file_operations bus1_fops = {
 	.owner =		THIS_MODULE,
 	.open =			bus1_fop_open,
@@ -160,6 +168,7 @@ const struct file_operations bus1_fops = {
 #ifdef CONFIG_COMPAT
 	.compat_ioctl =		bus1_fop_ioctl,
 #endif
+	.show_fdinfo =		bus1_fop_show_fdinfo,
 };
 
 static struct miscdevice bus1_misc = {
