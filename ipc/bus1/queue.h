@@ -202,32 +202,6 @@ static inline u64 bus1_queue_sync(struct bus1_queue *queue, u64 timestamp)
 }
 
 /**
- * bus1_queue_peek_rcu() - peek first available entry
- * @queue:	queue to operate on
- *
- * This returns a pointer to the first available entry in the given queue, or
- * NULL if there is none. The queue stays unmodified and the returned entry
- * remains on the queue.
- *
- * The caller must be inside an rcu read-side crictical section, and the
- * returned pointer is only valid for that critical section. Furthermore, the
- * caller must only access fields of the queue-entry that are explicitly
- * available for rcu-access.
- *
- * If the caller needs to operate on the queue entry, it better lock the peer
- * and call bus1_queue_peek(). This fast-path should only be used for poll()
- * callbacks and alike.
- *
- * Return: Pointer to first available entry, NULL if none available.
- */
-static inline struct bus1_queue_node *
-bus1_queue_peek_rcu(struct bus1_queue *queue)
-{
-	return rb_entry_safe(rcu_dereference(queue->front),
-			     struct bus1_queue_node, rb);
-}
-
-/**
  * bus1_queue_is_readable() - check whether a queue is readable
  * @queue:	queue to operate on
  *
