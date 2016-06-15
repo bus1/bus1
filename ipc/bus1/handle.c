@@ -709,6 +709,8 @@ static void bus1_node_stage(struct bus1_node *node,
 
 	mutex_unlock(&peer_info->qlock);
 
+	bus1_node_stage_flush(&list_notify);
+
 done:
 	/*
 	 * If either we successfully committed the destruction, or if we waited
@@ -721,8 +723,6 @@ done:
 	if (atomic_read(&node->owner.n_inflight) == 0 &&
 	    rcu_access_pointer(node->owner.holder))
 		bus1_handle_uninstall_owner(&node->owner, peer_info);
-
-	bus1_node_stage_flush(&list_notify);
 }
 
 static void bus1_handle_detach_internal(struct bus1_handle *handle,
