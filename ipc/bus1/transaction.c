@@ -85,7 +85,7 @@ static void bus1_transaction_init(struct bus1_transaction *transaction,
 	transaction->vecs = (void *)((u8 *)(transaction + 1) +
 			bus1_handle_batch_inline_size(param->n_handles));
 	transaction->files = (void *)(transaction->vecs + param->n_vecs);
-	memset(transaction->files, 0, param->n_vecs * sizeof(struct file *));
+	memset(transaction->files, 0, param->n_fds * sizeof(struct file *));
 
 	transaction->length_vecs = 0;
 	transaction->entries = NULL;
