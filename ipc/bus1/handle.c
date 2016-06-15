@@ -1339,51 +1339,46 @@ int bus1_handle_destroy_by_id(struct bus1_peer *peer, u64 *idp)
 }
 
 /**
- * bus1_handle_flush_all() - XXX
+ * bus1_handle_flush_all() - flush all nodes and handles of a peer
+ * @peer_info:		peer to operate on
+ * @final:		whether to flush persistent nodes
+ *
+ * This atomically destroys all nodes, and releases all handles, of the given
+ * peer. Note that the destruction is atomic in all regards, but the handle
+ * release is only atomic in regard to the holding peer. That is, the possible
+ * effect on any remote node is not atomic, but done sequentially afterwards.
+ *
+ * If @final is false, persistent nodes are left untouched, otherwise, even
+ * persistent nodes are destroyed.
  */
 void bus1_handle_flush_all(struct bus1_peer_info *peer_info, bool final)
 {
 	struct bus1_handle *h;
 	struct rb_node *n, *next;
 	LIST_HEAD(list_remote);
-	bool live;
 
 	mutex_lock(&peer_info->lock);
 	for (n = rb_first(&peer_info->map_handles_by_node); n; n = next) {
 		h = container_of(n, struct bus1_handle, rb_node);
-
-		/* XXX: ignore entries with an ID higher than our start id */
+		next = rb_next(n);
 
 		if (bus1_handle_is_owner(h)) {
-			if (!final && bus1_node_is_persistent(h->node)) {
-				next = rb_next(n);
-				continue;
-			}
-
-			bus1_handle_ref(h);
-			live = !bus1_node_is_committed(h->node);
-			if (live) {
-				atomic_inc_return(&h->n_inflight);
+			if (final || !bus1_node_is_persistent(h->node)) {
+				bus1_handle_ref(h);
 				bus1_node_stage(h->node, peer_info);
+				if (atomic_xchg(&h->n_user, -1) != -1)
+					bus1_handle_release_staged(h,
+								   peer_info);
+				bus1_handle_unref(h);
 			}
-			next = rb_next(n);
-			if (atomic_xchg(&h->n_user, -1) != -1)
-				bus1_handle_release_staged(h, peer_info);
-			if (live)
-				bus1_handle_release_staged(h, peer_info);
-			bus1_handle_unref(h);
 		} else if (atomic_xchg(&h->n_user, -1) != -1 &&
 			   atomic_dec_and_test(&h->n_inflight)) {
-			next = rb_next(n);
-
 			rb_erase(&h->rb_node, &peer_info->map_handles_by_node);
 			RB_CLEAR_NODE(&h->rb_node); /* steal ref */
 
 			bus1_handle_uninstall_holder(h, peer_info);
 			WARN_ON(!list_empty(&h->link_flush));
 			list_add(&h->link_flush, &list_remote);
-		} else {
-			next = rb_next(n);
 		}
 	}
 	mutex_unlock(&peer_info->lock);
