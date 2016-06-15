@@ -154,14 +154,16 @@ static void test_api_seed(void)
 	uint64_t handle_id;
 	int r;
 
+	/* setup default client */
+
 	r = bus1_client_new_from_path(&client, test_path);
 	assert(r >= 0);
-
 	r = bus1_client_init(client, BUS1_CLIENT_POOL_SIZE);
 	assert(r >= 0);
-
 	r = bus1_client_mmap(client);
 	assert(r >= 0);
+
+	/* set SEED on @client and verify that nodes were properly created */
 
 	r = bus1_client_send(client, &send);
 	assert(r >= 0);
@@ -170,14 +172,19 @@ static void test_api_seed(void)
 	assert(handles[0] != BUS1_HANDLE_INVALID);
 	assert(!(handles[0] & BUS1_NODE_FLAG_ALLOCATE));
 
-	/* the seed can be replaced */
+	/* verify that we can replace a SEED */
+
 	r = bus1_client_send(client, &send);
 	assert(r >= 0);
 
-	/* the seed can not be passed the SILENT flag */
+	/* SEED with SILENT flag is bound to fail */
+
 	send.flags |= BUS1_SEND_FLAG_SILENT;
 	r = bus1_client_send(client, &send);
 	assert(r == -EINVAL);
+	send.flags &= ~BUS1_SEND_FLAG_SILENT;
+
+	/* retrieve SEED and verify its content */
 
 	r = bus1_client_recv(client, &recv);
 	assert(r >= 0);
