@@ -302,6 +302,7 @@ static void bus1_test_quota(void)
 
 	bus1_pool_destroy(&peer.pool);
 	mutex_unlock(&peer.lock);
+	bus1_user_quota_destroy(&peer.quota);
 	WARN_ON(bus1_user_unref(user1));
 	WARN_ON(bus1_user_unref(user2));
 }
