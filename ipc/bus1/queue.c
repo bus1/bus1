@@ -357,10 +357,15 @@ void bus1_queue_remove(struct bus1_queue *queue,
 		wake_up_interruptible(queue->waitq);
 }
 
-void bus1_queue_drop(struct bus1_queue *queue)
+void bus1_queue_drop(struct bus1_queue *queue, struct bus1_queue_node *node)
 {
-	bool readable = bus1_queue_is_readable(queue);
+	bool readable;
 
+	bus1_queue_assert_held(queue);
+
+	bus1_queue_remove(queue, node);
+
+	readable = bus1_queue_is_readable(queue);
 	atomic_inc(&queue->n_dropped);
 
 	if (!readable)

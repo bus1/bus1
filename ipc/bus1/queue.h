@@ -147,7 +147,8 @@ void bus1_queue_stage(struct bus1_queue *queue,
 		      u64 timestamp);
 void bus1_queue_remove(struct bus1_queue *queue,
 		       struct bus1_queue_node *node);
-void bus1_queue_drop(struct bus1_queue *queue);
+void bus1_queue_drop(struct bus1_queue *queue,
+		     struct bus1_queue_node *node);
 struct bus1_queue_node *bus1_queue_peek(struct bus1_queue *queue);
 
 /* nodes */

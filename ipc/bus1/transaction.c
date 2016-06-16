@@ -401,27 +401,32 @@ bus1_transaction_commit_one(struct bus1_transaction *transaction,
 			    u64 timestamp)
 {
 	struct bus1_peer_info *peer_info;
-	u64 id;
 
 	peer_info = bus1_peer_dereference(dest->raw_peer);
 	lockdep_assert_held(&peer_info->lock);
 
-	id = BUS1_HANDLE_INVALID;
+	if (!message->slice) {
+		bus1_queue_drop(&peer_info->queue, &message->qnode);
 
-	if (!message->slice)
-		bus1_queue_drop(&peer_info->queue);
-	else if (bus1_queue_node_is_queued(&message->qnode))
-		id = bus1_handle_dest_export(dest, peer_info, timestamp, true);
-
-	if (id == BUS1_HANDLE_INVALID) {
-		bus1_queue_remove(&peer_info->queue, &message->qnode);
 		return false;
 	}
 
-	message->data.destination = id;
-	bus1_queue_stage(&peer_info->queue, &message->qnode, timestamp);
+	if (bus1_queue_node_is_queued(&message->qnode)) {
+		u64 id;
 
-	return true;
+		id = bus1_handle_dest_export(dest, peer_info, timestamp, true);
+		if (id != BUS1_HANDLE_INVALID) {
+			message->data.destination = id;
+			bus1_queue_stage(&peer_info->queue, &message->qnode,
+					 timestamp);
+
+			return true;
+		}
+	}
+
+	bus1_queue_remove(&peer_info->queue, &message->qnode);
+
+	return false;
 }
 
 /**
