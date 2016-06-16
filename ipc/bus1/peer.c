@@ -155,12 +155,11 @@ static struct bus1_peer_info *bus1_peer_info_new(wait_queue_head_t *waitq,
 	mutex_init(&peer_info->qlock);
 	peer_info->cred = get_cred(current_cred());
 	peer_info->pid_ns = get_pid_ns(task_active_pid_ns(current));
-	peer_info->waitq = waitq;
 	peer_info->user = NULL;
 	peer_info->seed = NULL;
 	bus1_user_quota_init(&peer_info->quota);
 	peer_info->pool = BUS1_POOL_NULL;
-	bus1_queue_init_for_peer(peer_info);
+	bus1_queue_init_for_peer(peer_info, waitq);
 	peer_info->map_handles_by_id = RB_ROOT;
 	peer_info->map_handles_by_node = RB_ROOT;
 	seqcount_init(&peer_info->seqcount);

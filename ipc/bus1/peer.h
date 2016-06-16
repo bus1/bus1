@@ -66,7 +66,6 @@ struct bus1_peer_info {
 	struct mutex qlock;
 	const struct cred *cred;
 	struct pid_namespace *pid_ns;
-	wait_queue_head_t *waitq;
 	struct bus1_user *user;
 	struct bus1_message *seed;
 	struct bus1_user_quota quota;

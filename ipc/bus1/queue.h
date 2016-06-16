@@ -118,6 +118,7 @@ struct bus1_queue {
 	struct rb_node __rcu *front;
 	u64 clock;
 	atomic_t n_dropped;
+	wait_queue_head_t *waitq;
 };
 
 /**
@@ -137,15 +138,16 @@ struct bus1_queue_node {
 };
 
 /* queue */
-void bus1_queue_init_internal(struct bus1_queue *queue);
+void bus1_queue_init_internal(struct bus1_queue *queue,
+			      wait_queue_head_t *waitq);
 void bus1_queue_destroy(struct bus1_queue *queue);
 void bus1_queue_post_flush(struct bus1_queue *queue);
-bool bus1_queue_stage(struct bus1_queue *queue,
+void bus1_queue_stage(struct bus1_queue *queue,
 		      struct bus1_queue_node *node,
 		      u64 timestamp);
-bool bus1_queue_remove(struct bus1_queue *queue,
+void bus1_queue_remove(struct bus1_queue *queue,
 		       struct bus1_queue_node *node);
-bool bus1_queue_drop(struct bus1_queue *queue);
+void bus1_queue_drop(struct bus1_queue *queue);
 struct bus1_queue_node *bus1_queue_peek(struct bus1_queue *queue);
 
 /* nodes */
@@ -159,8 +161,8 @@ unsigned int bus1_queue_node_get_type(struct bus1_queue_node *node);
 u64 bus1_queue_node_get_timestamp(struct bus1_queue_node *node);
 
 /* see bus1_queue_init_internal() for details */
-#define bus1_queue_init_for_peer(_peer) ({		\
-		bus1_queue_init_internal(&(_peer)->queue);	\
+#define bus1_queue_init_for_peer(_peer, waitq) ({			\
+		bus1_queue_init_internal(&(_peer)->queue, waitq);	\
 	})
 
 /**

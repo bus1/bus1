@@ -88,12 +88,14 @@ static void bus1_queue_node_set_timestamp(struct bus1_queue_node *node, u64 ts)
  * horribly. They rely on container_of() to be valid on every queue. Use the
  * bus1_queue_init_for_peer() macro to make sure you never violate this rule.
  */
-void bus1_queue_init_internal(struct bus1_queue *queue)
+void bus1_queue_init_internal(struct bus1_queue *queue,
+			      wait_queue_head_t *waitq)
 {
 	queue->messages = RB_ROOT;
 	rcu_assign_pointer(queue->front, NULL);
 	queue->clock = 0;
 	atomic_set(&queue->n_dropped, 0);
+	queue->waitq = waitq;
 }
 
 /**
@@ -207,10 +209,8 @@ static int bus1_queue_node_compare(struct bus1_queue_node *a,
  * Furthermore, the queue clock must be synced with the new timestamp *before*
  * staging an entry. Similarly, the timestamp of an entry can only be
  * increased, never decreased.
- *
- * Return: True if this call turned the queue readable, false otherwise.
  */
-bool bus1_queue_stage(struct bus1_queue *queue,
+void bus1_queue_stage(struct bus1_queue *queue,
 		      struct bus1_queue_node *node,
 		      u64 timestamp)
 {
@@ -226,16 +226,16 @@ bool bus1_queue_stage(struct bus1_queue *queue,
 
 	/* provided timestamp must be valid */
 	if (WARN_ON(timestamp == 0 || timestamp > queue->clock))
-		return false;
+		return;
 	/* if unstamped, it must be unlinked, and vice versa */
 	if (WARN_ON(!ts == !RB_EMPTY_NODE(&node->rb)))
-		return false;
+		return;
 	/* if stamped, it must be a valid staging timestamp from earlier */
 	if (ts != 0 && WARN_ON(!(ts & 1) || timestamp < ts))
-		return false;
+		return;
 	/* nothing to do? */
 	if (ts == timestamp)
-		return false;
+		return;
 
 	/*
 	 * On updates, we remove our entry and re-insert it with a higher
@@ -301,7 +301,8 @@ bool bus1_queue_stage(struct bus1_queue *queue,
 			rcu_assign_pointer(queue->front, &node->rb);
 	}
 
-	return !readable && bus1_queue_is_readable(queue);
+	if (!readable && bus1_queue_is_readable(queue))
+		wake_up_interruptible(queue->waitq);
 }
 
 /**
@@ -315,10 +316,8 @@ bool bus1_queue_stage(struct bus1_queue *queue,
  * If @node was still in staging, this call might uncover a new front entry and
  * as such turn the queue readable. Hence, the caller *must* handle its return
  * value.
- *
- * Return: True if this call turned the queue readable, false otherwise.
  */
-bool bus1_queue_remove(struct bus1_queue *queue,
+void bus1_queue_remove(struct bus1_queue *queue,
 		       struct bus1_queue_node *node)
 {
 	struct bus1_queue_node *iter;
@@ -328,7 +327,7 @@ bool bus1_queue_remove(struct bus1_queue *queue,
 	bus1_queue_assert_held(queue);
 
 	if (!node || RB_EMPTY_NODE(&node->rb))
-		return false;
+		return;
 
 	readable = bus1_queue_is_readable(queue);
 	front = rcu_dereference_protected(queue->front,
@@ -354,16 +353,18 @@ bool bus1_queue_remove(struct bus1_queue *queue,
 	rb_erase(&node->rb, &queue->messages);
 	RB_CLEAR_NODE(&node->rb);
 
-	return !readable && bus1_queue_is_readable(queue);
+	if (!readable && bus1_queue_is_readable(queue))
+		wake_up_interruptible(queue->waitq);
 }
 
-bool bus1_queue_drop(struct bus1_queue *queue)
+void bus1_queue_drop(struct bus1_queue *queue)
 {
 	bool readable = bus1_queue_is_readable(queue);
 
 	atomic_inc(&queue->n_dropped);
 
-	return !readable;
+	if (!readable)
+		wake_up_interruptible(queue->waitq);
 }
 
 /**
