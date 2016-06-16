@@ -164,7 +164,6 @@ static struct bus1_peer_info *bus1_peer_info_new(wait_queue_head_t *waitq,
 	peer_info->map_handles_by_id = RB_ROOT;
 	peer_info->map_handles_by_node = RB_ROOT;
 	seqcount_init(&peer_info->seqcount);
-	atomic_set(&peer_info->n_dropped, 0);
 	peer_info->handle_ids = 0;
 
 	peer_info->user = bus1_user_ref_by_uid(peer_info->cred->uid);
@@ -696,6 +695,8 @@ static int bus1_peer_dequeue(struct bus1_peer_info *peer_info,
 			return -ENOTRECOVERABLE;
 		}
 	}
+	param->n_dropped = bus1_queue_flush_dropped(&peer_info->queue);
+
 	mutex_unlock(&peer_info->qlock);
 	mutex_unlock(&peer_info->lock);
 
@@ -738,6 +739,8 @@ static void bus1_peer_peek(struct bus1_peer_info *peer_info,
 			break;
 		}
 	}
+	param->n_dropped = bus1_queue_peek_dropped(&peer_info->queue);
+
 	mutex_unlock(&peer_info->qlock);
 	mutex_unlock(&peer_info->lock);
 }
@@ -762,13 +765,10 @@ static int bus1_peer_ioctl_recv(struct bus1_peer *peer, unsigned long arg)
 
 	if (param.flags & BUS1_RECV_FLAG_PEEK) {
 		bus1_peer_peek(peer_info, &param);
-		param.n_dropped = atomic_read(&peer_info->n_dropped);
 	} else {
 		r = bus1_peer_dequeue(peer_info, &param);
 		if (r < 0)
 			return r;
-
-		param.n_dropped = atomic_xchg(&peer_info->n_dropped, 0);
 	}
 
 	if (!param.n_dropped && param.type == BUS1_MSG_NONE)

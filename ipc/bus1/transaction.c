@@ -410,7 +410,7 @@ bus1_transaction_commit_one(struct bus1_transaction *transaction,
 	id = BUS1_HANDLE_INVALID;
 
 	if (!message->slice) {
-		if (atomic_inc_return(&peer_info->n_dropped) == 1)
+		if (bus1_queue_drop(&peer_info->queue))
 			wake_up_interruptible(peer_info->waitq);
 	} else if (bus1_queue_node_is_queued(&message->qnode)) {
 		id = bus1_handle_dest_export(dest, peer_info, timestamp, true);

@@ -52,7 +52,6 @@ struct bus1_message;
  * @map_handles_by_id:		map of owned handles, by handle id
  * @map_handles_by_node:	map of owned handles, by node pointer
  * @seqcount:			sequence counter
- * @n_dropped:			number of lost messages since last report
  * @handle_ids:			handle ID allocator
  * @n_allocated:		remaining quota for allocated pool memory
  * @n_messages:			remaining quota for owned messages
@@ -76,7 +75,6 @@ struct bus1_peer_info {
 	struct rb_root map_handles_by_id;
 	struct rb_root map_handles_by_node;
 	struct seqcount seqcount;
-	atomic_t n_dropped;
 	u64 handle_ids;
 
 	size_t n_allocated;

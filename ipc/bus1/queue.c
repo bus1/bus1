@@ -93,6 +93,7 @@ void bus1_queue_init_internal(struct bus1_queue *queue)
 	queue->messages = RB_ROOT;
 	rcu_assign_pointer(queue->front, NULL);
 	queue->clock = 0;
+	atomic_set(&queue->n_dropped, 0);
 }
 
 /**
@@ -354,6 +355,15 @@ bool bus1_queue_remove(struct bus1_queue *queue,
 	RB_CLEAR_NODE(&node->rb);
 
 	return !readable && bus1_queue_is_readable(queue);
+}
+
+bool bus1_queue_drop(struct bus1_queue *queue)
+{
+	bool readable = bus1_queue_is_readable(queue);
+
+	atomic_inc(&queue->n_dropped);
+
+	return !readable;
 }
 
 /**

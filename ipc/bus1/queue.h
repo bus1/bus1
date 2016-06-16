@@ -111,11 +111,13 @@ enum {
  * @messages:		queued messages
  * @front:		cached front entry
  * @clock:		local clock (used for Lamport Timestamps)
+ * @n_dropped:		number of dropped messages since last report
  */
 struct bus1_queue {
 	struct rb_root messages;
 	struct rb_node __rcu *front;
 	u64 clock;
+	atomic_t n_dropped;
 };
 
 /**
@@ -143,6 +145,7 @@ bool bus1_queue_stage(struct bus1_queue *queue,
 		      u64 timestamp);
 bool bus1_queue_remove(struct bus1_queue *queue,
 		       struct bus1_queue_node *node);
+bool bus1_queue_drop(struct bus1_queue *queue);
 struct bus1_queue_node *bus1_queue_peek(struct bus1_queue *queue);
 
 /* nodes */
@@ -201,26 +204,39 @@ static inline u64 bus1_queue_sync(struct bus1_queue *queue, u64 timestamp)
 	return queue->clock;
 }
 
+static inline u64 bus1_queue_peek_dropped(struct bus1_queue *queue)
+{
+	return atomic_read(&queue->n_dropped);
+}
+
+static inline u64 bus1_queue_flush_dropped(struct bus1_queue *queue)
+{
+	return atomic_xchg(&queue->n_dropped, 0);
+}
+
 /**
  * bus1_queue_is_readable() - check whether a queue is readable
  * @queue:	queue to operate on
  *
  * This checks whether the given queue is readable. It is similar to
- * bus1_queue_peek(), but only returns a boolean state.
+ * bus1_queue_peek() and bus1_queue_peek_dropped(), but only returns a boolean
+ * state.
  *
  * Note that messages can have 3 different states:
  *   - staging: the message is part of an active transaction
  *   - committed: the message is fully committed, but might still be blocked by
  *                a staging message
- *   - ready: the message is committed and ready to be dequeued.
+ *   - ready: the message is committed and ready to be dequeued
+ *   - dropped: the message could not be added to the queue and was dropped.
  *
- * This function only checks that there is at least one ready entry.
+ * This function checks that there is at least one ready or one dropped entry.
  *
  * Return: True if the queue is readable, false if not.
  */
 static inline bool bus1_queue_is_readable(struct bus1_queue *queue)
 {
-	return rcu_access_pointer(queue->front);
+	return rcu_access_pointer(queue->front) ||
+	       atomic_read(&queue->n_dropped) > 0;
 }
 
 #endif /* __BUS1_QUEUE_H */
