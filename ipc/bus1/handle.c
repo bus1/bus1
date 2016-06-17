@@ -327,37 +327,20 @@ bus1_handle_unlock_peer(struct bus1_peer *peer,
 	return NULL;
 }
 
-static struct bus1_peer *bus1_handle_qunlock(struct bus1_peer *peer,
-					     struct bus1_peer_info *peer_info)
+static struct bus1_peer *bus1_handle_acquire_holder(struct bus1_handle *handle,
+						struct bus1_peer_info **infop)
 {
-	if (peer) {
-		mutex_unlock(&peer_info->qlock);
-		bus1_peer_release(peer);
-	}
-	return NULL;
-}
-
-static struct bus1_peer *bus1_handle_qlock(struct bus1_handle *handle,
-					   struct bus1_peer_info **infop)
-{
-	struct bus1_peer_info *peer_info;
 	struct bus1_peer *peer;
 
 	rcu_read_lock();
 	peer = bus1_peer_acquire(rcu_dereference(handle->holder));
 	rcu_read_unlock();
 
-	if (peer) {
-		peer_info = bus1_peer_dereference(peer);
-		mutex_lock(&peer_info->qlock);
-		if (likely(rcu_access_pointer(handle->holder))) {
-			*infop = peer_info;
-			return peer;
-		}
-		bus1_handle_qunlock(peer, peer_info);
-	}
+	if (!peer)
+		return NULL;
 
-	return NULL;
+	*infop = bus1_peer_dereference(peer);
+	return peer;
 }
 
 static void bus1_node_queue(struct bus1_node *node,
@@ -374,15 +357,18 @@ static void bus1_node_queue(struct bus1_node *node,
 
 	WARN_ON(RB_EMPTY_NODE(&node->owner.rb_id));
 
+	bus1_handle_ref(&node->owner);
 	mutex_lock(&owner_info->qlock);
 	if (!bus1_queue_node_is_queued(&node->qnode)) {
 		bus1_queue_sync(&owner_info->queue, 0);
 		timestamp = bus1_queue_tick(&owner_info->queue);
-		bus1_handle_ref(&node->owner);
 		bus1_queue_stage(&owner_info->queue, &node->owner.qnode,
 				 timestamp);
+		mutex_unlock(&owner_info->qlock);
+	} else {
+		mutex_unlock(&owner_info->qlock);
+		bus1_handle_unref(&node->owner);
 	}
-	mutex_unlock(&owner_info->qlock);
 }
 
 static void bus1_node_dequeue(struct bus1_node *node,
@@ -397,9 +383,12 @@ static void bus1_node_dequeue(struct bus1_node *node,
 	mutex_lock(&owner_info->qlock);
 	if (bus1_queue_node_is_queued(&node->qnode)) {
 		bus1_queue_remove(&owner_info->queue, &node->qnode);
+		mutex_unlock(&owner_info->qlock);
+
 		bus1_handle_unref(&node->owner);
+	} else {
+		mutex_unlock(&owner_info->qlock);
 	}
-	mutex_unlock(&owner_info->qlock);
 }
 
 static void bus1_handle_attach_internal(struct bus1_handle *handle,
@@ -594,9 +583,12 @@ static void bus1_handle_uninstall_holder(struct bus1_handle *handle,
 	mutex_lock(&peer_info->qlock);
 	if (bus1_queue_node_is_queued(&handle->qnode)) {
 		bus1_queue_remove(&peer_info->queue, &handle->qnode);
+		mutex_unlock(&peer_info->qlock);
+
 		bus1_handle_unref(handle);
+	} else {
+		mutex_unlock(&peer_info->qlock);
 	}
-	mutex_unlock(&peer_info->qlock);
 
 	bus1_queue_node_destroy(&handle->qnode);
 	INIT_LIST_HEAD(&handle->link_flush);
@@ -610,11 +602,13 @@ static void bus1_node_stage_flush(struct list_head *list_notify)
 
 	/* sync all clocks so side-channels are ordered */
 	list_for_each_entry(h, list_notify, link_node) {
-		peer = bus1_handle_qlock(h, &peer_info);
+		peer = bus1_handle_acquire_holder(h, &peer_info);
 		if (peer) {
+			mutex_lock(&peer_info->qlock);
 			bus1_queue_sync(&peer_info->queue,
 					h->node->timestamp - 1);
-			bus1_handle_qunlock(peer, peer_info);
+			mutex_unlock(&peer_info->qlock);
+			bus1_peer_release(peer);
 		}
 	}
 
@@ -623,13 +617,15 @@ static void bus1_node_stage_flush(struct list_head *list_notify)
 					     link_node))) {
 		list_del_init(&h->link_node);
 
-		peer = bus1_handle_qlock(h, &peer_info);
+		peer = bus1_handle_acquire_holder(h, &peer_info);
 		if (peer) {
+			mutex_lock(&peer_info->qlock);
 			if (bus1_queue_node_is_queued(&h->qnode))
 				bus1_queue_stage(&peer_info->queue,
 						 &h->qnode,
 						 h->node->timestamp);
-			bus1_handle_qunlock(peer, peer_info);
+			mutex_unlock(&peer_info->qlock);
+			bus1_peer_release(peer);
 		}
 
 		/* nodes pin their owners until destroyed */
@@ -663,24 +659,21 @@ static void bus1_node_stage(struct bus1_node *node,
 					     link_node))) {
 		list_del_init(&h->link_node);
 
-		holder = bus1_handle_qlock(h, &holder_info);
+		holder = bus1_handle_acquire_holder(h, &holder_info);
 		if (holder) {
+			bus1_handle_ref(h);
+			mutex_lock(&holder_info->qlock);
 			bus1_queue_sync(&holder_info->queue, timestamp);
 			timestamp = bus1_queue_tick(&holder_info->queue);
-			bus1_handle_ref(h);
 			bus1_queue_stage(&holder_info->queue, &h->qnode,
 					 timestamp - 1);
+			mutex_unlock(&holder_info->qlock);
 			list_add(&h->link_node, &list_notify);
-			bus1_handle_qunlock(holder, holder_info);
+			bus1_peer_release(holder);
 		} else {
 			bus1_handle_unref(h);
 		}
 	}
-
-	mutex_lock(&peer_info->qlock);
-
-	bus1_queue_sync(&peer_info->queue, timestamp);
-	timestamp = bus1_queue_tick(&peer_info->queue);
 
 	/*
 	 * Queue owner notification only if the owner was ever accessible. If
@@ -690,17 +683,25 @@ static void bus1_node_stage(struct bus1_node *node,
 	 */
 	if (likely(!RB_EMPTY_NODE(&node->owner.rb_id))) {
 		bus1_handle_ref(&node->owner);
+
+		mutex_lock(&peer_info->qlock);
+		bus1_queue_sync(&peer_info->queue, timestamp);
+		timestamp = bus1_queue_tick(&peer_info->queue);
 		bus1_queue_stage(&peer_info->queue, &node->owner.qnode,
 				 timestamp - 1);
+	} else {
+		mutex_lock(&peer_info->qlock);
+		bus1_queue_sync(&peer_info->queue, timestamp);
+		timestamp = bus1_queue_tick(&peer_info->queue);
 	}
-
-	list_add_tail(&node->owner.link_node, &list_notify);
 
 	write_seqcount_begin(&peer_info->seqcount);
 	node->timestamp = timestamp;
 	write_seqcount_end(&peer_info->seqcount);
 
 	mutex_unlock(&peer_info->qlock);
+
+	list_add_tail(&node->owner.link_node, &list_notify);
 
 	bus1_node_stage_flush(&list_notify);
 
