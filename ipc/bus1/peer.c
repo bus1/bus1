@@ -672,18 +672,18 @@ static int bus1_peer_dequeue(struct bus1_peer_info *peer_info,
 		}
 		case BUS1_QUEUE_NODE_HANDLE_DESTRUCTION:
 			bus1_queue_remove(&peer_info->queue, node);
+			mutex_unlock(&peer_info->qlock);
 			param->type = BUS1_MSG_NODE_DESTROY;
 			param->node_destroy.handle =
 				bus1_handle_from_queue(node, peer_info, true);
-			mutex_unlock(&peer_info->qlock);
 			mutex_unlock(&peer_info->lock);
 			return 0;
 		case BUS1_QUEUE_NODE_HANDLE_RELEASE:
 			bus1_queue_remove(&peer_info->queue, node);
+			mutex_unlock(&peer_info->qlock);
 			param->type = BUS1_MSG_NODE_RELEASE;
 			param->node_release.handle =
 				bus1_handle_from_queue(node, peer_info, true);
-			mutex_unlock(&peer_info->qlock);
 			mutex_unlock(&peer_info->lock);
 			return 0;
 		default:

@@ -274,7 +274,7 @@ u64 bus1_handle_from_queue(struct bus1_queue_node *node,
 	struct bus1_handle *handle;
 	u64 id;
 
-	lockdep_assert_held(&peer_info->qlock);
+	lockdep_assert_held(&peer_info->lock);
 
 	switch (bus1_queue_node_get_type(node)) {
 	case BUS1_QUEUE_NODE_HANDLE_DESTRUCTION:
