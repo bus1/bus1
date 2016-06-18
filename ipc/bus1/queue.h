@@ -194,8 +194,7 @@ static inline u64 bus1_queue_tick(struct bus1_queue *queue)
  * @timestamp. That is, the queue clock is fast-forwarded to @timestamp, in
  * case it is newer than the queue clock. Otherwise, nothing is done.
  *
- * This function works with even *and* odd timestamps. It is internally
- * converted to the corresponding even timestamp, in case it is odd.
+ * The passed in timestamp must be even.
  *
  * The caller must hold the peer qlock.
  *
@@ -203,7 +202,8 @@ static inline u64 bus1_queue_tick(struct bus1_queue *queue)
  */
 static inline u64 bus1_queue_sync(struct bus1_queue *queue, u64 timestamp)
 {
-	queue->clock = max(queue->clock, timestamp + (timestamp & 1));
+	WARN_ON(timestamp & 1);
+	queue->clock = max(queue->clock, timestamp);
 	return queue->clock;
 }
 

@@ -606,7 +606,7 @@ static void bus1_node_stage_flush(struct list_head *list_notify)
 		if (peer) {
 			mutex_lock(&peer_info->qlock);
 			bus1_queue_sync(&peer_info->queue,
-					h->node->timestamp - 1);
+					h->node->timestamp);
 			mutex_unlock(&peer_info->qlock);
 			bus1_peer_release(peer);
 		}
