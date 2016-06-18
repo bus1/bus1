@@ -207,7 +207,6 @@ int bus1_message_install(struct bus1_message *message,
 	void *iter;
 
 	lockdep_assert_held(&peer_info->lock);
-	lockdep_assert_held(&peer_info->qlock);
 
 	if (WARN_ON(!message->slice))
 		return -ENOTRECOVERABLE;
