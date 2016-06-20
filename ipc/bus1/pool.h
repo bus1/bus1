@@ -39,11 +39,13 @@
  * protected by client provided policies.
  */
 
-#include <linux/fs.h>
 #include <linux/kernel.h>
-#include <linux/list.h>
 #include <linux/rbtree.h>
-#include <linux/uio.h>
+#include <linux/types.h>
+
+struct file;
+struct iovec;
+struct kvec;
 
 /* internal: maximum offset, which implies the maximum pool size */
 #define BUS1_POOL_SIZE_MAX U32_MAX

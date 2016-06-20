@@ -13,6 +13,7 @@
 #include <linux/fs.h>
 #include <linux/kernel.h>
 #include <linux/slab.h>
+#include <linux/uio.h>
 #include "handle.h"
 #include "message.h"
 #include "peer.h"
