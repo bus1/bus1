@@ -625,123 +625,147 @@ exit:
 	return r;
 }
 
+static struct bus1_queue_node *
+bus1_peer_queue_peek(struct bus1_peer_info *peer_info,
+		     struct bus1_cmd_recv *param,
+		     bool drop)
+{
+	struct bus1_message *message = NULL;
+	struct bus1_queue_node *node;
+	int r;
+
+	if (param->flags & BUS1_RECV_FLAG_SEED)
+		node = peer_info->seed ? &peer_info->seed->qnode : NULL;
+	else
+		node = bus1_queue_peek(&peer_info->queue);
+
+	if (!node)
+		return NULL;
+
+	if (bus1_queue_node_get_type(node) == BUS1_QUEUE_NODE_MESSAGE_NORMAL) {
+		message = bus1_message_from_node(node);
+
+		r = bus1_message_install(message, peer_info);
+		if (r < 0)
+			return ERR_PTR(r);
+	}
+
+	if (drop) {
+		bus1_queue_remove(&peer_info->queue, node);
+		if (message == peer_info->seed)
+			peer_info->seed = NULL;
+	}
+
+	return node;
+}
+
 static int bus1_peer_dequeue(struct bus1_peer_info *peer_info,
 			     struct bus1_cmd_recv *param)
 {
+	struct bus1_message *message = NULL;
 	struct bus1_queue_node *node;
 	int r;
 
 	mutex_lock(&peer_info->lock);
+
 	mutex_lock(&peer_info->qlock);
-	if (param->flags & BUS1_RECV_FLAG_SEED)
-		node = peer_info->seed ? &peer_info->seed->qnode : NULL;
-	else
-		node = bus1_queue_peek(&peer_info->queue);
-	if (node) {
-		switch (bus1_queue_node_get_type(node)) {
-		case BUS1_QUEUE_NODE_MESSAGE_NORMAL: {
-			struct bus1_message *message;
-
-			message = bus1_message_from_node(node);
-			r = bus1_message_install(message, peer_info);
-			if (r < 0) {
-				mutex_unlock(&peer_info->qlock);
-				mutex_unlock(&peer_info->lock);
-				return r;
-			}
-
-			if (message == peer_info->seed)
-				peer_info->seed = NULL;
-			else
-				bus1_queue_remove(&peer_info->queue,
-						  &message->qnode);
-
-			mutex_unlock(&peer_info->qlock);
-
-			bus1_pool_publish(&peer_info->pool, message->slice);
-			bus1_message_deallocate(message, peer_info);
-
-			mutex_unlock(&peer_info->lock);
-
-			param->type = BUS1_MSG_DATA;
-			memcpy(&param->data, &message->data,
-			       sizeof(param->data));
-
-			bus1_message_free(message, peer_info);
-			return 0;
-		}
-		case BUS1_QUEUE_NODE_HANDLE_DESTRUCTION:
-			bus1_queue_remove(&peer_info->queue, node);
-			mutex_unlock(&peer_info->qlock);
-			param->type = BUS1_MSG_NODE_DESTROY;
-			param->node_destroy.handle =
-				bus1_handle_from_queue(node, peer_info, true);
-			mutex_unlock(&peer_info->lock);
-			return 0;
-		case BUS1_QUEUE_NODE_HANDLE_RELEASE:
-			bus1_queue_remove(&peer_info->queue, node);
-			mutex_unlock(&peer_info->qlock);
-			param->type = BUS1_MSG_NODE_RELEASE;
-			param->node_release.handle =
-				bus1_handle_from_queue(node, peer_info, true);
-			mutex_unlock(&peer_info->lock);
-			return 0;
-		default:
-			mutex_unlock(&peer_info->qlock);
-			mutex_unlock(&peer_info->lock);
-
-			WARN(1, "Invalid queue-node type");
-			return -ENOTRECOVERABLE;
-		}
-	}
-	param->n_dropped = bus1_queue_flush_dropped(&peer_info->queue);
-
+	node = bus1_peer_queue_peek(peer_info, param, true);
 	mutex_unlock(&peer_info->qlock);
-	mutex_unlock(&peer_info->lock);
+	if (IS_ERR(node)) {
+		r = PTR_ERR(node);
+		goto exit;
+	}
 
-	return 0;
+	r = 0;
+	param->n_dropped = bus1_queue_flush_dropped(&peer_info->queue);
+	if (!node)
+		goto exit;
+
+	switch (bus1_queue_node_get_type(node)) {
+	case BUS1_QUEUE_NODE_MESSAGE_NORMAL:
+		message = bus1_message_from_node(node);
+		bus1_pool_publish(&peer_info->pool, message->slice);
+		bus1_message_deallocate(message, peer_info);
+		param->type = BUS1_MSG_DATA;
+		memcpy(&param->data, &message->data,
+		       sizeof(param->data));
+		break;
+
+	case BUS1_QUEUE_NODE_HANDLE_DESTRUCTION:
+		param->type = BUS1_MSG_NODE_DESTROY;
+		param->node_destroy.handle =
+			bus1_handle_from_queue(node, peer_info, true);
+		break;
+
+	case BUS1_QUEUE_NODE_HANDLE_RELEASE:
+		param->type = BUS1_MSG_NODE_RELEASE;
+		param->node_release.handle =
+			bus1_handle_from_queue(node, peer_info, true);
+		break;
+
+	default:
+		WARN(1, "Invalid queue-node type");
+		r = -ENOTRECOVERABLE;
+		break;
+	}
+
+exit:
+	mutex_unlock(&peer_info->lock);
+	bus1_message_free(message, peer_info);
+	return r;
 }
 
-static void bus1_peer_peek(struct bus1_peer_info *peer_info,
-			   struct bus1_cmd_recv *param)
+static int bus1_peer_peek(struct bus1_peer_info *peer_info,
+			  struct bus1_cmd_recv *param)
 {
 	struct bus1_queue_node *node;
 	struct bus1_message *message;
+	int r;
 
 	mutex_lock(&peer_info->lock);
 	mutex_lock(&peer_info->qlock);
-	if (param->flags & BUS1_RECV_FLAG_SEED)
-		node = peer_info->seed ? &peer_info->seed->qnode : NULL;
-	else
-		node = bus1_queue_peek(&peer_info->queue);
-	if (node) {
-		switch (bus1_queue_node_get_type(node)) {
-		case BUS1_QUEUE_NODE_MESSAGE_NORMAL:
-			message = bus1_message_from_node(node);
-			bus1_pool_publish(&peer_info->pool, message->slice);
-			param->type = BUS1_MSG_DATA;
-			memcpy(&param->data, &message->data,
-			       sizeof(param->data));
-			break;
-		case BUS1_QUEUE_NODE_HANDLE_DESTRUCTION:
-			param->type = BUS1_MSG_NODE_DESTROY;
-			param->node_destroy.handle =
-				bus1_handle_from_queue(node, peer_info, false);
-			break;
-		case BUS1_QUEUE_NODE_HANDLE_RELEASE:
-			param->type = BUS1_MSG_NODE_RELEASE;
-			param->node_release.handle =
-				bus1_handle_from_queue(node, peer_info, false);
-			break;
-		default:
-			WARN(1, "Invalid queue-node type");
-			break;
-		}
-	}
-	param->n_dropped = bus1_queue_peek_dropped(&peer_info->queue);
 
+	node = bus1_peer_queue_peek(peer_info, param, false);
+	if (IS_ERR_OR_NULL(node)) {
+		r = PTR_ERR(node);
+		goto exit;
+	}
+
+	r = 0;
+	param->n_dropped = bus1_queue_peek_dropped(&peer_info->queue);
+	if (!node)
+		goto exit;
+
+	switch (bus1_queue_node_get_type(node)) {
+	case BUS1_QUEUE_NODE_MESSAGE_NORMAL:
+		message = bus1_message_from_node(node);
+		bus1_pool_publish(&peer_info->pool, message->slice);
+		param->type = BUS1_MSG_DATA;
+		memcpy(&param->data, &message->data,
+		       sizeof(param->data));
+		break;
+
+	case BUS1_QUEUE_NODE_HANDLE_DESTRUCTION:
+		param->type = BUS1_MSG_NODE_DESTROY;
+		param->node_destroy.handle =
+			bus1_handle_from_queue(node, peer_info, false);
+		break;
+
+	case BUS1_QUEUE_NODE_HANDLE_RELEASE:
+		param->type = BUS1_MSG_NODE_RELEASE;
+		param->node_release.handle =
+			bus1_handle_from_queue(node, peer_info, false);
+		break;
+
+	default:
+		WARN(1, "Invalid queue-node type");
+		break;
+	}
+
+exit:
 	mutex_unlock(&peer_info->qlock);
 	mutex_unlock(&peer_info->lock);
+	return r;
 }
 
 static int bus1_peer_ioctl_recv(struct bus1_peer *peer, unsigned long arg)
@@ -762,14 +786,13 @@ static int bus1_peer_ioctl_recv(struct bus1_peer *peer, unsigned long arg)
 		     param.n_dropped != 0))
 		return -EINVAL;
 
-	if (param.flags & BUS1_RECV_FLAG_PEEK) {
-		bus1_peer_peek(peer_info, &param);
-	} else {
+	if (param.flags & BUS1_RECV_FLAG_PEEK)
+		r = bus1_peer_peek(peer_info, &param);
+	else
 		r = bus1_peer_dequeue(peer_info, &param);
-		if (r < 0)
-			return r;
-	}
 
+	if (r < 0)
+		return r;
 	if (!param.n_dropped && param.type == BUS1_MSG_NONE)
 		return -EAGAIN;
 
