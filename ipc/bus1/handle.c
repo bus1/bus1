@@ -905,6 +905,8 @@ static bool bus1_node_order(struct bus1_node *node, u64 timestamp)
 	unsigned int seq;
 	u64 ts;
 
+	WARN_ON(timestamp & 1);
+
 	/*
 	 * Order node-destruction against @timestamp. If @node is still valid
 	 * at the time of @timestamp, this returns true. Otherwise, false is
