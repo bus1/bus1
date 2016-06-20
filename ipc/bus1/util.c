@@ -19,6 +19,7 @@
 #include <linux/pagemap.h>
 #include <linux/slab.h>
 #include <linux/uaccess.h>
+#include <linux/uio.h>
 #include <net/sock.h>
 #include "main.h"
 #include "util.h"

@@ -21,9 +21,10 @@
 
 #include <linux/atomic.h>
 #include <linux/err.h>
-#include <linux/fs.h>
-#include <linux/kernel.h>
-#include <linux/uio.h>
+#include <linux/types.h>
+
+struct dentry;
+struct iovec;
 
 int bus1_import_vecs(struct iovec *out_vecs,
 		     size_t *out_length,
