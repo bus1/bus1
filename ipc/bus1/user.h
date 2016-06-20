@@ -43,15 +43,13 @@
  */
 
 #include <linux/atomic.h>
-#include <linux/idr.h>
-#include <linux/kernel.h>
 #include <linux/kref.h>
-#include <linux/rcupdate.h>
+#include <linux/types.h>
 #include <linux/uidgid.h>
 
 struct bus1_peer_info;
-struct bus1_pool;
-struct bus1_queue;
+struct idr;
+struct ida;
 
 extern struct idr bus1_user_idr;
 extern struct ida bus1_user_ida;
