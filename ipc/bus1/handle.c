@@ -605,8 +605,7 @@ static void bus1_node_stage_flush(struct list_head *list_notify)
 		peer = bus1_handle_acquire_holder(h, &peer_info);
 		if (peer) {
 			mutex_lock(&peer_info->qlock);
-			bus1_queue_sync(&peer_info->queue,
-					h->node->timestamp);
+			bus1_queue_sync(&peer_info->queue, h->node->timestamp);
 			mutex_unlock(&peer_info->qlock);
 			bus1_peer_release(peer);
 		}
@@ -621,8 +620,7 @@ static void bus1_node_stage_flush(struct list_head *list_notify)
 		if (peer) {
 			mutex_lock(&peer_info->qlock);
 			if (bus1_queue_node_is_queued(&h->qnode))
-				bus1_queue_commit(&peer_info->queue,
-						  &h->qnode,
+				bus1_queue_commit(&peer_info->queue, &h->qnode,
 						  h->node->timestamp);
 			mutex_unlock(&peer_info->qlock);
 			bus1_peer_release(peer);
@@ -688,8 +686,10 @@ static void bus1_node_stage(struct bus1_node *node,
 	} else {
 		mutex_lock(&peer_info->qlock);
 		bus1_queue_sync(&peer_info->queue, timestamp);
-		timestamp = bus1_queue_tick(&peer_info->queue);
 	}
+
+	/* Fetch final timestamp from the sending queue. */
+	timestamp = bus1_queue_tick(&peer_info->queue);
 
 	write_seqcount_begin(&peer_info->seqcount);
 	node->timestamp = timestamp;
