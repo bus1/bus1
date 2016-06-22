@@ -191,28 +191,9 @@ static int bus1_queue_node_compare(struct bus1_queue_node *a,
 	return 0;
 }
 
-/**
- * bus1_queue_stage() - stage queue entry with new timestamp
- * @queue:		queue to operate on
- * @node:		queue entry to stage
- * @timestamp:		new timestamp for @node
- *
- * Link or update a queue entry according to @timestamp. If the entry was not
- * linked, yet, this will insert the entry into the queue. If it was already
- * linked, it is updated and sorted according to @timestamp.
- *
- * The caller can provide both, odd timestamps (i.e., mark entry as staging),
- * or even timestamps (i.e., commit the entry). If an entry is marked as
- * staging, it can be updated as often as you want. However, once an entry is
- * committed, it must not be updated, anymore.
- *
- * Furthermore, the queue clock must be synced with the new timestamp *before*
- * staging an entry. Similarly, the timestamp of an entry can only be
- * increased, never decreased.
- */
-void bus1_queue_stage(struct bus1_queue *queue,
-		      struct bus1_queue_node *node,
-		      u64 timestamp)
+static void bus1_queue_add(struct bus1_queue *queue,
+			   struct bus1_queue_node *node,
+			   u64 timestamp)
 {
 	struct rb_node *front, *n, **slot;
 	struct bus1_queue_node *iter;
@@ -303,6 +284,61 @@ void bus1_queue_stage(struct bus1_queue *queue,
 
 	if (!readable && bus1_queue_is_readable(queue))
 		wake_up_interruptible(queue->waitq);
+}
+
+/**
+ * bus1_queue_stage() - stage queue entry with fresh timestamp
+ * @queue:		queue to operate on
+ * @node:		queue entry to stage
+ * @timestamp:		minimum timestamp for @node
+ *
+ * Link or update a queue entry with a new timestamp. The staging entry blocks
+ * all messages with timestamps synced on this queue in the future, as well as
+ * any messages with a timestamp greater than @timestamp. However, it does not
+ * block any messages already committed to this queue.
+ *
+ * The caller must provide an even timestamp and the entry may not already have
+ * been committed.
+ *
+ * Return: The timestamp used.
+ */
+u64 bus1_queue_stage(struct bus1_queue *queue,
+		     struct bus1_queue_node *node,
+		     u64 timestamp)
+{
+	WARN_ON(timestamp & 1);
+
+	bus1_queue_sync(queue, timestamp);
+	timestamp = bus1_queue_tick(queue);
+	bus1_queue_add(queue, node, timestamp - 1);
+
+	return timestamp;
+}
+
+/**
+ * bus1_queue_commit() - commit queue entry with new timestamp
+ * @queue:		queue to operate on
+ * @node:		queue entry to commit
+ * @timestamp:		new timestamp for @node
+ *
+ * Link or update a queue entry according to @timestamp. If the entry was not
+ * linked, yet, this will insert the entry into the queue. If it was already
+ * linked, it is updated and sorted according to @timestamp.
+ *
+ * The caller must provide an even timestamp and the entry may not already have
+ * been committed.
+ *
+ * Furthermore, the queue clock must be synced with the new timestamp *before*
+ * staging an entry. Similarly, the timestamp of an entry can only be
+ * increased, never decreased.
+ */
+void bus1_queue_commit(struct bus1_queue *queue,
+		       struct bus1_queue_node *node,
+		       u64 timestamp)
+{
+	WARN_ON(timestamp & 1);
+
+	bus1_queue_add(queue, node, timestamp);
 }
 
 /**

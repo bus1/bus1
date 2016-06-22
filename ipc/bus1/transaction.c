@@ -421,8 +421,8 @@ bus1_transaction_commit_one(struct bus1_transaction *transaction,
 			message->data.destination = id;
 
 			mutex_lock(&peer_info->qlock);
-			bus1_queue_stage(&peer_info->queue, &message->qnode,
-					 timestamp);
+			bus1_queue_commit(&peer_info->queue, &message->qnode,
+					  timestamp);
 			mutex_unlock(&peer_info->qlock);
 
 			return true;
@@ -477,21 +477,33 @@ int bus1_transaction_commit(struct bus1_transaction *transaction)
 	list = transaction->entries;
 	timestamp = 0;
 
+	/*
+	 * Add each message to its destination queue as a staging entry. The
+	 * message cannot be dequeued and blocks (until the message is finally
+	 * committed) any future messages on each queue from being dequeued too.
+	 * However, no messages that were finally committed before this message
+	 * was staged are blocked. At the end of the loop, it is guananteed that
+	 * all messages after @timestamp are blocked on all destination queues.
+	 */
 	for (message = list; message; message = message->transaction.next) {
 		peer = message->transaction.dest.raw_peer;
 		bus1_active_lockdep_acquired(&peer->active);
 		peer_info = bus1_peer_dereference(peer);
 
 		mutex_lock(&peer_info->qlock);
-		timestamp = bus1_queue_sync(&peer_info->queue, timestamp);
-		timestamp = bus1_queue_tick(&peer_info->queue);
-		bus1_queue_stage(&peer_info->queue, &message->qnode,
-				  timestamp - 1);
+		timestamp = bus1_queue_stage(&peer_info->queue, &message->qnode,
+					     timestamp);
 		mutex_unlock(&peer_info->qlock);
 
 		bus1_active_lockdep_released(&peer->active);
 	}
 
+	/*
+	 * Acquire the actual timestamp to use from the sending queue. It must
+	 * be no less than @timestamp, and it must be locally unique for the
+	 * sending clock. Note that it may not be unique on the destination
+	 * queues.
+	 */
 	mutex_lock(&transaction->peer_info->qlock);
 	timestamp = bus1_queue_sync(&transaction->peer_info->queue, timestamp);
 	timestamp = bus1_queue_tick(&transaction->peer_info->queue);
@@ -501,6 +513,12 @@ int bus1_transaction_commit(struct bus1_transaction *transaction)
 	bus1_handle_transfer_install(&transaction->handles, transaction->peer);
 	mutex_unlock(&transaction->peer_info->lock);
 
+	/*
+	 * Sync all the destination queues to the final timestamp. This
+	 * guarantees that by the time the first message is ready to be
+	 * dequeued, none of the other destination queues may use a lower
+	 * timestamp than the final one for this transaction.
+	 */
 	for (message = list; message; message = message->transaction.next) {
 		peer = message->transaction.dest.raw_peer;
 		idp = message->transaction.dest.idp;
@@ -535,6 +553,21 @@ int bus1_transaction_commit(struct bus1_transaction *transaction)
 	if (r < 0)
 		return r;
 
+	/*
+	 * Actually commit each message using the final timestamp. Each message
+	 * is committed with the same timestamp, and their global ordering is
+	 * therefore guaranteed to be consistent. Note that there may be several
+	 * messages with the same final timestamp on any given queue, as the
+	 * timestamp is only guaranteed to be unique locally for the sending
+	 * clock. To still guarantee a total order, messages with the same
+	 * timestamp are ordered by their sending peer. For this to work, it
+	 * must be guaranteed that all messages with the same timestamp are
+	 * finally committed before any of them can be dequeued (or their order
+	 * would not be stable). This is guaranteed as each final timestamp is
+	 * strictly greater than the corresponding staging timestamps, so all
+	 * messages with the same final timestamps will be blockd by all the
+	 * corresponding staging messages.
+	 */
 	while ((message = transaction->entries)) {
 		transaction->entries = message->transaction.next;
 		dest = message->transaction.dest;
