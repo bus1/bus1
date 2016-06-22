@@ -292,10 +292,10 @@ static void bus1_queue_add(struct bus1_queue *queue,
  * @node:		queue entry to stage
  * @timestamp:		minimum timestamp for @node
  *
- * Link or update a queue entry with a new timestamp. The staging entry blocks
- * all messages with timestamps synced on this queue in the future, as well as
- * any messages with a timestamp greater than @timestamp. However, it does not
- * block any messages already committed to this queue.
+ * Link a queue entry with a new timestamp. The staging entry blocks all
+ * messages with timestamps synced on this queue in the future, as well as any
+ * messages with a timestamp greater than @timestamp. However, it does not block
+ * any messages already committed to this queue.
  *
  * The caller must provide an even timestamp and the entry may not already have
  * been committed.
@@ -306,6 +306,7 @@ u64 bus1_queue_stage(struct bus1_queue *queue,
 		     struct bus1_queue_node *node,
 		     u64 timestamp)
 {
+	WARN_ON(!RB_EMPTY_NODE(&node->rb));
 	WARN_ON(timestamp & 1);
 
 	timestamp = bus1_queue_sync(queue, timestamp);
