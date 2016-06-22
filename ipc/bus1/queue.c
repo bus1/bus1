@@ -206,7 +206,7 @@ static void bus1_queue_add(struct bus1_queue *queue,
 	readable = bus1_queue_is_readable(queue);
 
 	/* provided timestamp must be valid */
-	if (WARN_ON(timestamp == 0 || timestamp > queue->clock))
+	if (WARN_ON(timestamp == 0 || timestamp > queue->clock + 1))
 		return;
 	/* if unstamped, it must be unlinked, and vice versa */
 	if (WARN_ON(!ts == !RB_EMPTY_NODE(&node->rb)))
@@ -308,9 +308,8 @@ u64 bus1_queue_stage(struct bus1_queue *queue,
 {
 	WARN_ON(timestamp & 1);
 
-	bus1_queue_sync(queue, timestamp);
-	timestamp = bus1_queue_tick(queue);
-	bus1_queue_add(queue, node, timestamp - 1);
+	timestamp = bus1_queue_sync(queue, timestamp);
+	bus1_queue_add(queue, node, timestamp + 1);
 
 	return timestamp;
 }
