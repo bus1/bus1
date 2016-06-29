@@ -394,46 +394,72 @@ error:
 	return r;
 }
 
-static bool
-bus1_transaction_commit_one(struct bus1_transaction *transaction,
-			    struct bus1_message *message,
-			    struct bus1_handle_dest *dest,
-			    u64 timestamp)
+void bus1_transaction_commit_one(struct bus1_transaction *transaction,
+				 struct bus1_message *message,
+				 struct bus1_handle_dest *dest,
+				 u64 timestamp)
 {
 	struct bus1_peer_info *peer_info;
+	u64 id;
 
 	peer_info = bus1_peer_dereference(dest->raw_peer);
-	lockdep_assert_held(&peer_info->lock);
 
 	if (!message->slice) {
+		/*
+		 * The message failed to be allocated, due to an error at the
+		 * receiver, and the CONTINUE flag was set. Drop the message
+		 * without informing the sender. The count of dropped messages
+		 * is increased in the receiving queue.
+		 */
 		mutex_lock(&peer_info->qlock);
 		bus1_queue_drop(&peer_info->queue, &message->qnode);
 		mutex_unlock(&peer_info->qlock);
 
-		return false;
+		bus1_message_free(message, peer_info);
+
+		return;
 	}
 
-	if (bus1_queue_node_is_queued(&message->qnode)) {
-		u64 id;
+	mutex_lock(&peer_info->lock);
+	id = bus1_handle_dest_export(dest, peer_info, timestamp, true);
+	if (id == BUS1_HANDLE_INVALID) {
+		/*
+		 * The destination node is no longer valid, silently drop the
+		 * message.
+		 */
+		bus1_message_deallocate(message, peer_info);
+		mutex_unlock(&peer_info->lock);
 
-		id = bus1_handle_dest_export(dest, peer_info, timestamp, true);
-		if (id != BUS1_HANDLE_INVALID) {
-			message->data.destination = id;
+		mutex_lock(&peer_info->qlock);
+		bus1_queue_remove(&peer_info->queue, &message->qnode);
+		mutex_unlock(&peer_info->qlock);
 
-			mutex_lock(&peer_info->qlock);
-			bus1_queue_commit(&peer_info->queue, &message->qnode,
-					  timestamp);
-			mutex_unlock(&peer_info->qlock);
+		bus1_message_free(message, peer_info);
 
-			return true;
-		}
+		return;
 	}
+	mutex_unlock(&peer_info->lock);
+
+	message->data.destination = id;
 
 	mutex_lock(&peer_info->qlock);
-	bus1_queue_remove(&peer_info->queue, &message->qnode);
-	mutex_unlock(&peer_info->qlock);
+	if (bus1_queue_node_is_queued(&message->qnode)) {
+		bus1_queue_commit(&peer_info->queue, &message->qnode,
+				  timestamp);
+		mutex_unlock(&peer_info->qlock);
+	} else {
+		mutex_unlock(&peer_info->qlock);
+		/*
+		 * The message has been flushed from the queue, but it has not
+		 * been cleaned up. Release all resources.
+		 */
 
-	return false;
+		mutex_lock(&peer_info->lock);
+		bus1_message_deallocate(message, peer_info);
+		mutex_unlock(&peer_info->lock);
+
+		bus1_message_free(message, peer_info);
+	}
 }
 
 /**
@@ -468,7 +494,6 @@ int bus1_transaction_commit(struct bus1_transaction *transaction)
 	struct bus1_peer *peer;
 	u64 id, timestamp;
 	u64 __user *idp;
-	bool res;
 	int r;
 
 	if (!transaction->entries)
@@ -525,18 +550,16 @@ int bus1_transaction_commit(struct bus1_transaction *transaction)
 		bus1_active_lockdep_acquired(&peer->active);
 		peer_info = bus1_peer_dereference(peer);
 
-		mutex_lock(&peer_info->lock);
-
 		mutex_lock(&peer_info->qlock);
 		bus1_queue_sync(&peer_info->queue, timestamp);
 		mutex_unlock(&peer_info->qlock);
 
+		mutex_lock(&peer_info->lock);
 		id = bus1_handle_dest_export(&message->transaction.dest,
 					     peer_info, timestamp,
 					     false);
-		r = (idp && put_user(id, idp)) ? -EFAULT : 0;
-
 		mutex_unlock(&peer_info->lock);
+		r = (idp && put_user(id, idp)) ? -EFAULT : 0;
 
 		bus1_active_lockdep_released(&peer->active);
 
@@ -580,15 +603,9 @@ int bus1_transaction_commit(struct bus1_transaction *transaction)
 
 		bus1_handle_inflight_install(&message->handles, dest.raw_peer);
 
-		mutex_lock(&peer_info->lock);
-		res = bus1_transaction_commit_one(transaction, message, &dest,
+		bus1_transaction_commit_one(transaction, message, &dest,
 						  timestamp);
-		if (!res)
-			bus1_message_deallocate(message, peer_info);
-		mutex_unlock(&peer_info->lock);
 
-		if (!res)
-			bus1_message_free(message, peer_info);
 		bus1_active_lockdep_released(&dest.raw_peer->active);
 		bus1_handle_dest_destroy(&dest, transaction->peer_info);
 	}
