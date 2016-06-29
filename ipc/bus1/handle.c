@@ -619,10 +619,16 @@ static void bus1_node_stage_flush(struct list_head *list_notify)
 		peer = bus1_handle_acquire_holder(h, &peer_info);
 		if (peer) {
 			mutex_lock(&peer_info->qlock);
-			if (bus1_queue_node_is_queued(&h->qnode))
+			if (bus1_queue_node_is_queued(&h->qnode)) {
 				bus1_queue_commit(&peer_info->queue, &h->qnode,
 						  h->node->timestamp);
-			mutex_unlock(&peer_info->qlock);
+				mutex_unlock(&peer_info->qlock);
+			} else {
+				/* notification was flushed from the queue */
+				mutex_unlock(&peer_info->qlock);
+
+				bus1_handle_unref(h);
+			}
 			bus1_peer_release(peer);
 		}
 

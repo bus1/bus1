@@ -68,7 +68,8 @@ bus1_peer_info_flush(struct bus1_peer_info *peer_info)
 		case BUS1_QUEUE_NODE_HANDLE_DESTRUCTION:
 		case BUS1_QUEUE_NODE_HANDLE_RELEASE:
 			RB_CLEAR_NODE(&node->rb);
-			bus1_handle_from_queue(node, peer_info, true);
+			if (bus1_queue_node_is_committed(node))
+				bus1_handle_from_queue(node, peer_info, true);
 			break;
 		default:
 			WARN(1, "Invalid queue-node type");
