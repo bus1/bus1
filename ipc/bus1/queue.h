@@ -127,6 +127,7 @@ struct bus1_queue {
  * @rcu:			rcu
  * @timestamp_and_type:		message timestamp and type of parent object
  * @sender:			sender tag
+ * @next:			node list (for node destruction)
  */
 struct bus1_queue_node {
 	union {
@@ -135,13 +136,14 @@ struct bus1_queue_node {
 	};
 	u64 timestamp_and_type;
 	unsigned long sender;
+	struct bus1_queue_node *next;
 };
 
 /* queue */
 void bus1_queue_init_internal(struct bus1_queue *queue,
 			      wait_queue_head_t *waitq);
 void bus1_queue_destroy(struct bus1_queue *queue);
-void bus1_queue_post_flush(struct bus1_queue *queue);
+struct bus1_queue_node *bus1_queue_flush(struct bus1_queue *queue);
 u64 bus1_queue_stage(struct bus1_queue *queue,
 		     struct bus1_queue_node *node,
 		     u64 timestamp);

@@ -35,71 +35,44 @@
 #include "user.h"
 #include "util.h"
 
-static struct bus1_message *
-bus1_peer_info_flush(struct bus1_peer_info *peer_info)
+static void bus1_peer_info_reset(struct bus1_peer_info *peer_info, bool final)
 {
-	struct bus1_queue_node *node, *t;
-	struct bus1_message *message, *list = NULL;
+	struct bus1_queue_node *node, *list;
+	struct bus1_message *message;
 
-	/*
-	 * This flushes all messages from a peer-queue. The parent peer is
-	 * expected to be locked by the caller.
-	 * We first lock the queue and detach all messages from it. In case
-	 * some cleanup of the message is needed, we remember it in a temporary
-	 * list. Once the queue is flushed, we unlock it and perform the
-	 * cleanup on each message. The list is then returned to the caller in
-	 * case further cleanups are needed with the peer unlocked.
-	 */
-
-	lockdep_assert_held(&peer_info->lock);
+	bus1_handle_flush_all(peer_info, final);
 
 	mutex_lock(&peer_info->qlock);
-	rbtree_postorder_for_each_entry_safe(node, t,
-					     &peer_info->queue.messages, rb) {
+	list = bus1_queue_flush(&peer_info->queue);
+	mutex_unlock(&peer_info->qlock);
+
+	mutex_lock(&peer_info->lock);
+	bus1_pool_flush(&peer_info->pool);
+	for (node = list; node; node = node->next) {
 		switch (bus1_queue_node_get_type(node)) {
 		case BUS1_QUEUE_NODE_MESSAGE_NORMAL:
 			message = bus1_message_from_node(node);
-			RB_CLEAR_NODE(&node->rb); /* mark as dropped */
-			if (bus1_queue_node_is_committed(node)) {
-				message->transaction.next = list;
-				list = message;
-			}
+			bus1_message_deallocate(message, peer_info);
 			break;
 		case BUS1_QUEUE_NODE_HANDLE_DESTRUCTION:
 		case BUS1_QUEUE_NODE_HANDLE_RELEASE:
-			RB_CLEAR_NODE(&node->rb);
-			if (bus1_queue_node_is_committed(node))
-				bus1_handle_from_queue(node, peer_info, true);
+			bus1_handle_from_queue(node, peer_info, true);
 			break;
 		default:
 			WARN(1, "Invalid queue-node type");
 			break;
 		}
 	}
-	bus1_queue_post_flush(&peer_info->queue);
-	mutex_unlock(&peer_info->qlock);
-
-	for (message = list; message; message = message->transaction.next)
-		bus1_message_deallocate(message, peer_info);
-
-	return list;
-}
-
-static void bus1_peer_info_reset(struct bus1_peer_info *peer_info, bool final)
-{
-	struct bus1_message *message, *list;
-
-	bus1_handle_flush_all(peer_info, final);
-
-	mutex_lock(&peer_info->lock);
-	list = bus1_peer_info_flush(peer_info);
-	bus1_pool_flush(&peer_info->pool);
 	mutex_unlock(&peer_info->lock);
 
-	while ((message = list)) {
-		list = message->transaction.next;
-		message->transaction.next = NULL;
-		bus1_message_free(message, peer_info);
+	while ((node = list)) {
+		list = node->next;
+		node->next = NULL;
+		if (bus1_queue_node_get_type(node) ==
+		    BUS1_QUEUE_NODE_MESSAGE_NORMAL) {
+			message = bus1_message_from_node(node);
+			bus1_message_free(message, peer_info);
+		}
 	}
 }
 

@@ -121,25 +121,38 @@ void bus1_queue_destroy(struct bus1_queue *queue)
 }
 
 /**
- * bus1_queue_post_flush() - flush queue
+ * bus1_queue_flush() - flush queue
  * @queue:		queue to flush
  *
- * To flush an entire queue, callers should lock the peer and iterate the
- * entire message tree, removing each entry without touching the tree. When
- * done, calling into bus1_queue_post_flush() will reset the tree, assuming the
- * caller completely cleared all entries.
+ * Committed nodes are owned by the queue and staging nodes are owned by some
+ * ongoing transaction.
  *
- * We cannot implement flushing inside of queue-handling, as it requires
- * knowledge about the attached payload of each message. Hence, we'd have to
- * use a callback to let the caller release each message. This is cumbersome,
- * hence we decided to force callers to traverse the tree themselves.
+ * Detach all nodes from the queue and return the nodes owned by the queue as a
+ * linked list for the caller to clean up their payload.
+ *
+ * The owner of the staging nodes need to detect that they have been detached
+ * and clean up the payload.
+ *
+ * Return: List of queue entries that used to be owned by the queue.
  */
-void bus1_queue_post_flush(struct bus1_queue *queue)
+struct bus1_queue_node *bus1_queue_flush(struct bus1_queue *queue)
 {
+	struct bus1_queue_node *node, *t, *list = NULL;
+
 	bus1_queue_assert_held(queue);
+
+	rbtree_postorder_for_each_entry_safe(node, t, &queue->messages, rb) {
+		RB_CLEAR_NODE(&node->rb); /* mark as dropped */
+		if (bus1_queue_node_is_committed(node)) {
+			node->next = list;
+			list = node;
+		}
+	}
 
 	queue->messages = RB_ROOT;
 	rcu_assign_pointer(queue->front, NULL);
+
+	return list;
 }
 
 static int bus1_queue_node_compare(struct bus1_queue_node *a,
@@ -449,6 +462,7 @@ void bus1_queue_node_init(struct bus1_queue_node *node,
 	node->timestamp_and_type = 0;
 	bus1_queue_node_set_type(node, type);
 	node->sender = sender;
+	node->next = NULL;
 }
 
 /**
@@ -460,7 +474,8 @@ void bus1_queue_node_init(struct bus1_queue_node *node,
  */
 void bus1_queue_node_destroy(struct bus1_queue_node *node)
 {
-	WARN_ON(node && !RB_EMPTY_NODE(&node->rb));
+	WARN_ON(node && (!RB_EMPTY_NODE(&node->rb) ||
+			 node->next));
 }
 
 /**
