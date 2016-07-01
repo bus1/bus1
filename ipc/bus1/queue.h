@@ -162,7 +162,6 @@ void bus1_queue_node_init(struct bus1_queue_node *node,
 			  unsigned long sender);
 void bus1_queue_node_destroy(struct bus1_queue_node *node);
 bool bus1_queue_node_is_queued(struct bus1_queue_node *node);
-bool bus1_queue_node_is_committed(struct bus1_queue_node *node);
 unsigned int bus1_queue_node_get_type(struct bus1_queue_node *node);
 u64 bus1_queue_node_get_timestamp(struct bus1_queue_node *node);
 
