@@ -29,14 +29,6 @@
 #define BUS1_QUEUE_TYPE_SHIFT (62)
 #define BUS1_QUEUE_TYPE_MASK (((u64)3ULL) << BUS1_QUEUE_TYPE_SHIFT)
 
-static bool bus1_queue_node_is_committed(struct bus1_queue_node *node)
-{
-	u64 ts;
-
-	ts = node ? bus1_queue_node_get_timestamp(node) : 0;
-	return ts != 0 && !(ts & 1);
-}
-
 /**
  * bus1_queue_node_get_type() - query node type
  * @node:		node to query
@@ -499,4 +491,22 @@ void bus1_queue_node_destroy(struct bus1_queue_node *node)
 bool bus1_queue_node_is_queued(struct bus1_queue_node *node)
 {
 	return node && !RB_EMPTY_NODE(&node->rb);
+}
+
+/**
+ * bus1_queue_node_is_committed() - check whether a node is committed
+ * @node:		node to query, or NULL
+ *
+ * This checks whether a given node was already committed. In this case, the
+ * queue node is owned by the queue. In all other cases, the node is usually
+ * owned by an ongoing transaction or some other ongoing operation.
+ *
+ * Return: True if @node is committed.
+ */
+bool bus1_queue_node_is_committed(struct bus1_queue_node *node)
+{
+	u64 ts;
+
+	ts = node ? bus1_queue_node_get_timestamp(node) : 0;
+	return ts != 0 && !(ts & 1);
 }
