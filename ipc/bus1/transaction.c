@@ -424,8 +424,9 @@ void bus1_transaction_commit_one(struct bus1_transaction *transaction,
 	id = bus1_handle_dest_export(dest, peer_info, timestamp, true);
 	if (id == BUS1_HANDLE_INVALID) {
 		/*
-		 * The destination node is no longer valid, silently drop the
-		 * message.
+		 * The destination node is no longer valid, and the CONTINUE
+		 * flag was set. Silently drop the message without infroming the
+		 * sender nor the receiver.
 		 */
 		bus1_message_deallocate(message, peer_info);
 		mutex_unlock(&peer_info->lock);
@@ -632,6 +633,8 @@ int bus1_transaction_commit_for_id(struct bus1_transaction *transaction,
 {
 	int r;
 
+	/* XXX: actually optimize this */
+
 	r = bus1_transaction_instantiate_for_id(transaction, idp);
 	if (r < 0)
 		return r;
@@ -644,7 +647,8 @@ int bus1_transaction_commit_for_id(struct bus1_transaction *transaction,
  * @transaction:	transaction to use
  *
  * This instantiates a new message with the given transaction, and commits it
- * as new seed on the owner-peer of the transaction.
+ * as new seed on the owner-peer of the transaction. Any existing seed is
+ * deallocated and freed.
  *
  * Return: 0 on success, negative error code on failure.
  */
