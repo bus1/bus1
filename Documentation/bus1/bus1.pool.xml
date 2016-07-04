@@ -57,7 +57,6 @@
   <refsect1>
     <title>Writing to the pool</title>
     <para>
-    <para>
       The pool is written to by the kernel when one of the following
       <emphasis>ioctls</emphasis> is issued:
 

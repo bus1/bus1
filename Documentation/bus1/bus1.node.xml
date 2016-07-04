@@ -73,20 +73,25 @@
   </refsect1>
 
   <refsect1>
-    <title>On-the-fly node creation</title>
+    <title>Node creation</title>
     <para>
       Nodes can be created on-the-fly by setting the
-      <constant>BUS1_NODE_FLAG_ALLOCATE</constant> in any handle ID passed to
-      the kernel. In this case a new node owned by the sending peer is created
-      as well as a new handle held by the sending peer. The newly allocated
-      handle ID is returned to userspace by overwriting the passed in handle ID.
+      <constant>BUS1_NODE_FLAG_ALLOCATE</constant> flag in any handle ID passed
+      to the kernel. In this case a new node owned by the sending peer is
+      created as well as a new handle held by the sending peer. The newly
+      allocated handle ID is returned to userspace by overwriting the passed in
+      handle ID.
     </para>
     <para>
-      The <constant>BUS1_NODE_FLAG_MANAGED</constant> must be set when creating
-      a node on-the-fly, this indicates that the kernel should allocate the next
-      available handle ID in its namespace. No other allocation scheme is
-      currently supported, and no other bits must be set in the handle ID. This
-      may change in the future.
+      The <constant>BUS1_NODE_FLAG_MANAGED</constant> flag must be set when
+      creating a node on-the-fly, this indicates that the kernel should allocate
+      the next available handle ID in its namespace. No other allocation scheme
+      is currently supported, so this flag must be set when allocating a new
+      node. This may change in the future.
+    </para>
+    <para>
+      The optional <constant>BUS1_NODE_FLAG_PERSISTENT</constant> flag indicates
+      that the created node should not be destroyed in case the peer is reset.
     </para>
   </refsect1>
 
