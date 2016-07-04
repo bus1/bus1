@@ -22,8 +22,8 @@
   <refsect1>
     <title>Description</title>
     <para>
-      A node is first and foremost a destination for messages. A peer may own
-      several nodes, and messages destined for a node will be received by the
+      Messages are sent to <emphasis>nodes</emphasis>. A node is a kernel object
+      owned by a peer, and messages destined for a node will be received by the
       peer that owns the node.
     </para>
 
@@ -40,7 +40,8 @@
       file-descriptors are passed over UDS (or bus1 for that matter). When
       passing a handle a copy of it is installed in the destination peer which
       references the same underlying node. There is otherwise no relation
-      between the original and the passed handle.
+      between the original and the passed handle. Handles are reference counted,
+      so the kernel keeps track of how many times a peer holds a given handle.
     </para>
   </refsect1>
 
@@ -49,13 +50,12 @@
     <para>
       Handles are referred to in userspace by their handle ids, like
       file-descriptors are referenced by file-descriptor number. The handle id
-      namespace is local to a given peer (not a process), and has no meaning
-      outside of it. Handle ids are allocated in the order the handles are
-      received as a contiguous sequence of odd numbers starting with
-      <constant>1</constant>. A handle only ever has one handle id associated
+      namespace is local to a given peer (rather than a given process), and has
+      no meaning outside of it. A handle only ever has one handle id associated
       with it, and a handle id is never reused to refer to two handles. In
-      particular, if a handle is fully released and a new handle is received to
-      the same node, it is guaranteed to be assigned a fresh handle id.
+      particular, if all the references to a handle are released and a new
+      handle is received to the same node, it is guaranteed to be assigned a
+      fresh handle id, unless the peer owns the underlying node (see below).
     </para>
   </refsect1>
 
@@ -66,20 +66,27 @@
       owner of a node will initially also hold a handle to that node. However,
       the handle can be released, and the owner of a node does not need to own
       a handle to it. Even after the handle has potentially been released the
-      handle id will be used whenever referring to the underlying node. This is
-      also the case if the owner holds a new handle to the same node with a
-      different handle id.
+      handle id will be used whenever referring to the underlying node, and if
+      a peer receives a handle to a node it owns the original handle id will
+      always be reused.
     </para>
   </refsect1>
 
   <refsect1>
     <title>On-the-fly node creation</title>
     <para>
-      Nodes can be created on-the-fly by passing the special handle id
-      <constant>BUS1_HANDLE_INVALID</constant> along with a message. In this
-      case a new node owned by the sending peer is created as well as a new
-      handle held by the sending peer. This handle is sent along with the
-      message and its handle id returned to userspace.
+      Nodes can be created on-the-fly by setting the
+      <constant>BUS1_NODE_FLAG_ALLOCATE</constant> in any handle ID passed to
+      the kernel. In this case a new node owned by the sending peer is created
+      as well as a new handle held by the sending peer. The newly allocated
+      handle ID is returned to userspace by overwriting the passed in handle ID.
+    </para>
+    <para>
+      The <constant>BUS1_NODE_FLAG_MANAGED</constant> must be set when creating
+      a node on-the-fly, this indicates that the kernel should allocate the next
+      available handle ID in its namespace. No other allocation scheme is
+      currently supported, and no other bits must be set in the handle ID. This
+      may change in the future.
     </para>
   </refsect1>
 
@@ -93,8 +100,8 @@
       peers from one to the other) can never become connected and can never
       communicate. In order to make it possible for any peers to communicate at
       all, the <constant>BUS1_CMD_PEER_CLONE</constant> ioctl allows a new peer
-      to be created from an existing one in such a way that they are connected
-      at creation.
+      to be created from an existing one and a handle to be passed from the
+      origina to the new peer in such a way that they are connected at creation.
     </para>
   </refsect1>
 
@@ -103,10 +110,10 @@
     <para>
       A peer can hold at most one handle to a given node at a time, though the
       handle is reference counted. A handle first becomes valid when the peer
-      receives it with a message, and the peer gains additional references to
-      the handle each time it receives it. The handle remains valid until the
-      peer either drops the last reference to it or receives a destruction
-      notification for the handle.
+      receives it with a message or creates it, and the peer gains additional
+      references to the handle each time it receives it. The handle remains
+      valid until the peer either drops the last reference to it or receives a
+      destruction notification for the handle.
     </para>
   </refsect1>
 
@@ -119,18 +126,21 @@
       released. When the last reference to a handle is released the handle id is
       no longer valid, and any future handle to the same node will be assigned
       a new handle id. Moreover, when the last reference to the last handle to a
-      given node is released, a destruction notification is sent to the node and
-      and the node is destroyed. This notification is ordered as if the release
-      ioctl was a unicast send to the node. Any message ordered before the
-      destruction notification is guaranteed to be unaffected by it, no message
-      ordered after the destruction notification may be delivered to the node.
+      given node is released, a release notification is sent to the node.
+      The notification is ordered as if the release ioctl was a unicast message
+      sent from the holder of the hanlde to the owner of the node. Any message
+      ordered before the release notification is unaffected by it, and once a
+      peer receives a release notification it is guaranteed that nobody holds
+      a handle to the node, and hence no future messages can be sent to it,
+      unless the owner of the node hands out a fresh handle to it.
     </para>
 
     <para>
       It is worth noting that a handle may be in-flight, i.e., it has been sent
       from one peer to another without the destination peer receiving it yet.
-      This may cause a situation where no peer holds a handle to a node, but the
-      node is not destroyed as there are in-flight handles still pinning it.
+      This may cause a situation where no peer holds a handle to a node, but no
+      release notification has been queued as there are in-flight handles still
+      pinning it.
     </para>
   </refsect1>
 
@@ -144,14 +154,14 @@
       peers that hold a handle to the node. The destruction notification is
       ordered as if it were a multicast message from the owner of the node to
       all the holders of the handles. Any message to the node that is ordered
-      before the destruction notification is guaranteed to be delivered, and any
-      handle that is passed before the destruction notification is guaranteed to
-      be delivered (and the peer that receives it to receive a destruction
-      notification). No message may be delivered to the node ordered after the
-      destruction notification and any handle passed after the destruction
-      notification is replaced by <constant>BUS1_HANDLE_INVALID</constant>. A
-      local handle to a node is valid until its destruction notification is
-      received though actual operations on it may fail.
+      before the destruction notification is guaranteed to be delivered, and so
+      is any handle that is passed along with a message delivered before the
+      destruction notification it. No message may be delivered to the node
+      ordered after the destruction notification and any handle passed after the
+      destruction notification is replaced by
+      <constant>BUS1_HANDLE_INVALID</constant>. A local handle to a node is
+      valid until its destruction notification is received though actual
+      operations on it may fail.
     </para>
   </refsect1>
 
