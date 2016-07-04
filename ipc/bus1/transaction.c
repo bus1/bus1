@@ -559,7 +559,11 @@ int bus1_transaction_commit(struct bus1_transaction *transaction)
 					     peer_info, timestamp,
 					     false);
 		mutex_unlock(&peer_info->lock);
-		r = (idp && put_user(id, idp)) ? -EFAULT : 0;
+		if (id != BUS1_HANDLE_INVALID ||
+		    transaction->param->flags & BUS1_SEND_FLAG_CONTINUE)
+			r = (idp && put_user(id, idp)) ? -EFAULT : 0;
+		else
+			r = -EHOSTUNREACH;
 
 		bus1_active_lockdep_released(&peer->active);
 
