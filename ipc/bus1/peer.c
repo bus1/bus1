@@ -324,9 +324,9 @@ int bus1_peer_ioctl_init(struct bus1_peer *peer, unsigned long arg)
 		return -EINVAL;
 
 	/*
-	 * To connect the peer, we have to set @peer_info on @peer->info *and*
-	 * mark the active counter as active. Since this call is fully unlocked
-	 * we borrow @peer->waitq.lock to synchronize against parallel
+	 * To initialize the peer, we have to set @peer_info on @peer->info
+	 * *and* mark the active counter as active. Since this call is fully
+	 * unlocked we borrow @peer->waitq.lock to synchronize against parallel
 	 * connects *and* disconnects. The critical section just swaps the
 	 * pointer and performs a *single* attempt of an atomic cmpxchg (see
 	 * bus1_active_activate() for details). Hence, borrowing the waitq-lock
@@ -392,6 +392,8 @@ static int bus1_peer_ioctl_reset(struct bus1_peer *peer, unsigned long arg)
 		return -EINVAL;
 
 	peer_info = bus1_peer_dereference(peer);
+
+	/* flush everything, but keep persistent nodes */
 	bus1_peer_info_reset(peer_info, false);
 
 	return 0;
@@ -453,6 +455,7 @@ static int bus1_peer_ioctl_clone(struct bus1_peer *peer,
 	bus1_active_activate(&clone->active);
 	WARN_ON(!bus1_peer_acquire(clone));
 
+	/* pass handle from parent to child, allocating node if necessary */
 	r = bus1_handle_pair(peer, clone, &param.parent_handle,
 			     &param.child_handle);
 	if (r < 0)
@@ -491,6 +494,7 @@ static int bus1_peer_ioctl_node_destroy(struct bus1_peer *peer,
 	if (get_user(id, (const u64 __user *)arg))
 		return -EFAULT;
 
+	/* returns >= 0 on success, and > 0 in case @id was modified */
 	r = bus1_handle_destroy_by_id(peer, &id);
 	if (r < 0)
 		return r;
@@ -511,6 +515,7 @@ static int bus1_peer_ioctl_handle_release(struct bus1_peer *peer,
 	if (get_user(id, (const u64 __user *)arg))
 		return -EFAULT;
 
+	/* returns >= 0 on success, and > 0 in case @id was modified */
 	r = bus1_handle_release_by_id(peer, &id);
 	if (r < 0)
 		return r;
