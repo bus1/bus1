@@ -36,7 +36,7 @@
 #include "util.h"
 
 static struct bus1_message *
-bus1_peer_info_flush(struct bus1_peer_info *peer_info)
+bus1_peer_info_flush(struct bus1_peer_info *peer_info, bool final)
 {
 	struct bus1_queue_node *node, *t;
 	struct bus1_message *message, *list = NULL;
@@ -81,6 +81,9 @@ bus1_peer_info_flush(struct bus1_peer_info *peer_info)
 	for (message = list; message; message = message->transaction.next)
 		bus1_message_deallocate(message, peer_info);
 
+	if (final && peer_info->seed)
+		bus1_message_deallocate(peer_info->seed, peer_info);
+
 	return list;
 }
 
@@ -91,7 +94,7 @@ static void bus1_peer_info_reset(struct bus1_peer_info *peer_info, bool final)
 	bus1_handle_flush_all(peer_info, final);
 
 	mutex_lock(&peer_info->lock);
-	list = bus1_peer_info_flush(peer_info);
+	list = bus1_peer_info_flush(peer_info, final);
 	bus1_pool_flush(&peer_info->pool);
 	mutex_unlock(&peer_info->lock);
 
@@ -100,6 +103,9 @@ static void bus1_peer_info_reset(struct bus1_peer_info *peer_info, bool final)
 		message->transaction.next = NULL;
 		bus1_message_free(message, peer_info);
 	}
+
+	if (final)
+		peer_info->seed = bus1_message_free(peer_info->seed, peer_info);
 }
 
 static struct bus1_peer_info *
@@ -109,13 +115,6 @@ bus1_peer_info_free(struct bus1_peer_info *peer_info)
 		return NULL;
 
 	bus1_peer_info_reset(peer_info, true);
-
-	if (peer_info->seed) {
-		mutex_lock(&peer_info->lock);
-		bus1_message_deallocate(peer_info->seed, peer_info);
-		mutex_unlock(&peer_info->lock);
-		peer_info->seed = bus1_message_free(peer_info->seed, peer_info);
-	}
 
 	bus1_queue_destroy(&peer_info->queue);
 	bus1_pool_destroy(&peer_info->pool);
