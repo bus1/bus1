@@ -114,7 +114,7 @@
       <title>Message</title>
       <para>
         Peers can exchange messages with other peers by addressing the peers
-        with handles to their nodes. A message consists of a logical byte stream
+        by handles to their nodes. A message consists of a logical byte stream
         of arbitrary size. Messages can carry additional file descriptors or
         handles to nodes to be passed from one peer to another, just like
         passing file descriptors over UNIX domain sockets. See
