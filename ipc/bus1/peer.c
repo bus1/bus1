@@ -267,8 +267,7 @@ static void bus1_peer_cleanup(struct bus1_active *active, void *userdata)
 	rcu_assign_pointer(peer->info, NULL);
 	spin_unlock_irqrestore(&peer->waitq.lock, flags);
 
-	if (peer_info) /* might be NULL if never activated */
-		bus1_peer_info_free(peer_info);
+	bus1_peer_info_free(peer_info);
 }
 
 /**
