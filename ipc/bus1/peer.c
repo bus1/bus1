@@ -726,7 +726,7 @@ static int bus1_peer_peek(struct bus1_peer_info *peer_info,
 	mutex_lock(&peer_info->qlock);
 
 	node = bus1_peer_queue_peek(peer_info, param, false);
-	if (IS_ERR_OR_NULL(node)) {
+	if (IS_ERR(node)) {
 		r = PTR_ERR(node);
 		goto exit;
 	}
