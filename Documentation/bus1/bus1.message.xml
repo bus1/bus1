@@ -100,6 +100,14 @@
   </refsect1>
 
   <refsect1>
+    <title>Seed message</title>
+    <para>
+      Every peer may pin at most one message for itself. This is called the
+      seed, and can be retrieved directly without going through the queue.
+    </para>
+  </refsect1>
+
+  <refsect1>
     <title>Sending messages</title>
     <para>
       Messages are passed to the kernel with the
@@ -148,10 +156,10 @@ struct bus1_cmd_send {
               </listitem>
             </varlistentry>
             <varlistentry>
-              <term><constant>BUS1_SEND_FLAG_SILENT</constant></term>
+              <term><constant>BUS1_SEND_FLAG_SEED</constant></term>
               <listitem>
                 <para>
-                  Do not wake up the destination peers. See below.
+                  Replace the current seed of the peer. See below.
                 </para>
               </listitem>
             </varlistentry>
@@ -214,8 +222,7 @@ struct bus1_cmd_send {
       Messages are received by the peer with the
       <constant>BUS1_CMD_RECV</constant> ioctl. The bus file descriptor supports
       <function>poll()/epoll()/select()</function>; when new messages
-      are available to be recevied, <constant>POLLIN</constant> is reported.
-      However, if only silent messages are queued the peer is not woken up. For
+      are available to be recevied, <constant>POLLIN</constant> is reported. For
       compatibility reasons, <constant>POLLOUT</constant> is always reported as
       well. Note, however, that the latter does not guarantee that a message
       can in fact be sent, as that depends on the available quota.
@@ -249,8 +256,17 @@ struct bus1_cmd_recv {
               <term><constant>BUS1_RECV_FLAG_PEEK</constant></term>
               <listitem>
                 <para>
-                  Just return the location of the next message. Do not install
-                  file descriptors or handles.
+                  Just return the next message or notification on the queue, but
+                  do not dequeue it, and do not install file descriptors or
+                  handles.
+                </para>
+              </listitem>
+            </varlistentry>
+            <varlistentry>
+              <term><constant>BUS1_RECV_FLAG_SEED</constant></term>
+              <listitem>
+                <para>
+                  Return the current seed of the peer.
                 </para>
               </listitem>
             </varlistentry>
