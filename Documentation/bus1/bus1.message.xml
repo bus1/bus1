@@ -449,6 +449,23 @@ struct bus1_msg_node_destroy {
           </programlisting>
         </listitem>
       </varlistentry>
+      <varlistentry>
+        <term><varname>handle_release</varname></term>
+        <listitem>
+          <para>
+            Embedded struct containing the handle number to a node all of whose
+            handles have been released. When dequeueing this message it is
+            guaranteed that no one holds a handle to the node, including the
+            owner of the node. However, the owner of the node can still pass out
+            new handles in the future.
+          </para>
+          <programlisting>
+struct bus1_msg_node_release {
+  __u64 handle;
+};
+          </programlisting>
+        </listitem>
+      </varlistentry>
     </variablelist>
   </refsect1>
 
