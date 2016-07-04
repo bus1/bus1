@@ -282,8 +282,9 @@ struct bus1_cmd_recv {
               <term><constant>BUS1_MSG_NONE</constant></term>
               <listitem>
                 <para>
-                  The field must be initialized to this value, and it will never
-                  be returned.
+                  The field must be initialized to this value, and it will only
+                  be returned if <constant>n_dropped</constant> is set (see
+                  below).
                 </para>
               </listitem>
             </varlistentry>
@@ -345,9 +346,8 @@ struct bus1_msg_data {
               <term><varname>destination</varname></term>
               <listitem>
                 <para>
-                  The handle id referencing the destination node. Note that
-                  this is always the handle id given when first creating the
-                  node, even if that has since been released.
+                  The handle id referencing the destination node. This is
+                  guaranteed to still be valid at the time of delivery.
                 </para>
               </listitem>
             </varlistentry>
@@ -439,8 +439,9 @@ struct bus1_msg_data {
         <term><varname>node_destroy</varname></term>
         <listitem>
           <para>
-            Embedded struct containing the handle number to a node that was
-            destroyed. When dequeueing this message the handle becomes invalid.
+            Embedded struct containing the handle number whose underlying node
+            has been destroyed. When dequeueing this message the handle becomes
+            invalid.
           </para>
           <programlisting>
 struct bus1_msg_node_destroy {
@@ -508,9 +509,9 @@ struct bus1_msg_node_release {
         <varlistentry>
           <term><constant>EHOSTUNREACH</constant></term>
           <listitem><para>
-            The destination node has been destroyed. In particular, the message
-            being sent would be received after the destruction notification
-            for the destination node.
+            The destination node has been destroyed and the message being sent
+            would be received after the destruction notification for the
+            destination node.
           </para></listitem>
         </varlistentry>
 
