@@ -550,7 +550,6 @@ static int bus1_peer_ioctl_send(struct bus1_peer *peer, unsigned long arg)
 	u8 buf[512];
 	struct bus1_cmd_send param;
 	u64 __user *ptr_dest;
-	bool cont;
 	size_t i;
 	int r;
 
@@ -580,7 +579,6 @@ static int bus1_peer_ioctl_send(struct bus1_peer *peer, unsigned long arg)
 		     (u64)(unsigned long)param.ptr_fds))
 		return -EFAULT;
 
-	cont = param.flags & BUS1_SEND_FLAG_CONTINUE;
 	ptr_dest = (u64 __user *)(unsigned long)param.ptr_destinations;
 
 	transaction = bus1_transaction_new_from_user(buf, sizeof(buf), peer,
@@ -602,14 +600,14 @@ static int bus1_peer_ioctl_send(struct bus1_peer *peer, unsigned long arg)
 	} else if (param.n_destinations == 1) { /* Fastpath: unicast */
 		r = bus1_transaction_commit_for_id(transaction,
 						   ptr_dest);
-		if (r < 0 && (r != -ENXIO || !cont))
+		if (r < 0)
 			goto exit;
 
 	} else { /* Slowpath: any message */
 		for (i = 0; i < param.n_destinations; ++i) {
 			r = bus1_transaction_instantiate_for_id(transaction,
 								ptr_dest + i);
-			if (r < 0 && (r != -ENXIO || !cont))
+			if (r < 0)
 				goto exit;
 		}
 
