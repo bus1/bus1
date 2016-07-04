@@ -22,16 +22,29 @@
   <refsect1>
     <title>Description</title>
     <para>
-      A pool for received message payloads is installed for every
-      <emphasis>peer</emphasis>, and is sized according to the information
-      stored in the <varname>pool_size</varname> member of
+      A shmem-backed <emphasis>pool</emphasis> for received message payloads is installed for every
+      peer. One-copy message passing is implemented by copying each message
+      directly from the sender to the receiver's pool, without a kernel buffer
+      in-between.
+    </para>
+    <para>
+      The pool is segmented into <emphasis>slices</emphasis>, each referenced by
+      its <emphasis>offset</emphasis> in the pool, expressed in <type>bytes</type>.
+      When receiving a message, an offset into the pool is returned, and the
+      payload itself is read directly from the pool.
+    </para>
+  </refsect1>
+
+  <refsect1>
+    <title>Pool Initialization</title>
+    <para>
+      A peer's pool must be initialized before it can receive any messages. The
+      pool is initialized by passing the desired size as the
+      <varname>pool_size</varname> member of
       <type>struct bus_cmd_peer_init</type> or
-      <type>struct bus1_cmd_peer_clone</type>
-      when calling <constant>BUS1_CMD_PEER_INIT</constant> or
-      <constant>BUS1_CMD_PEER_CLONE</constant>, respectively. Internally, the
-      pool is segmented into <emphasis>slices</emphasis>, each referenced by its
-      <emphasis>offset</emphasis> in the pool, expressed in <type>bytes</type>.
-      See
+      <type>struct bus1_cmd_peer_clone</type> when calling
+      <constant>BUS1_CMD_PEER_INIT</constant> or
+      <constant>BUS1_CMD_PEER_CLONE</constant>, respectively. See
       <citerefentry>
         <refentrytitle>bus1.peer</refentrytitle>
         <manvolnum>7</manvolnum>
@@ -39,7 +52,11 @@
       for more information about <constant>BUS1_CMD_PEER_INIT</constant> and
       <constant>BUS1_CMD_PEER_CLONE</constant>.
     </para>
+  </refsect1>
 
+  <refsect1>
+    <title>Writing to the pool</title>
+    <para>
     <para>
       The pool is written to by the kernel when one of the following
       <emphasis>ioctls</emphasis> is issued:
@@ -48,19 +65,24 @@
         <varlistentry>
           <term><constant>BUS1_CMD_SEND</constant></term>
           <listitem><para>
-            ... to instantiate the message payload
+            This writes the message payload to the pool of each receiver, and
+            reserves space for handle and file-descriptor numbers (see below).
           </para></listitem>
         </varlistentry>
         <varlistentry>
           <term><constant>BUS1_CMD_RECV</constant></term>
           <listitem><para>
-            ... to instantiate the file-descriptor and handle numbers passed
-            with a message
+            Passed handles and file-descriptors are installed, and their numbers
+            allocated, at receive time. Once the numbers have been determined
+            they are appended to the message payload in the pool.
           </para></listitem>
         </varlistentry>
       </variablelist>
-
     </para>
+  </refsect1>
+
+  <refsect1>
+    <title>Accessing the pool memory</title>
     <para>
       The <varname>offset</varname> field returned by
       <constant>BUS1_CMD_RECV</constant> describes the offset inside the pool.
@@ -69,27 +91,7 @@
       offset (see below). Otherwise, the pool will fill up, and the peer will
       not be able to receive any more information through its pool.
     </para>
-  </refsect1>
 
-  <refsect1>
-    <title>Pool slice allocation</title>
-    <para>
-      Pool slices are allocated by the kernel in order to deliver messages to a
-      peer. Allocation of pool slices cannot be initiated by userspace.
-    </para>
-    <para>
-      In order to protect against peers filling up each other's pools, a
-      per-user quota is applied to the slice allocation. Once a slice has been
-      returned to userspace from a <constant>BUS1_CMD_RECV</constant> call, the
-      slice is owned by the receiving peer and as such is not subject to any
-      quota. The remaning space in the pool is partitioned up by considering
-      that at any point in time a given user may use up to half the available
-      space in the pool not used by any other user.
-    </para>
-  </refsect1>
-
-  <refsect1>
-    <title>Accessing the pool memory</title>
     <para>
       Memory in the pool is read-only for userspace and may only be written
       to by the kernel. To read from the pool memory, the caller is expected to
@@ -142,6 +144,23 @@ uint8_t *buf = mmap(NULL, size, PROT_READ, MAP_SHARED, peer_fd, 0);
       When access to the pool memory is no longer needed, programs should
       call <function>munmap()</function> on the pointer returned by
       <function>mmap()</function>.
+    </para>
+  </refsect1>
+
+  <refsect1>
+    <title>Pool slice allocation</title>
+    <para>
+      Pool slices are allocated by the kernel in order to deliver messages to a
+      peer. Allocation of pool slices cannot be initiated by userspace.
+    </para>
+    <para>
+      In order to protect against peers filling up each other's pools, a
+      per-user quota is applied to the slice allocation. Once a slice has been
+      returned to userspace from a <constant>BUS1_CMD_RECV</constant> call, the
+      slice is owned by the receiving peer and as such is not subject to any
+      quota. The remaning space in the pool is partitioned up by considering
+      that at any point in time a given user may use up to half the available
+      space in the pool not used by any other user.
     </para>
   </refsect1>
 
