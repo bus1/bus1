@@ -1385,7 +1385,15 @@ void bus1_handle_flush_all(struct bus1_peer_info *peer_info, bool final)
 }
 
 /**
- * bus1_handle_dest_init() - XXX
+ * bus1_handle_dest_init() - initialize destination handle context
+ * @dest:		destination context to initialize
+ *
+ * This initializes a destination handle context. The object is needed to
+ * lookup and optionally create the destination handle held by the sender during
+ * a transaction. That is, for each destination of a transaction, you need one
+ * destination handle context.
+ *
+ * The destination handle can be imported via bus1_handle_dest_import().
  */
 void bus1_handle_dest_init(struct bus1_handle_dest *dest)
 {
@@ -1395,7 +1403,13 @@ void bus1_handle_dest_init(struct bus1_handle_dest *dest)
 }
 
 /**
- * bus1_handle_dest_destroy() - XXX
+ * bus1_handle_dest_destroy() - destroy destination handle context
+ * @dest:		destination handle context to destroy, or NULL
+ * @peer:info:		owning peer
+ *
+ * This releases all data pinned by a destiantion handle context. If Null is
+ * passed, or if the destination object was already destroyed, then nothing is
+ * done.
  */
 void bus1_handle_dest_destroy(struct bus1_handle_dest *dest,
 			      struct bus1_peer_info *peer_info)
@@ -1414,7 +1428,18 @@ void bus1_handle_dest_destroy(struct bus1_handle_dest *dest,
 }
 
 /**
- * bus1_handle_dest_import() - XXX
+ * bus1_handle_dest_import() - import destination handle
+ * @dest:		destination context
+ * @peer:		peer to import handles of
+ * @idp:		user-space handle ID
+ *
+ * This imports a handle-ID from user-space (provided as @idp) into the
+ * destination handle context. It then resolves it to the actual bus1_handle
+ * objects, optionally creating a new one on demand.
+ *
+ * This can only be called once per destination handle context.
+ *
+ * Return: 0 on success, negative error code on failure.
  */
 int bus1_handle_dest_import(struct bus1_handle_dest *dest,
 			    struct bus1_peer *peer,
@@ -1488,7 +1513,25 @@ int bus1_handle_dest_import(struct bus1_handle_dest *dest,
 }
 
 /**
- * bus1_handle_dest_export() - XXX
+ * bus1_handle_dest_export() - publish new nodes of destination context
+ * @dest:		destinatino context
+ * @peer_info:		owning peer of @dest
+ * @timestamp:		final timestamp of message transaction
+ * @commit:		whether to commit the node
+ *
+ * If a node was created as the destination of a transaction, we have to publish
+ * a single user reference to the node and provide it back to the caller. This
+ * function acquires the ID and optionally publishes the user-ref for it. Either
+ * way the ID is returned, and it is up to the caller to copy it back to
+ * userspcae.
+ *
+ * When committing the handle, this call releases the handles after it has been
+ * processed. Hence, committing the destination must be the last operation on a
+ * destination object, before it is destroyed.
+ *
+ * The caller must hold the peer lock of @peer_info.
+ *
+ * Return: 0 on success, negative error code on failure.
  */
 u64 bus1_handle_dest_export(struct bus1_handle_dest *dest,
 			    struct bus1_peer_info *peer_info,
@@ -1496,6 +1539,8 @@ u64 bus1_handle_dest_export(struct bus1_handle_dest *dest,
 			    bool commit)
 {
 	u64 id;
+
+	lockdep_assert_held(&peer_info->lock);
 
 	if (WARN_ON(!dest->handle || !dest->raw_peer))
 		return BUS1_HANDLE_INVALID;
