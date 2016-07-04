@@ -301,10 +301,6 @@ struct bus1_cmd_recv {
           be queued on a peer the 'n_dropped' counter of the peer is
           incremented. On the next RECV ioctl, the 'n_dropped' field is copied
           into the ioctl struct and cleared on the peer.
-          <!-- XXX Note that this will only happen
-          if the ioctl succeeded or failed with <constant>EAGAIN</constant>. In
-          other error cases, the 'dropped_msgs' field of the peer is left
-          untouched.-->
         </para></listitem>
       </varlistentry>
 
