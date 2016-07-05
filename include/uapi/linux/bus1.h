@@ -39,7 +39,6 @@
  *   EOPNOTSUPP:        could not pass file-descriptor of unsupported type
  *   EPERM:             permission denied to mmap pool as writable
  *   ESHUTDOWN:         local peer was already disconnected
- *   ETOOMANYREFS:      user has too many in-flight file-descriptors
  *   EXFULL:            target memory pool is full
  */
 

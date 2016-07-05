@@ -523,13 +523,6 @@ struct bus1_msg_node_release {
         </varlistentry>
 
         <varlistentry>
-          <term><constant>ETOOMANYREFS</constant></term>
-          <listitem><para>
-            User has too many in-flight file-descriptors.
-          </para></listitem>
-        </varlistentry>
-
-        <varlistentry>
           <term><constant>EXFULL</constant></term>
           <listitem><para>
             Target memory pool is full.
