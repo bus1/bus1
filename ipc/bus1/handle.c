@@ -1697,13 +1697,13 @@ static int bus1_handle_batch_preload(struct bus1_handle_batch *batch)
 	return 0;
 }
 
-static void bus1_handle_batch_destroy(struct bus1_handle_batch *batch,
+static void bus1_handle_batch_release(struct bus1_handle_batch *batch,
 				      struct bus1_peer_info *peer_info)
 {
 	union bus1_handle_entry *e;
 	size_t pos;
 
-	if (!batch || !batch->n_entries)
+	if (!batch)
 		return;
 
 	BUS1_HANDLE_BATCH_FOREACH_HANDLE(e, pos, batch) {
@@ -1714,14 +1714,24 @@ static void bus1_handle_batch_destroy(struct bus1_handle_batch *batch,
 		}
 	}
 
+	batch->n_handles = 0;
+}
+
+static void bus1_handle_batch_destroy(struct bus1_handle_batch *batch)
+{
+	union bus1_handle_entry *e;
+
+	if (!batch)
+		return;
+
 	if (unlikely(batch->n_entries > BUS1_HANDLE_BATCH_SIZE)) {
 		e = batch->entries[BUS1_HANDLE_BATCH_SIZE].next;
 		bus1_handle_list_free(e, batch->n_entries -
 						BUS1_HANDLE_BATCH_SIZE);
 	}
 
+	WARN_ON(batch->n_handles > 0);
 	batch->n_entries = 0;
-	batch->n_handles = 0;
 }
 
 static int bus1_handle_batch_import(struct bus1_handle_batch *batch,
@@ -1814,7 +1824,8 @@ void bus1_handle_transfer_destroy(struct bus1_handle_transfer *transfer,
 		return;
 
 	/* safe to be called multiple times */
-	bus1_handle_batch_destroy(&transfer->batch, peer_info);
+	bus1_handle_batch_release(&transfer->batch, peer_info);
+	bus1_handle_batch_destroy(&transfer->batch);
 }
 
 /**
@@ -2019,7 +2030,8 @@ void bus1_handle_inflight_destroy(struct bus1_handle_inflight *inflight,
 		return;
 
 	/* safe to be called multiple times */
-	bus1_handle_batch_destroy(&inflight->batch, peer_info);
+	bus1_handle_batch_release(&inflight->batch, peer_info);
+	bus1_handle_batch_destroy(&inflight->batch);
 }
 
 /**
