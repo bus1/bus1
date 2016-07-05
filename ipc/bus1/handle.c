@@ -1809,23 +1809,32 @@ void bus1_handle_transfer_init(struct bus1_handle_transfer *transfer,
 }
 
 /**
- * bus1_handle_transfer_destroy() - destroy handle transfer context
- * @transfer:		transfer context to destroy, or NULL
+ * bus1_handle_transfer_release() - release handle transfer context
+ * @transfer:		transfer context to release, or NULL
  * @peer_info:		owning peer
  *
- * This releases all data allocated, or pinned by a handle-transfer context. If
- * NULL is passed, or if the transfer object was already destroyed, then
- * nothing is done.
+ * This releases all handles that were pinned on the transfer context. This
+ * might require locking the owning peer.
  */
-void bus1_handle_transfer_destroy(struct bus1_handle_transfer *transfer,
+void bus1_handle_transfer_release(struct bus1_handle_transfer *transfer,
 				  struct bus1_peer_info *peer_info)
 {
-	if (!transfer)
-		return;
+	if (transfer)
+		bus1_handle_batch_release(&transfer->batch, peer_info);
+}
 
-	/* safe to be called multiple times */
-	bus1_handle_batch_release(&transfer->batch, peer_info);
-	bus1_handle_batch_destroy(&transfer->batch);
+/**
+ * bus1_handle_transfer_destroy() - destroy handle transfer context
+ * @transfer:		transfer context to destroy, or NULL
+ *
+ * This frees all allocated data of the handle-transfer context. If handles were
+ * imported, the caller must call bus1_handle_transfer_release() before
+ * destroying the transfer context.
+ */
+void bus1_handle_transfer_destroy(struct bus1_handle_transfer *transfer)
+{
+	if (transfer)
+		bus1_handle_batch_destroy(&transfer->batch);
 }
 
 /**

@@ -215,8 +215,9 @@ u64 bus1_handle_dest_export(struct bus1_handle_dest *dest,
 /* transfer contexts */
 void bus1_handle_transfer_init(struct bus1_handle_transfer *transfer,
 			       size_t n_entries);
-void bus1_handle_transfer_destroy(struct bus1_handle_transfer *transfer,
+void bus1_handle_transfer_release(struct bus1_handle_transfer *transfer,
 				  struct bus1_peer_info *peer_info);
+void bus1_handle_transfer_destroy(struct bus1_handle_transfer *transfer);
 int bus1_handle_transfer_import(struct bus1_handle_transfer *transfer,
 				struct bus1_peer_info *peer_info,
 				const u64 __user *ids,

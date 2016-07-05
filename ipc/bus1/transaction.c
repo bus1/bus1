@@ -125,8 +125,9 @@ static void bus1_transaction_destroy(struct bus1_transaction *transaction)
 		if (transaction->files[i])
 			fput(transaction->files[i]);
 
-	bus1_handle_transfer_destroy(&transaction->handles,
+	bus1_handle_transfer_release(&transaction->handles,
 				     transaction->peer_info);
+	bus1_handle_transfer_destroy(&transaction->handles);
 }
 
 static int bus1_transaction_import_vecs(struct bus1_transaction *transaction)
