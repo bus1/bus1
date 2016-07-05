@@ -894,7 +894,7 @@ bus1_handle_release(struct bus1_handle *handle,
 	return NULL;
 }
 
-static bool bus1_node_order(struct bus1_node *node, u64 timestamp)
+static bool bus1_node_is_valid(struct bus1_node *node, u64 timestamp)
 {
 	struct bus1_peer_info *owner_info;
 	struct bus1_peer *owner;
@@ -962,10 +962,10 @@ static u64 bus1_handle_userref_publish(struct bus1_handle *handle,
 	 *    authoritative and final.
 	 *
 	 * If none of these are true, the comparison is never authoritative.
-	 * That is, bus1_node_order() might return false positives (but never
+	 * That is, bus1_node_is_valid() might return false positives (but never
 	 * false negatives). The caller must be aware of this.
 	 */
-	if (!bus1_node_order(handle->node, timestamp)) {
+	if (!bus1_node_is_valid(handle->node, timestamp)) {
 		if (commit)
 			WARN_ON(atomic_dec_return(&handle->n_inflight) < 0);
 		return BUS1_HANDLE_INVALID;
@@ -1552,7 +1552,7 @@ u64 bus1_handle_dest_export(struct bus1_handle_dest *dest,
 						 timestamp, commit);
 		if (commit)
 			dest->handle = bus1_handle_unref(dest->handle);
-	} else if (!bus1_node_order(dest->handle->node, timestamp)) {
+	} else if (!bus1_node_is_valid(dest->handle->node, timestamp)) {
 		id = BUS1_HANDLE_INVALID;
 	} else {
 		WARN_ON(dest->handle->node->owner.id == BUS1_HANDLE_INVALID);
