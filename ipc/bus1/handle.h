@@ -210,6 +210,7 @@ int bus1_handle_dest_import(struct bus1_handle_dest *dest,
 u64 bus1_handle_dest_export(struct bus1_handle_dest *dest,
 			    struct bus1_peer_info *peer_info,
 			    u64 timestamp,
+			    unsigned long sender,
 			    bool commit);
 
 /* transfer contexts */
@@ -244,10 +245,12 @@ size_t bus1_handle_inflight_walk(struct bus1_handle_inflight *inflight,
 				 size_t *pos,
 				 void **iter,
 				 u64 *ids,
-				 u64 timestamp);
+				 u64 timestamp,
+				 unsigned long sender);
 void bus1_handle_inflight_commit(struct bus1_handle_inflight *inflight,
 				 struct bus1_peer_info *peer_info,
-				 u64 timestamp);
+				 u64 timestamp,
+				 unsigned long sender);
 
 /**
  * bus1_handle_batch_inline_size() - calculate required inline size

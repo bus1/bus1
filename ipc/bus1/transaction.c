@@ -422,7 +422,8 @@ void bus1_transaction_commit_one(struct bus1_transaction *transaction,
 	}
 
 	mutex_lock(&peer_info->lock);
-	id = bus1_handle_dest_export(dest, peer_info, timestamp, true);
+	id = bus1_handle_dest_export(dest, peer_info, timestamp,
+				     message->qnode.sender, true);
 	if (id == BUS1_HANDLE_INVALID) {
 		/*
 		 * The destination node is no longer valid, and the CONTINUE
@@ -558,8 +559,8 @@ int bus1_transaction_commit(struct bus1_transaction *transaction)
 
 		mutex_lock(&peer_info->lock);
 		id = bus1_handle_dest_export(&message->transaction.dest,
-					     peer_info, timestamp,
-					     false);
+					peer_info, timestamp,
+					message->qnode.sender, false);
 		mutex_unlock(&peer_info->lock);
 		if (id != BUS1_HANDLE_INVALID ||
 		    transaction->param->flags & BUS1_SEND_FLAG_CONTINUE)
@@ -610,7 +611,7 @@ int bus1_transaction_commit(struct bus1_transaction *transaction)
 		bus1_handle_inflight_install(&message->handles, dest.raw_peer);
 
 		bus1_transaction_commit_one(transaction, message, &dest,
-						  timestamp);
+					    timestamp);
 
 		bus1_active_lockdep_released(&dest.raw_peer->active);
 		bus1_handle_dest_destroy(&dest, transaction->peer_info);

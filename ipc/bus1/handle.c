@@ -903,19 +903,24 @@ bus1_handle_release(struct bus1_handle *handle,
 	return NULL;
 }
 
-static bool bus1_node_is_valid(struct bus1_node *node, u64 timestamp)
+static bool bus1_node_is_valid(struct bus1_node *node, u64 timestamp,
+			       unsigned long sender)
 {
 	WARN_ON(timestamp & 1);
 
 	if (!bus1_node_is_committed(node))
 		return true;
 
-	return (node->timestamp > timestamp);
+	if (node->timestamp == timestamp)
+		return ((unsigned long) node > sender);
+	else
+		return (node->timestamp > timestamp);
 }
 
 static u64 bus1_handle_userref_publish(struct bus1_handle *handle,
 				       struct bus1_peer_info *peer_info,
 				       u64 timestamp,
+				       unsigned long sender,
 				       bool commit)
 {
 	struct rb_node *n, **slot;
@@ -924,7 +929,7 @@ static u64 bus1_handle_userref_publish(struct bus1_handle *handle,
 	lockdep_assert_held(&peer_info->lock);
 	WARN_ON(!bus1_handle_is_attached(handle));
 
-	if (!bus1_node_is_valid(handle->node, timestamp)) {
+	if (!bus1_node_is_valid(handle->node, timestamp, sender)) {
 		if (commit)
 			WARN_ON(atomic_dec_return(&handle->n_inflight) < 0);
 		return BUS1_HANDLE_INVALID;
@@ -1143,7 +1148,7 @@ int bus1_handle_pair(struct bus1_peer *peer,
 
 		WARN_ON(!bus1_handle_attach_holder(clone_handle, clone));
 		*peer_idp = bus1_handle_userref_publish(peer_handle, peer_info,
-							0, true);
+							0, 0, true);
 
 		mutex_unlock(&peer_info->lock);
 	}
@@ -1157,7 +1162,7 @@ int bus1_handle_pair(struct bus1_peer *peer,
 	t = clone_handle;
 	clone_handle = bus1_handle_install_holder(t);
 	*clone_idp = bus1_handle_userref_publish(clone_handle, clone_info,
-						 0, true);
+						 0, 0, true);
 	mutex_unlock(&clone_info->lock);
 
 	if (clone_handle != t) {
@@ -1200,7 +1205,8 @@ int bus1_handle_release_by_id(struct bus1_peer *peer, u64 *idp)
 		mutex_lock(&peer_info->lock);
 		bus1_handle_attach_owner(handle, peer);
 		bus1_handle_install_owner(handle);
-		*idp = bus1_handle_userref_publish(handle, peer_info, 0, true);
+		*idp = bus1_handle_userref_publish(handle, peer_info,
+						   0, 0, true);
 		WARN_ON(atomic_dec_return(&handle->n_user) != -1);
 		bus1_handle_release_unlock(handle, peer_info);
 
@@ -1264,7 +1270,8 @@ int bus1_handle_destroy_by_id(struct bus1_peer *peer, u64 *idp)
 		mutex_lock(&peer_info->lock);
 		bus1_handle_attach_owner(handle, peer);
 		bus1_handle_install_owner(handle);
-		*idp = bus1_handle_userref_publish(handle, peer_info, 0, true);
+		*idp = bus1_handle_userref_publish(handle, peer_info,
+						   0, 0, true);
 		bus1_node_stage(handle->node, peer_info);
 		mutex_unlock(&peer_info->lock);
 
@@ -1495,6 +1502,7 @@ int bus1_handle_dest_import(struct bus1_handle_dest *dest,
 u64 bus1_handle_dest_export(struct bus1_handle_dest *dest,
 			    struct bus1_peer_info *peer_info,
 			    u64 timestamp,
+			    unsigned long sender,
 			    bool commit)
 {
 	u64 id;
@@ -1508,10 +1516,10 @@ u64 bus1_handle_dest_export(struct bus1_handle_dest *dest,
 		WARN_ON(!bus1_handle_is_owner(dest->handle));
 		/* consumes the inflight ref */
 		id = bus1_handle_userref_publish(dest->handle, peer_info,
-						 timestamp, commit);
+						 timestamp, sender, commit);
 		if (commit)
 			dest->handle = bus1_handle_unref(dest->handle);
-	} else if (!bus1_node_is_valid(dest->handle->node, timestamp)) {
+	} else if (!bus1_node_is_valid(dest->handle->node, timestamp, sender)) {
 		id = BUS1_HANDLE_INVALID;
 	} else {
 		WARN_ON(dest->handle->node->owner.id == BUS1_HANDLE_INVALID);
@@ -1944,7 +1952,8 @@ int bus1_handle_transfer_export(struct bus1_handle_transfer *transfer,
 		} else {
 			WARN_ON(!bus1_handle_is_owner(entry->handle));
 			id = bus1_handle_userref_publish(entry->handle,
-							 peer_info, 0, false);
+							 peer_info,
+							 0, 0, false);
 			if (put_user(id, ids + pos))
 				return -EFAULT;
 		}
@@ -1953,7 +1962,7 @@ int bus1_handle_transfer_export(struct bus1_handle_transfer *transfer,
 	BUS1_HANDLE_BATCH_FOREACH_HANDLE(entry, pos, &transfer->batch) {
 		if (entry->handle) {
 			bus1_handle_userref_publish(entry->handle, peer_info,
-						    0, true);
+						    0, 0, true);
 			entry->handle = bus1_handle_unref(entry->handle);
 		}
 	}
@@ -2165,7 +2174,8 @@ size_t bus1_handle_inflight_walk(struct bus1_handle_inflight *inflight,
 				 size_t *pos,
 				 void **iter,
 				 u64 *ids,
-				 u64 timestamp)
+				 u64 timestamp,
+				 unsigned long sender)
 {
 	union bus1_handle_entry **block = (union bus1_handle_entry **)iter;
 	struct bus1_handle *h;
@@ -2182,7 +2192,8 @@ size_t bus1_handle_inflight_walk(struct bus1_handle_inflight *inflight,
 		h = (*block)[i].handle;
 		if (h)
 			ids[i] = bus1_handle_userref_publish(h, peer_info,
-							     timestamp, false);
+							     timestamp, sender,
+							     false);
 		else
 			ids[i] = BUS1_HANDLE_INVALID;
 	}
@@ -2205,7 +2216,8 @@ size_t bus1_handle_inflight_walk(struct bus1_handle_inflight *inflight,
  */
 void bus1_handle_inflight_commit(struct bus1_handle_inflight *inflight,
 				 struct bus1_peer_info *peer_info,
-				 u64 timestamp)
+				 u64 timestamp,
+				 unsigned long sender)
 {
 	union bus1_handle_entry *e;
 	struct bus1_handle *h;
@@ -2218,7 +2230,7 @@ void bus1_handle_inflight_commit(struct bus1_handle_inflight *inflight,
 		h = e->handle;
 		if (h) {
 			bus1_handle_userref_publish(h, peer_info, timestamp,
-						    true);
+						    sender, true);
 			bus1_handle_unref(h);
 		}
 	}

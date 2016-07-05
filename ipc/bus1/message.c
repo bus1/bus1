@@ -239,8 +239,8 @@ int bus1_message_install(struct bus1_message *message,
 		pos = 0;
 
 		while ((n = bus1_handle_inflight_walk(&message->handles,
-						      peer_info, &pos, &iter,
-						      ids, ts)) > 0) {
+						peer_info, &pos, &iter, ids, ts,
+						message->qnode.sender)) > 0) {
 			WARN_ON(n > n_ids);
 
 			vec.iov_base = ids;
@@ -285,7 +285,8 @@ int bus1_message_install(struct bus1_message *message,
 
 	/* commit handles */
 	if (n_ids > 0)
-		bus1_handle_inflight_commit(&message->handles, peer_info, ts);
+		bus1_handle_inflight_commit(&message->handles, peer_info, ts,
+					    message->qnode.sender);
 
 	/* commit FDs */
 	while (n_fds > 0) {
