@@ -60,6 +60,7 @@ struct bus1_handle {
 
 enum {
 	BUS1_NODE_BIT_PERSISTENT,
+	BUS1_NODE_BIT_ATTACHED,
 	BUS1_NODE_BIT_COMMITTED,
 };
 
@@ -85,6 +86,11 @@ struct bus1_node {
 static bool bus1_node_is_persistent(struct bus1_node *node)
 {
 	return node && test_bit(BUS1_NODE_BIT_PERSISTENT, &node->flags);
+}
+
+static bool bus1_node_is_attached(struct bus1_node *node)
+{
+	return test_bit(BUS1_NODE_BIT_ATTACHED, &node->flags);
 }
 
 static bool bus1_node_is_committed(struct bus1_node *node)
@@ -426,11 +432,10 @@ static void bus1_handle_attach_owner(struct bus1_handle *handle,
 {
 	WARN_ON(!bus1_handle_is_owner(handle));
 	WARN_ON(!list_empty(&handle->node->list_handles));
-	WARN_ON(handle->node->timestamp != 0);
 
 	/* nodes pin their owners until destroyed */
 	bus1_handle_ref(handle);
-	handle->node->timestamp = 1;
+	WARN_ON(test_and_set_bit(BUS1_NODE_BIT_ATTACHED, &handle->node->flags));
 
 	bus1_handle_attach_internal(handle, owner);
 }
@@ -441,7 +446,8 @@ static bool bus1_handle_attach_holder(struct bus1_handle *handle,
 	if (bus1_node_is_committed(handle->node))
 		return false;
 
-	WARN_ON(handle->node->timestamp != 1);
+	WARN_ON(!bus1_node_is_attached(handle->node));
+	WARN_ON(bus1_node_is_committed(handle->node));
 	WARN_ON(bus1_handle_is_owner(handle));
 	bus1_handle_attach_internal(handle, holder);
 
@@ -649,7 +655,7 @@ static void bus1_node_stage(struct bus1_node *node,
 		goto done;
 
 	list_del_init(&node->owner.link_node);
-	timestamp = 2;
+	timestamp = 0;
 
 	while ((h = list_first_entry_or_null(&node->list_handles,
 					     struct bus1_handle,
