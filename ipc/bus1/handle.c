@@ -327,8 +327,9 @@ bus1_handle_unlock_peer(struct bus1_peer *peer,
 	return NULL;
 }
 
-static struct bus1_peer *bus1_handle_acquire_holder(struct bus1_handle *handle,
-						struct bus1_peer_info **infop)
+static struct bus1_peer *
+bus1_handle_acquire_holder(struct bus1_handle *handle,
+			   struct bus1_peer_info **infop)
 {
 	struct bus1_peer *peer;
 
