@@ -357,18 +357,15 @@ static void bus1_node_queue(struct bus1_node *node,
 
 	WARN_ON(RB_EMPTY_NODE(&node->owner.rb_id));
 
-	bus1_handle_ref(&node->owner);
 	mutex_lock(&owner_info->qlock);
 	if (!bus1_queue_node_is_queued(&node->qnode)) {
+		bus1_handle_ref(&node->owner);
 		bus1_queue_sync(&owner_info->queue, 0);
 		timestamp = bus1_queue_tick(&owner_info->queue);
 		bus1_queue_commit(&owner_info->queue, &node->owner.qnode,
 				  timestamp);
-		mutex_unlock(&owner_info->qlock);
-	} else {
-		mutex_unlock(&owner_info->qlock);
-		bus1_handle_unref(&node->owner);
 	}
+	mutex_unlock(&owner_info->qlock);
 }
 
 static void bus1_node_dequeue(struct bus1_node *node,
