@@ -904,7 +904,7 @@ static bool bus1_node_is_valid(struct bus1_node *node, u64 timestamp)
 	if (!test_bit(BUS1_NODE_BIT_COMMITTED, &node->flags))
 		return true;
 
-	return ((node->timestamp & 1) || node->timestamp > timestamp);
+	return (node->timestamp > timestamp);
 }
 
 static u64 bus1_handle_userref_publish(struct bus1_handle *handle,
