@@ -60,6 +60,7 @@ struct bus1_handle {
 
 enum {
 	BUS1_NODE_BIT_PERSISTENT,
+	BUS1_NODE_BIT_COMMITTED,
 };
 
 /**
@@ -88,7 +89,7 @@ static bool bus1_node_is_persistent(struct bus1_node *node)
 
 static bool bus1_node_is_committed(struct bus1_node *node)
 {
-	return node && !(node->timestamp & 1);
+	return test_bit(BUS1_NODE_BIT_COMMITTED, &node->flags);
 }
 
 static void bus1_node_free(struct kref *ref)
@@ -689,9 +690,13 @@ static void bus1_node_stage(struct bus1_node *node,
 	/* Fetch final timestamp from the sending queue. */
 	timestamp = bus1_queue_tick(&peer_info->queue);
 
-	write_seqcount_begin(&peer_info->seqcount);
+	/*
+	 * Set the timestamp on the node, mark as committed afterwards.
+	 * test_and_set_bit() provides the required barrier, so node->timestamp
+	 * is visible if the flag is.
+	 */
 	node->timestamp = timestamp;
-	write_seqcount_end(&peer_info->seqcount);
+	WARN_ON(test_and_set_bit(BUS1_NODE_BIT_COMMITTED, &node->flags));
 
 	mutex_unlock(&peer_info->qlock);
 
@@ -894,41 +899,12 @@ bus1_handle_release(struct bus1_handle *handle,
 
 static bool bus1_node_is_valid(struct bus1_node *node, u64 timestamp)
 {
-	struct bus1_peer_info *owner_info;
-	struct bus1_peer *owner;
-	unsigned int seq;
-	u64 ts;
-
 	WARN_ON(timestamp & 1);
 
-	/*
-	 * Order node-destruction against @timestamp. If @node is still valid
-	 * at the time of @timestamp, this returns true. Otherwise, false is
-	 * returned.
-	 * Note that this is only authoritative for negative answers. If you
-	 * need authoritative positive answers, you need further guarantees
-	 * like a locked owner+destination, or a readable queue entry.
-	 */
+	if (!test_bit(BUS1_NODE_BIT_COMMITTED, &node->flags))
+		return true;
 
-	rcu_read_lock();
-	owner = rcu_dereference(node->owner.holder);
-	if (!owner || !(owner_info = rcu_dereference(owner->info))) {
-		/*
-		 * Owner handles are reset *after* the timestamp has been
-		 * stored synchronously, and peer-info even after that. Hence,
-		 * we can safely read the timestamp and all barriers are
-		 * provided by rcu.
-		 */
-		ts = node->timestamp;
-	} else {
-		do {
-			seq = read_seqcount_begin(&owner_info->seqcount);
-			ts = node->timestamp;
-		} while (read_seqcount_retry(&owner_info->seqcount, seq));
-	}
-	rcu_read_unlock();
-
-	return ((ts & 1) || ts > timestamp);
+	return ((node->timestamp & 1) || node->timestamp > timestamp);
 }
 
 static u64 bus1_handle_userref_publish(struct bus1_handle *handle,
@@ -942,27 +918,6 @@ static u64 bus1_handle_userref_publish(struct bus1_handle *handle,
 	lockdep_assert_held(&peer_info->lock);
 	WARN_ON(!bus1_handle_is_attached(handle));
 
-	/*
-	 * See whether @handle has a destruction timestamp set and whether it
-	 * is ordered *before* @timestamp. This is authoritative _iff_ one of
-	 * the following is true:
-	 *
-	 *  * @peer_info is the destination of a message with timestamp
-	 *    @timestamp. In this case, we guarantee that a destruction syncs
-	 *    on @peer_info during commit. Since we have @peer_info locked, a
-	 *    comparison of the timestamps is authoritative and final.
-	 *
-	 *  * @peer_info is *not* the destination, but the message with
-	 *    timestamp @timestamp is ready for dequeue. This means there is no
-	 *    staging destruction queued before given message, as such @handle
-	 *    must either be ordered *after* @timestamp, or it is fully
-	 *    committed already. Hence, a comparison of timestamps is
-	 *    authoritative and final.
-	 *
-	 * If none of these are true, the comparison is never authoritative.
-	 * That is, bus1_node_is_valid() might return false positives (but never
-	 * false negatives). The caller must be aware of this.
-	 */
 	if (!bus1_node_is_valid(handle->node, timestamp)) {
 		if (commit)
 			WARN_ON(atomic_dec_return(&handle->n_inflight) < 0);
