@@ -901,7 +901,7 @@ static bool bus1_node_is_valid(struct bus1_node *node, u64 timestamp)
 {
 	WARN_ON(timestamp & 1);
 
-	if (!test_bit(BUS1_NODE_BIT_COMMITTED, &node->flags))
+	if (!bus1_node_is_committed(node))
 		return true;
 
 	return (node->timestamp > timestamp);
