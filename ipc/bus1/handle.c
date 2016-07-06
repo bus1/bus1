@@ -61,7 +61,7 @@ struct bus1_handle {
 enum {
 	BUS1_NODE_BIT_PERSISTENT,
 	BUS1_NODE_BIT_ATTACHED,
-	BUS1_NODE_BIT_COMMITTED,
+	BUS1_NODE_BIT_DESTROYED,
 };
 
 /**
@@ -93,9 +93,9 @@ static bool bus1_node_is_attached(struct bus1_node *node)
 	return test_bit(BUS1_NODE_BIT_ATTACHED, &node->flags);
 }
 
-static bool bus1_node_is_committed(struct bus1_node *node)
+static bool bus1_node_is_destroyed(struct bus1_node *node)
 {
-	return test_bit(BUS1_NODE_BIT_COMMITTED, &node->flags);
+	return test_bit(BUS1_NODE_BIT_DESTROYED, &node->flags);
 }
 
 static void bus1_node_free(struct kref *ref)
@@ -104,7 +104,7 @@ static void bus1_node_free(struct kref *ref)
 
 	WARN_ON(rcu_access_pointer(node->owner.holder));
 	WARN_ON(!list_empty(&node->list_handles));
-	WARN_ON(!bus1_node_is_committed(node));
+	WARN_ON(!bus1_node_is_destroyed(node));
 	bus1_queue_node_destroy(&node->qnode);
 	kfree_rcu(node, owner.qnode.rcu);
 }
@@ -404,7 +404,7 @@ static void bus1_handle_attach_internal(struct bus1_handle *handle,
 
 	WARN_ON(rcu_access_pointer(handle->holder));
 	WARN_ON(bus1_handle_was_attached(handle));
-	WARN_ON(bus1_node_is_committed(handle->node));
+	WARN_ON(bus1_node_is_destroyed(handle->node));
 
 	bus1_queue_node_init(&handle->qnode,
 			     BUS1_QUEUE_NODE_HANDLE_DESTRUCTION,
@@ -443,11 +443,10 @@ static void bus1_handle_attach_owner(struct bus1_handle *handle,
 static bool bus1_handle_attach_holder(struct bus1_handle *handle,
 				      struct bus1_peer *holder)
 {
-	if (bus1_node_is_committed(handle->node))
+	if (bus1_node_is_destroyed(handle->node))
 		return false;
 
 	WARN_ON(!bus1_node_is_attached(handle->node));
-	WARN_ON(bus1_node_is_committed(handle->node));
 	WARN_ON(bus1_handle_is_owner(handle));
 	bus1_handle_attach_internal(handle, holder);
 
@@ -555,7 +554,7 @@ static void bus1_handle_uninstall_owner(struct bus1_handle *handle,
 					struct bus1_peer_info *peer_info)
 {
 	WARN_ON(!bus1_handle_is_owner(handle));
-	WARN_ON(!bus1_node_is_committed(handle->node));
+	WARN_ON(!bus1_node_is_destroyed(handle->node));
 	WARN_ON(!list_empty(&handle->node->list_handles));
 
 	/*
@@ -651,7 +650,7 @@ static void bus1_node_stage(struct bus1_node *node,
 
 	lockdep_assert_held(&peer_info->lock);
 
-	if (bus1_node_is_committed(node))
+	if (bus1_node_is_destroyed(node))
 		goto done;
 
 	list_del_init(&node->owner.link_node);
@@ -702,7 +701,7 @@ static void bus1_node_stage(struct bus1_node *node,
 	 * is visible if the flag is.
 	 */
 	node->timestamp = timestamp;
-	WARN_ON(test_and_set_bit(BUS1_NODE_BIT_COMMITTED, &node->flags));
+	WARN_ON(test_and_set_bit(BUS1_NODE_BIT_DESTROYED, &node->flags));
 
 	mutex_unlock(&peer_info->qlock);
 
@@ -734,7 +733,7 @@ static void bus1_handle_detach_internal(struct bus1_handle *handle,
 	 * touch @link_node. The destruction will clear all stale handles when
 	 * done, so we can simply ignore it in that case.
 	 */
-	if (!bus1_node_is_committed(handle->node) &&
+	if (!bus1_node_is_destroyed(handle->node) &&
 	    !list_empty(&handle->link_node)) {
 		list_del_init(&handle->link_node);
 		if (!bus1_handle_is_owner(handle))
@@ -789,7 +788,7 @@ bus1_handle_acquire(struct bus1_handle *handle,
 
 		/* in case of OWNERs, we allow re-attach */
 		mutex_lock(&peer_info->lock);
-		if (bus1_node_is_committed(handle->node)) {
+		if (bus1_node_is_destroyed(handle->node)) {
 			handle = NULL;
 		} else {
 			atomic_inc(&handle->n_inflight);
@@ -908,7 +907,7 @@ static bool bus1_node_is_valid(struct bus1_node *node, u64 timestamp,
 {
 	WARN_ON(timestamp & 1);
 
-	if (!bus1_node_is_committed(node))
+	if (!bus1_node_is_destroyed(node))
 		return true;
 
 	if (node->timestamp == timestamp)
@@ -1283,7 +1282,7 @@ int bus1_handle_destroy_by_id(struct bus1_peer *peer, u64 *idp)
 
 		mutex_lock(&peer_info->lock);
 		if (!bus1_handle_is_owner(handle) ||
-		    bus1_node_is_committed(handle->node)) {
+		    bus1_node_is_destroyed(handle->node)) {
 			r = -ENXIO;
 		} else {
 			bus1_node_stage(handle->node, peer_info);
