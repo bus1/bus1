@@ -1244,7 +1244,7 @@ int bus1_handle_release_by_id(struct bus1_peer *peer, u64 *idp)
 }
 
 /**
- * bus1_handle_destroy_by_id() - destroy a user handle
+ * bus1_node_destroy_by_id() - destroy a node
  * @peer_info:		peer to operate on
  * @idp:		pointer to handle ID
  *
@@ -1255,7 +1255,7 @@ int bus1_handle_release_by_id(struct bus1_peer *peer, u64 *idp)
  *
  * Return: >=0 on success, negative error code on failure.
  */
-int bus1_handle_destroy_by_id(struct bus1_peer *peer, u64 *idp)
+int bus1_node_destroy_by_id(struct bus1_peer *peer, u64 *idp)
 {
 	struct bus1_peer_info *peer_info = bus1_peer_dereference(peer);
 	struct bus1_handle *handle;
