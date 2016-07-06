@@ -273,9 +273,9 @@ bus1_transaction_instantiate_message(struct bus1_transaction *transaction,
 	int r;
 
 	message = bus1_message_new(transaction->length_vecs,
-			transaction->param->n_fds,
-			transaction->param->n_handles,
-			transaction->peer_info);
+				   transaction->param->n_fds,
+				   transaction->param->n_handles,
+				   transaction->peer_info);
 	if (IS_ERR(message))
 		return message;
 

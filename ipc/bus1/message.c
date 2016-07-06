@@ -163,7 +163,7 @@ int bus1_message_allocate(struct bus1_message *message,
 }
 
 /**
- * bus1_message_deallocate() - deallocate pool slice for message payload
+ * bus1_message_deallocate() - deallocate pool slice for discarded message
  * @message:		message to deallocate slice for
  * @peer_info:		destination peer
  *
@@ -176,12 +176,36 @@ void bus1_message_deallocate(struct bus1_message *message,
 	lockdep_assert_held(&peer_info->lock);
 
 	if (message->slice) {
+		message->slice = bus1_pool_release_kernel(&peer_info->pool,
+							  message->slice);
 		bus1_user_quota_discharge(peer_info, message->user,
 					  message->data.n_bytes,
 					  message->data.n_handles,
 					  message->data.n_fds);
+	}
+}
+
+/**
+ * bus1_message_dequeue() - deallocate pool slice for dequeued message
+ * @message:		message to deallocate slice for
+ * @peer_info:		destination peer
+ *
+ * Deallocate the slice for the given peer and commit the associated user quota.
+ * The peer_info lock must be held by the caller, and the slice must have been
+ * allocated.
+ */
+void bus1_message_dequeue(struct bus1_message *message,
+			  struct bus1_peer_info *peer_info)
+{
+	lockdep_assert_held(&peer_info->lock);
+
+	if (!WARN_ON(!message->slice)) {
 		message->slice = bus1_pool_release_kernel(&peer_info->pool,
 							  message->slice);
+		bus1_user_quota_commit(peer_info, message->user,
+				       message->data.n_bytes,
+				       message->data.n_handles,
+				       message->data.n_fds);
 	}
 }
 

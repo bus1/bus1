@@ -530,7 +530,7 @@ static int bus1_peer_ioctl_slice_release(struct bus1_peer *peer,
 {
 	struct bus1_peer_info *peer_info = bus1_peer_dereference(peer);
 	u64 offset;
-	int r;
+	ssize_t size;
 
 	lockdep_assert_held(&peer->active);
 
@@ -540,10 +540,14 @@ static int bus1_peer_ioctl_slice_release(struct bus1_peer *peer,
 		return -EFAULT;
 
 	mutex_lock(&peer_info->lock);
-	r = bus1_pool_release_user(&peer_info->pool, offset);
+	size = bus1_pool_release_user(&peer_info->pool, offset);
 	mutex_unlock(&peer_info->lock);
+	if (size < 0)
+		return size;
 
-	return r;
+	bus1_user_quota_release_slice(peer_info, size);
+
+	return 0;
 }
 
 static int bus1_peer_ioctl_send(struct bus1_peer *peer, unsigned long arg)
@@ -686,7 +690,7 @@ static int bus1_peer_dequeue(struct bus1_peer_info *peer_info,
 	case BUS1_QUEUE_NODE_MESSAGE_NORMAL:
 		message = bus1_message_from_node(node);
 		bus1_pool_publish(&peer_info->pool, message->slice);
-		bus1_message_deallocate(message, peer_info);
+		bus1_message_dequeue(message, peer_info);
 		param->type = BUS1_MSG_DATA;
 		memcpy(&param->data, &message->data,
 		       sizeof(param->data));

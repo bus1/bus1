@@ -80,7 +80,7 @@ static void bus1_user_free(struct kref *ref)
  * @uid:		uid of the user
  *
  * Find and return the user object for the uid if it exists, otherwise create
- * it first.
+ * it first. This function may take the bus1_user_lock.
  *
  * Return: A user object for the given uid, ERR_PTR on failure.
  */
@@ -181,7 +181,8 @@ struct bus1_user *bus1_user_ref(struct bus1_user *user)
  * bus1_user_unref() - release reference
  * @user:	user to release, or NULL
  *
- * Release a reference to a user-object.
+ * Release a reference to a user-object. This function may take the
+ * bus1_user_lock.
  *
  * If NULL is passed, this is a no-op.
  *
@@ -300,9 +301,9 @@ static int bus1_user_quota_charge_one(atomic_t *global,
  * @n_handles:		number of handles to charge
  * @n_fds:		number of FDs to charge
  *
- * This performs a quota charge on the passes quota object for the given user.
- * It first checks whether any quota is exceeded, and if not, it accounts for
- * the specified quantities on the quota and peer.
+ * This charges @user for the resources consumed both globally, and locally on
+ * @peer_info. If the charge would exceed the given quotas at this time, the
+ * function fails without making any charge.
  *
  * This charges for _one_ message with a size of @size bytes, carrying
  * @n_handles handles and @n_fds file descriptors as payload.
@@ -327,8 +328,7 @@ int bus1_user_quota_charge(struct bus1_peer_info *peer_info,
 	/*
 	 * For each type of quota, we usually follow a very simple rule: A
 	 * given user can acquire half of the total in-flight budget that is
-	 * not used by any other user. That is, the amount available to a
-	 * single user shrinks with the quota of other users rising.
+	 * not used by any other user.
 	 */
 
 	BUILD_BUG_ON(BUS1_MESSAGES_MAX > U16_MAX);
@@ -429,7 +429,7 @@ void bus1_user_quota_discharge(struct bus1_peer_info *peer_info,
  * @n_handles:		number of handles to commit
  * @n_fds:		number of FDs to commit
  *
- * Commit a quota charge to the receiving user. This de-accounts the in-flight
+ * Commit a quota charge to the receiving peer. This de-accounts the in-flight
  * charges, but keeps the actual object charges on the receiver. The caller must
  * make sure the actual objects are de-accounted once they are destructed.
  */
@@ -450,6 +450,28 @@ void bus1_user_quota_commit(struct bus1_peer_info *peer_info,
 	stats->n_handles -= n_handles;
 	stats->n_fds -= n_fds;
 
-	/* FDs are externally accounted if non-inflight; we can ignore it */
+	atomic_inc(&user->n_messages);
+	atomic_add(n_handles, &user->n_handles);
 	atomic_add(n_fds, &user->n_fds);
+
+	/* FDs are externally accounted if non-inflight; we can ignore it */
+	peer_info->n_fds += n_fds;
+
+	/* XXX: properly track count of non-inflight handles */
+	peer_info->n_handles += n_handles;
+}
+
+/**
+ * bus1_user_quota_release_slice() - deaccount the resources used by a slice
+ * @peer_info:		peer with quota to operate on
+ * @size:		size to commit
+ *
+ * De-account the resources used by a slice, must be called after the slice is
+ * released by the local peer.
+ */
+void bus1_user_quota_release_slice(struct bus1_peer_info *peer_info,
+				   size_t size)
+{
+	peer_info->n_allocated += size;
+	peer_info->n_messages += 1;
 }

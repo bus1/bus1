@@ -133,4 +133,7 @@ void bus1_user_quota_commit(struct bus1_peer_info *peer_info,
 			    size_t n_handles,
 			    size_t n_fds);
 
+void bus1_user_quota_release_slice(struct bus1_peer_info *peer_info,
+				   size_t size);
+
 #endif /* __BUS1_USER_H */

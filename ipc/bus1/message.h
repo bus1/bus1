@@ -67,6 +67,8 @@ void bus1_message_deallocate(struct bus1_message *message,
 			     struct bus1_peer_info *peer_info);
 int bus1_message_install(struct bus1_message *message,
 			 struct bus1_peer_info *peer_info);
+void bus1_message_dequeue(struct bus1_message *message,
+			  struct bus1_peer_info *peer_info);
 
 /**
  * bus1_message_from_node - get parent message of a queue node
