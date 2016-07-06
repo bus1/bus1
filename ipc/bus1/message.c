@@ -26,7 +26,7 @@
  * @n_bytes:		number of bytes to transmit
  * @n_files:		number of files to pre-allocate
  * @n_handles:		number of handles to pre-allocate
- * @sender:		sender tag
+ * @peer_info:		sending peer
  *
  * This allocates a new, unused message for free use to the caller. Storage for
  * files and handles is (partially) pre-allocated. The number of embedded
@@ -38,7 +38,7 @@
 struct bus1_message *bus1_message_new(size_t n_bytes,
 				      size_t n_files,
 				      size_t n_handles,
-				      unsigned long sender)
+				      struct bus1_peer_info *peer_info)
 {
 	struct bus1_message *message;
 	size_t base_size, fds_size;
@@ -52,7 +52,7 @@ struct bus1_message *bus1_message_new(size_t n_bytes,
 		return ERR_PTR(-ENOMEM);
 
 	bus1_queue_node_init(&message->qnode, BUS1_QUEUE_NODE_MESSAGE_NORMAL,
-			     sender);
+			     (unsigned long)peer_info);
 	message->data.destination = 0;
 	message->data.uid = -1;
 	message->data.gid = -1;
@@ -65,7 +65,7 @@ struct bus1_message *bus1_message_new(size_t n_bytes,
 	message->transaction.next = NULL;
 	message->transaction.dest.handle = NULL;
 	message->transaction.dest.raw_peer = NULL;
-	message->user = NULL;
+	message->user = bus1_user_ref(peer_info->user);
 	message->slice = NULL;
 	message->files = (void *)((u8 *)message + base_size);
 	bus1_handle_inflight_init(&message->handles, n_handles);
@@ -95,7 +95,6 @@ struct bus1_message *bus1_message_free(struct bus1_message *message,
 		return NULL;
 
 	WARN_ON(message->slice);
-	WARN_ON(message->user);
 	WARN_ON(message->transaction.dest.raw_peer);
 	WARN_ON(message->transaction.dest.handle);
 	WARN_ON(message->transaction.next);
@@ -106,6 +105,9 @@ struct bus1_message *bus1_message_free(struct bus1_message *message,
 
 	bus1_handle_inflight_destroy(&message->handles, peer_info);
 	bus1_queue_node_destroy(&message->qnode);
+
+	message->user = bus1_user_unref(message->user);
+
 	kfree_rcu(message, qnode.rcu);
 
 	return NULL;
@@ -115,7 +117,6 @@ struct bus1_message *bus1_message_free(struct bus1_message *message,
  * bus1_message_allocate() - allocate pool slice for message payload
  * @message:		message to allocate slice for
  * @peer_info:		destination peer
- * @user:		user to account in-flight resources on
  *
  * Allocate a pool slice for the given message, and charge the quota of the
  * given user for all the associated in-flight resources. The peer_info lock
@@ -124,8 +125,7 @@ struct bus1_message *bus1_message_free(struct bus1_message *message,
  * Return: 0 on success, negative error code on failure.
  */
 int bus1_message_allocate(struct bus1_message *message,
-			  struct bus1_peer_info *peer_info,
-			  struct bus1_user *user)
+			  struct bus1_peer_info *peer_info)
 {
 	struct bus1_pool_slice *slice;
 	size_t slice_size;
@@ -133,10 +133,10 @@ int bus1_message_allocate(struct bus1_message *message,
 
 	lockdep_assert_held(&peer_info->lock);
 
-	if (WARN_ON(message->user || message->slice))
+	if (WARN_ON(message->slice))
 		return -ENOTRECOVERABLE;
 
-	r = bus1_user_quota_charge(peer_info, user,
+	r = bus1_user_quota_charge(peer_info, message->user,
 				   message->data.n_bytes,
 				   message->data.n_handles,
 				   message->data.n_fds);
@@ -150,14 +150,13 @@ int bus1_message_allocate(struct bus1_message *message,
 
 	slice = bus1_pool_alloc(&peer_info->pool, slice_size);
 	if (IS_ERR(slice)) {
-		bus1_user_quota_discharge(peer_info, user,
+		bus1_user_quota_discharge(peer_info, message->user,
 					  message->data.n_bytes,
 					  message->data.n_handles,
 					  message->data.n_fds);
 		return PTR_ERR(slice);
 	}
 
-	message->user = bus1_user_ref(user);
 	message->slice = slice;
 	message->data.offset = slice->offset;
 	return 0;
@@ -184,8 +183,6 @@ void bus1_message_deallocate(struct bus1_message *message,
 		message->slice = bus1_pool_release_kernel(&peer_info->pool,
 							  message->slice);
 	}
-
-	message->user = bus1_user_unref(message->user);
 }
 
 /**

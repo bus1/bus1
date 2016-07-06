@@ -58,12 +58,11 @@ struct bus1_message {
 struct bus1_message *bus1_message_new(size_t n_bytes,
 				      size_t n_files,
 				      size_t n_handles,
-				      unsigned long sender);
+				      struct bus1_peer_info *peer_info);
 struct bus1_message *bus1_message_free(struct bus1_message *message,
 				       struct bus1_peer_info *peer_info);
 int bus1_message_allocate(struct bus1_message *message,
-			  struct bus1_peer_info *peer_info,
-			  struct bus1_user *user);
+			  struct bus1_peer_info *peer_info);
 void bus1_message_deallocate(struct bus1_message *message,
 			     struct bus1_peer_info *peer_info);
 int bus1_message_install(struct bus1_message *message,

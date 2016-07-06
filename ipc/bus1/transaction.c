@@ -275,13 +275,12 @@ bus1_transaction_instantiate_message(struct bus1_transaction *transaction,
 	message = bus1_message_new(transaction->length_vecs,
 			transaction->param->n_fds,
 			transaction->param->n_handles,
-			(unsigned long)transaction->peer_info);
+			transaction->peer_info);
 	if (IS_ERR(message))
 		return message;
 
 	mutex_lock(&peer_info->lock);
-	r = bus1_message_allocate(message, peer_info,
-				  transaction->peer_info->user);
+	r = bus1_message_allocate(message, peer_info);
 	mutex_unlock(&peer_info->lock);
 	if (r < 0) {
 		/*
