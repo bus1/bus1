@@ -57,8 +57,8 @@
  * ordered. Not all orders are explicitly defined (e.g., they might define
  * orthogonal hierarchies), but this list tries to give a rough overview:
  *
- *   bus1_user_lock
  *   bus1_peer.active
+ *     bus1_user_lock
  *     bus1_peer.waitq.lock
  *     bus1_peer_info.lock
  *       bus1_peer_info.qlock
