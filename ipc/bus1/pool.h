@@ -104,8 +104,9 @@ struct bus1_pool_slice *bus1_pool_alloc(struct bus1_pool *pool, size_t size);
 struct bus1_pool_slice *
 bus1_pool_release_kernel(struct bus1_pool *pool, struct bus1_pool_slice *slice);
 void bus1_pool_publish(struct bus1_pool *pool, struct bus1_pool_slice *slice);
-int bus1_pool_release_user(struct bus1_pool *pool, size_t offset);
-void bus1_pool_flush(struct bus1_pool *pool);
+int bus1_pool_release_user(struct bus1_pool *pool,
+			   size_t offset, size_t *sizep);
+void bus1_pool_flush(struct bus1_pool *pool, size_t *n_slicesp, size_t *sizep);
 
 ssize_t bus1_pool_write_iovec(struct bus1_pool *pool,
 			      struct bus1_pool_slice *slice,

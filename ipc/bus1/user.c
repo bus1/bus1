@@ -469,9 +469,11 @@ void bus1_user_quota_commit(struct bus1_peer_info *peer_info,
  * De-account the resources used by a slice, must be called after the slice is
  * released by the local peer.
  */
-void bus1_user_quota_release_slice(struct bus1_peer_info *peer_info,
-				   size_t size)
+void bus1_user_quota_release_slices(struct bus1_peer_info *peer_info,
+				    size_t n_slices, size_t size)
 {
 	peer_info->n_allocated += size;
-	peer_info->n_messages += 1;
+	peer_info->n_messages += n_slices;
+	atomic_add(n_slices, &peer_info->user->n_messages);
+
 }
