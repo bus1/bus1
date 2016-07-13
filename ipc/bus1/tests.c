@@ -72,7 +72,7 @@ static void bus1_test_user(void)
 static void bus1_test_quota(void)
 {
 	struct bus1_peer_info peer = {};
-	struct bus1_user *user1, *user2;
+	struct bus1_user *owner, *user1, *user2;
 	int r;
 
 	/* init and destroy */
@@ -90,6 +90,8 @@ static void bus1_test_quota(void)
 	WARN_ON(!user1);
 	user2 = bus1_user_ref_by_uid(KUIDT_INIT(2));
 	WARN_ON(!user2);
+	owner = bus1_user_ref_by_uid(KUIDT_INIT(3));
+	WARN_ON(!owner);
 
 	bus1_user_quota_init(&peer.quota);
 	WARN_ON(peer.quota.stats != NULL);
@@ -100,15 +102,16 @@ static void bus1_test_quota(void)
 	peer.n_handles = BUS1_HANDLES_MAX;
 	peer.n_fds = 1024;
 	peer.n_allocated = 1024;
+	peer.user = owner;
 	mutex_lock(&peer.lock);
 	bus1_pool_create_for_peer(&peer, 1024);
 
 	/* charge nothing: allocates the user stats, charge one message */
 	r = bus1_user_quota_charge(&peer, user1, 0, 0, 0);
 	WARN_ON(r < 0);
-	WARN_ON(atomic_read(&user1->n_messages) != BUS1_MESSAGES_MAX - 1);
-	WARN_ON(atomic_read(&user1->n_handles) != BUS1_HANDLES_MAX);
-	WARN_ON(atomic_read(&user1->n_fds) != BUS1_FDS_MAX);
+	WARN_ON(atomic_read(&owner->n_messages) != BUS1_MESSAGES_MAX - 1);
+	WARN_ON(atomic_read(&owner->n_handles) != BUS1_HANDLES_MAX);
+	WARN_ON(atomic_read(&owner->n_fds) != BUS1_FDS_MAX);
 	WARN_ON(peer.quota.n_stats < 1);
 	WARN_ON(peer.quota.stats == NULL);
 	WARN_ON(peer.quota.stats[0].n_allocated != 0);
@@ -121,9 +124,9 @@ static void bus1_test_quota(void)
 	WARN_ON(peer.n_fds != 1024);
 
 	bus1_user_quota_discharge(&peer, user1, 0, 0, 0);
-	WARN_ON(atomic_read(&user1->n_messages) != BUS1_MESSAGES_MAX);
-	WARN_ON(atomic_read(&user1->n_handles) != BUS1_HANDLES_MAX);
-	WARN_ON(atomic_read(&user1->n_fds) != BUS1_FDS_MAX);
+	WARN_ON(atomic_read(&owner->n_messages) != BUS1_MESSAGES_MAX);
+	WARN_ON(atomic_read(&owner->n_handles) != BUS1_HANDLES_MAX);
+	WARN_ON(atomic_read(&owner->n_fds) != BUS1_FDS_MAX);
 	WARN_ON(peer.quota.n_stats < 1);
 	WARN_ON(peer.quota.stats == NULL);
 	WARN_ON(peer.quota.stats[0].n_allocated != 0);
@@ -138,9 +141,9 @@ static void bus1_test_quota(void)
 	/* exceed the quota: nothing happens */
 	r = bus1_user_quota_charge(&peer, user1, -1, 0, 0);
 	WARN_ON(r != -EDQUOT);
-	WARN_ON(atomic_read(&user1->n_messages) != BUS1_MESSAGES_MAX);
-	WARN_ON(atomic_read(&user1->n_handles) != BUS1_HANDLES_MAX);
-	WARN_ON(atomic_read(&user1->n_fds) != BUS1_FDS_MAX);
+	WARN_ON(atomic_read(&owner->n_messages) != BUS1_MESSAGES_MAX);
+	WARN_ON(atomic_read(&owner->n_handles) != BUS1_HANDLES_MAX);
+	WARN_ON(atomic_read(&owner->n_fds) != BUS1_FDS_MAX);
 	WARN_ON(peer.quota.n_stats < 1);
 	WARN_ON(peer.quota.stats == NULL);
 	WARN_ON(peer.quota.stats[0].n_allocated != 0);
@@ -154,9 +157,9 @@ static void bus1_test_quota(void)
 
 	r = bus1_user_quota_charge(&peer, user1, 0, -1, 0);
 	WARN_ON(r != -EDQUOT);
-	WARN_ON(atomic_read(&user1->n_messages) != BUS1_MESSAGES_MAX);
-	WARN_ON(atomic_read(&user1->n_handles) != BUS1_HANDLES_MAX);
-	WARN_ON(atomic_read(&user1->n_fds) != BUS1_FDS_MAX);
+	WARN_ON(atomic_read(&owner->n_messages) != BUS1_MESSAGES_MAX);
+	WARN_ON(atomic_read(&owner->n_handles) != BUS1_HANDLES_MAX);
+	WARN_ON(atomic_read(&owner->n_fds) != BUS1_FDS_MAX);
 	WARN_ON(peer.quota.n_stats < 1);
 	WARN_ON(peer.quota.stats == NULL);
 	WARN_ON(peer.quota.stats[0].n_allocated != 0);
@@ -170,9 +173,9 @@ static void bus1_test_quota(void)
 
 	r = bus1_user_quota_charge(&peer, user1, 0, 0, -1);
 	WARN_ON(r != -EDQUOT);
-	WARN_ON(atomic_read(&user1->n_messages) != BUS1_MESSAGES_MAX);
-	WARN_ON(atomic_read(&user1->n_handles) != BUS1_HANDLES_MAX);
-	WARN_ON(atomic_read(&user1->n_fds) != BUS1_FDS_MAX);
+	WARN_ON(atomic_read(&owner->n_messages) != BUS1_MESSAGES_MAX);
+	WARN_ON(atomic_read(&owner->n_handles) != BUS1_HANDLES_MAX);
+	WARN_ON(atomic_read(&owner->n_fds) != BUS1_FDS_MAX);
 	WARN_ON(peer.quota.n_stats < 1);
 	WARN_ON(peer.quota.stats == NULL);
 	WARN_ON(peer.quota.stats[0].n_allocated != 0);
@@ -187,9 +190,9 @@ static void bus1_test_quota(void)
 	/* verify the limits: size */
 	r = bus1_user_quota_charge(&peer, user1, 1024 / 4, 0, 0);
 	WARN_ON(r < 0);
-	WARN_ON(atomic_read(&user1->n_messages) != BUS1_MESSAGES_MAX - 1);
-	WARN_ON(atomic_read(&user1->n_handles) != BUS1_HANDLES_MAX);
-	WARN_ON(atomic_read(&user1->n_fds) != BUS1_FDS_MAX);
+	WARN_ON(atomic_read(&owner->n_messages) != BUS1_MESSAGES_MAX - 1);
+	WARN_ON(atomic_read(&owner->n_handles) != BUS1_HANDLES_MAX);
+	WARN_ON(atomic_read(&owner->n_fds) != BUS1_FDS_MAX);
 	WARN_ON(peer.quota.n_stats < 1);
 	WARN_ON(peer.quota.stats == NULL);
 	WARN_ON(peer.quota.stats[0].n_allocated != 1024 / 4);
@@ -206,9 +209,9 @@ static void bus1_test_quota(void)
 
 	r = bus1_user_quota_charge(&peer, user2, 1024 / 4 + 1, 0, 0);
 	WARN_ON(r < 0);
-	WARN_ON(atomic_read(&user2->n_messages) != BUS1_MESSAGES_MAX - 1);
-	WARN_ON(atomic_read(&user2->n_handles) != BUS1_HANDLES_MAX);
-	WARN_ON(atomic_read(&user2->n_fds) != BUS1_FDS_MAX);
+	WARN_ON(atomic_read(&owner->n_messages) != BUS1_MESSAGES_MAX - 2);
+	WARN_ON(atomic_read(&owner->n_handles) != BUS1_HANDLES_MAX);
+	WARN_ON(atomic_read(&owner->n_fds) != BUS1_FDS_MAX);
 	WARN_ON(peer.quota.n_stats < 2);
 	WARN_ON(peer.quota.stats == NULL);
 	WARN_ON(peer.quota.stats[1].n_allocated != 1024 / 4 + 1);
@@ -224,9 +227,9 @@ static void bus1_test_quota(void)
 	WARN_ON(r != -EDQUOT);
 
 	bus1_user_quota_discharge(&peer, user2, 1024 / 4 + 1, 0, 0);
-	WARN_ON(atomic_read(&user2->n_messages) != BUS1_MESSAGES_MAX);
-	WARN_ON(atomic_read(&user2->n_handles) != BUS1_HANDLES_MAX);
-	WARN_ON(atomic_read(&user2->n_fds) != BUS1_FDS_MAX);
+	WARN_ON(atomic_read(&owner->n_messages) != BUS1_MESSAGES_MAX - 1);
+	WARN_ON(atomic_read(&owner->n_handles) != BUS1_HANDLES_MAX);
+	WARN_ON(atomic_read(&owner->n_fds) != BUS1_FDS_MAX);
 	WARN_ON(peer.quota.n_stats < 2);
 	WARN_ON(peer.quota.stats == NULL);
 	WARN_ON(peer.quota.stats[1].n_allocated != 0);
@@ -240,9 +243,9 @@ static void bus1_test_quota(void)
 
 	r = bus1_user_quota_charge(&peer, user1, 1024 / 4, 0, 0);
 	WARN_ON(r < 0);
-	WARN_ON(atomic_read(&user1->n_messages) != BUS1_MESSAGES_MAX - 2);
-	WARN_ON(atomic_read(&user1->n_handles) != BUS1_HANDLES_MAX);
-	WARN_ON(atomic_read(&user1->n_fds) != BUS1_FDS_MAX);
+	WARN_ON(atomic_read(&owner->n_messages) != BUS1_MESSAGES_MAX - 2);
+	WARN_ON(atomic_read(&owner->n_handles) != BUS1_HANDLES_MAX);
+	WARN_ON(atomic_read(&owner->n_fds) != BUS1_FDS_MAX);
 	WARN_ON(peer.quota.n_stats < 1);
 	WARN_ON(peer.quota.stats == NULL);
 	WARN_ON(peer.quota.stats[0].n_allocated != 1024 / 2);
@@ -262,9 +265,9 @@ static void bus1_test_quota(void)
 
 	r = bus1_user_quota_charge(&peer, user2, 1024 / 4, 0, 0);
 	WARN_ON(r < 0);
-	WARN_ON(atomic_read(&user2->n_messages) != BUS1_MESSAGES_MAX - 1);
-	WARN_ON(atomic_read(&user2->n_handles) != BUS1_HANDLES_MAX);
-	WARN_ON(atomic_read(&user2->n_fds) != BUS1_FDS_MAX);
+	WARN_ON(atomic_read(&owner->n_messages) != BUS1_MESSAGES_MAX - 3);
+	WARN_ON(atomic_read(&owner->n_handles) != BUS1_HANDLES_MAX);
+	WARN_ON(atomic_read(&owner->n_fds) != BUS1_FDS_MAX);
 	WARN_ON(peer.quota.n_stats < 2);
 	WARN_ON(peer.quota.stats == NULL);
 	WARN_ON(peer.quota.stats[1].n_allocated != 1024 / 4);
@@ -279,12 +282,9 @@ static void bus1_test_quota(void)
 	bus1_user_quota_discharge(&peer, user1, 1024 / 4, 0, 0);
 	bus1_user_quota_discharge(&peer, user1, 1024 / 4, 0, 0);
 	bus1_user_quota_discharge(&peer, user2, 1024 / 4, 0, 0);
-	WARN_ON(atomic_read(&user1->n_messages) != BUS1_MESSAGES_MAX);
-	WARN_ON(atomic_read(&user1->n_handles) != BUS1_HANDLES_MAX);
-	WARN_ON(atomic_read(&user1->n_fds) != BUS1_FDS_MAX);
-	WARN_ON(atomic_read(&user2->n_messages) != BUS1_MESSAGES_MAX);
-	WARN_ON(atomic_read(&user2->n_handles) != BUS1_HANDLES_MAX);
-	WARN_ON(atomic_read(&user2->n_fds) != BUS1_FDS_MAX);
+	WARN_ON(atomic_read(&owner->n_messages) != BUS1_MESSAGES_MAX);
+	WARN_ON(atomic_read(&owner->n_handles) != BUS1_HANDLES_MAX);
+	WARN_ON(atomic_read(&owner->n_fds) != BUS1_FDS_MAX);
 	WARN_ON(peer.quota.n_stats < 2);
 	WARN_ON(peer.quota.stats == NULL);
 	WARN_ON(peer.quota.stats[0].n_allocated != 0);
@@ -305,6 +305,7 @@ static void bus1_test_quota(void)
 	bus1_user_quota_destroy(&peer.quota);
 	WARN_ON(bus1_user_unref(user1));
 	WARN_ON(bus1_user_unref(user2));
+	WARN_ON(bus1_user_unref(owner));
 }
 
 static void bus1_test_pool(void)

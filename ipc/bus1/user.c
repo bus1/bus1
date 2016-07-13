@@ -301,9 +301,10 @@ static int bus1_user_quota_charge_one(atomic_t *global,
  * @n_handles:		number of handles to charge
  * @n_fds:		number of FDs to charge
  *
- * This charges @user for the resources consumed both globally, and locally on
- * @peer_info. If the charge would exceed the given quotas at this time, the
- * function fails without making any charge.
+ * This charges @user for the given resources on @peer_info. If the charge would
+ * exceed the given quotas at this time, the function fails without making any
+ * charge. If the charge is successful, the available resources are adjusted
+ * accordingly both locally on @peer_info and globally on the associated user.
  *
  * This charges for _one_ message with a size of @size bytes, carrying
  * @n_handles handles and @n_fds file descriptors as payload.
@@ -342,28 +343,28 @@ int bus1_user_quota_charge(struct bus1_peer_info *peer_info,
 	if (r < 0)
 		return r;
 
-	r = bus1_user_quota_charge_one(&user->n_messages,
+	r = bus1_user_quota_charge_one(&peer_info->user->n_messages,
 				       peer_info->n_messages,
 				       stats->n_messages,
 				       1);
 	if (r < 0)
 		goto error_allocated;
 
-	r = bus1_user_quota_charge_one(&user->n_handles,
+	r = bus1_user_quota_charge_one(&peer_info->user->n_handles,
 				       peer_info->n_handles,
 				       stats->n_handles,
 				       n_handles);
 	if (r < 0)
 		goto error_messages;
 
-	r = bus1_user_quota_charge_one(&user->n_fds,
+	r = bus1_user_quota_charge_one(&peer_info->user->n_fds,
 				       peer_info->n_fds,
 				       stats->n_fds,
 				       n_fds);
 	if (r < 0)
 		goto error_handles;
 
-	/* charge the local quoats */
+	/* charge the local quotas */
 	peer_info->n_allocated -= size;
 	peer_info->n_messages -= 1;
 	peer_info->n_handles -= n_handles;
@@ -376,9 +377,9 @@ int bus1_user_quota_charge(struct bus1_peer_info *peer_info,
 	return 0;
 
 error_handles:
-	atomic_add(n_handles, &user->n_handles);
+	atomic_add(n_handles, &peer_info->user->n_handles);
 error_messages:
-	atomic_inc(&user->n_messages);
+	atomic_inc(&peer_info->user->n_messages);
 error_allocated:
 	/* memory has no per-user global limit; use memcgs */
 	return r;
@@ -416,9 +417,9 @@ void bus1_user_quota_discharge(struct bus1_peer_info *peer_info,
 	stats->n_messages -= 1;
 	stats->n_handles -= n_handles;
 	stats->n_fds -= n_fds;
-	atomic_inc(&user->n_messages);
-	atomic_add(n_handles, &user->n_handles);
-	atomic_add(n_fds, &user->n_fds);
+	atomic_inc(&peer_info->user->n_messages);
+	atomic_add(n_handles, &peer_info->user->n_handles);
+	atomic_add(n_fds, &peer_info->user->n_fds);
 }
 
 /**
@@ -450,15 +451,13 @@ void bus1_user_quota_commit(struct bus1_peer_info *peer_info,
 	stats->n_handles -= n_handles;
 	stats->n_fds -= n_fds;
 
-	atomic_inc(&user->n_messages);
-	atomic_add(n_handles, &user->n_handles);
-	atomic_add(n_fds, &user->n_fds);
-
-	/* FDs are externally accounted if non-inflight; we can ignore it */
+	/* FDs are externally accounted if non-inflight; we can ignore them */
 	peer_info->n_fds += n_fds;
+	atomic_add(n_fds, &peer_info->user->n_fds);
 
 	/* XXX: properly track count of non-inflight handles */
 	peer_info->n_handles += n_handles;
+	atomic_add(n_handles, &peer_info->user->n_handles);
 }
 
 /**
