@@ -83,16 +83,6 @@ struct bus1_node {
 	struct bus1_handle owner;
 };
 
-static bool bus1_node_is_persistent(struct bus1_node *node)
-{
-	return node && test_bit(BUS1_NODE_BIT_PERSISTENT, &node->flags);
-}
-
-static bool bus1_node_is_attached(struct bus1_node *node)
-{
-	return test_bit(BUS1_NODE_BIT_ATTACHED, &node->flags);
-}
-
 static bool bus1_node_is_destroyed(struct bus1_node *node)
 {
 	return test_bit(BUS1_NODE_BIT_DESTROYED, &node->flags);
@@ -446,7 +436,7 @@ static bool bus1_handle_attach_holder(struct bus1_handle *handle,
 	if (bus1_node_is_destroyed(handle->node))
 		return false;
 
-	WARN_ON(!bus1_node_is_attached(handle->node));
+	WARN_ON(!test_bit(BUS1_NODE_BIT_ATTACHED, &handle->node->flags));
 	WARN_ON(bus1_handle_is_owner(handle));
 	bus1_handle_attach_internal(handle, holder);
 
@@ -1320,7 +1310,8 @@ void bus1_handle_flush_all(struct bus1_peer_info *peer_info, bool final)
 		next = rb_next(n);
 
 		if (bus1_handle_is_owner(h)) {
-			if (final || !bus1_node_is_persistent(h->node)) {
+			if (final || !test_bit(BUS1_NODE_BIT_PERSISTENT,
+					       &h->node->flags)) {
 				bus1_handle_ref(h);
 				bus1_node_stage(h->node, peer_info);
 				if (atomic_xchg(&h->n_user, -1) != -1)
