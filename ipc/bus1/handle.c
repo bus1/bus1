@@ -869,14 +869,12 @@ static bool bus1_handle_release_internal(struct bus1_handle *handle,
 }
 
 static struct bus1_handle *
-bus1_handle_release_staged(struct bus1_handle *handle,
-			   struct bus1_peer_info *peer_info)
+bus1_handle_release_owner(struct bus1_handle *handle,
+			  struct bus1_peer_info *peer_info)
 {
 	/*
-	 * See bus1_handle_release(). This releases a single inflight ref but
-	 * requires the caller to *KNOW* that the handle is an owner handle and
-	 * is already staged for destruction.
-	 * Caller must hold the peer-lock and have already staged the node.
+	 * See bus1_handle_release(). This must be called only on owner handles
+	 * and guarantees that the peer-lock stays locked.
 	 */
 	WARN_ON(!bus1_handle_is_owner(handle));
 	WARN_ON(bus1_handle_release_internal(handle, peer_info));
@@ -1353,8 +1351,7 @@ void bus1_handle_flush_all(struct bus1_peer_info *peer_info, bool final)
 				bus1_handle_ref(h);
 				bus1_node_stage(h->node, peer_info);
 				if (atomic_xchg(&h->n_user, -1) != -1)
-					bus1_handle_release_staged(h,
-								   peer_info);
+					bus1_handle_release_owner(h, peer_info);
 				bus1_handle_unref(h);
 			}
 		} else if (atomic_xchg(&h->n_user, -1) != -1 &&
