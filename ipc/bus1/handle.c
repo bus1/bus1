@@ -784,6 +784,15 @@ static void bus1_handle_detach_owner(struct bus1_handle *handle,
 {
 	WARN_ON(!bus1_handle_is_owner(handle));
 	bus1_handle_detach_internal(handle, peer_info);
+
+	/*
+	 * If a node is already destroyed, dropping the last reference will
+	 * also uninstall the handle. Owner handles only stay accessible as
+	 * long as their node is alive, or at least one reference is held.
+	 */
+	if (bus1_node_is_destroyed(handle->node) &&
+	    rcu_access_pointer(handle->holder))
+		bus1_handle_uninstall_owner(handle, peer_info);
 }
 
 static void bus1_handle_detach_holder(struct bus1_handle *handle)
