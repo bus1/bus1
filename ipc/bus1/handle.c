@@ -166,7 +166,8 @@ static void bus1_node_free(struct kref *ref)
 
 	WARN_ON(rcu_access_pointer(node->owner.holder));
 	WARN_ON(!list_empty(&node->list_handles));
-	WARN_ON(!bus1_node_is_destroyed(node));
+	WARN_ON(test_bit(BUS1_NODE_BIT_ATTACHED, &node->flags) !=
+		test_bit(BUS1_NODE_BIT_DESTROYED, &node->flags));
 	bus1_queue_node_destroy(&node->qnode);
 	kfree_rcu(node, owner.qnode.rcu);
 }
