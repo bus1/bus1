@@ -616,12 +616,9 @@ static void bus1_handle_uninstall_holder(struct bus1_handle *handle,
 	mutex_lock(&peer_info->qlock);
 	if (bus1_queue_node_is_queued(&handle->qnode)) {
 		bus1_queue_remove(&peer_info->queue, &handle->qnode);
-		mutex_unlock(&peer_info->qlock);
-
 		bus1_handle_unref(handle);
-	} else {
-		mutex_unlock(&peer_info->qlock);
 	}
+	mutex_unlock(&peer_info->qlock);
 
 	bus1_queue_node_destroy(&handle->qnode);
 	INIT_LIST_HEAD(&handle->link_flush);
