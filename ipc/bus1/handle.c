@@ -41,6 +41,53 @@
  * @link_node:		link into the node
  * @qnode:		queue entry for destruction notification
  * @link_flush:		temporary link during flush operations of non-owners
+ *
+ * Handle objects represent an accessor to nodes. A handle is always owned by a
+ * specific peer, and by that peer only. The peer-lock (or queue-lock
+ * respectively) protects access to this handle. Effectively, handles represent
+ * a connection between two peers (between the holder of the handle and the
+ * owner of its linked node). Such connections can exist both ways, hence, both
+ * peers are treated as equals. You cannot lock both peers at the same time.
+ *
+ * @ref and @n_inflight must be accessed atomically, @node is set statically
+ * and pinned for the entire lifetime of the object. @n_user, @rb_id, @rb_node,
+ * @id, and @holder are protected by peer-lock of the holding peer. @link_node
+ * is protected by the peer-lock of the node-owner (handle->node->owner.holder,
+ * which *might* be NULL if racing a node destruction).
+ *
+ * Handles always pin the node they're connected to, and the node can be
+ * accessed freely at all times. During handle setup, two independent steps are
+ * required:
+ *
+ *   1) Attach:
+ *      The handle must be attached to the node so a node-owner can enumerate
+ *      all linked handles. This required locking the peer-lock of the
+ *      node-owner.
+ *
+ *   2) Install:
+ *      The handle must be installed into the lookup-trees of the holding peer.
+ *      This requires locking the peer-lock of the holder of the handle.
+ *
+ * Handles don't have any lock themselves, but are protected by the respective
+ * peer locks of their holders. However, during teardown of a handle, the holder
+ * must be cleared to NULL, which means racing accesses might be unable to
+ * dereference the peer. Hence, if we detect this case, we treat the handle as
+ * disconnected and rely on the context to clean the handle up properly.
+ * The holder of a handle is set *before* ATTACH and cleared during UNINSTALL.
+ * That is, we expect a handle to have the holder set before it is made visible
+ * to any other context, but we immediately clear it at the first part of
+ * destruction.
+ *
+ * The 2 connections of a handle (to node, and to holder) can be dropped
+ * independently. The holder of a handle always has full control over its
+ * lifetime. That means, only if the holder releases its last reference, or if
+ * they disconnect, they will cause an uninstall of the handle. As long as a
+ * holder has a reference, the handle will stay alive (but there's no guarantee
+ * that its linked node is still live).
+ * At the same time, the owner of a node is under full control of the node
+ * lifetime. They can destroy the node at any time, causing a detach operation
+ * of all linked handles (note that all handle->node pointers stay valid, but
+ * the handle->link_node links are cleared).
  */
 struct bus1_handle {
 	struct kref ref;
@@ -58,7 +105,20 @@ struct bus1_handle {
 	};
 };
 
-enum {
+/**
+ * enum bus1_node_bit - state flags of node objects
+ * @BUS1_NODE_BIT_PERSISTENT:	Node was created as persistent node by its
+ *				owner. This flag is set during node creation
+ *				and must not be modified further.
+ * @BUS1_NODE_BIT_ATTACHED:	Owner handle is attached to this node. This is
+ *				a debug flag to verify that a node was properly
+ *				initialized before it is used.
+ * @BUS1_NODE_BIT_DESTROYED:	Node is about to be, or is already, destroyed.
+ *				No further handles can be attached and the node
+ *				destruction has a valid timestamp to order
+ *				against other messages.
+ */
+enum bus1_node_bit {
 	BUS1_NODE_BIT_PERSISTENT,
 	BUS1_NODE_BIT_ATTACHED,
 	BUS1_NODE_BIT_DESTROYED,
@@ -67,12 +127,24 @@ enum {
 /**
  * struct bus1_node - node objects
  * @ref:		object ref-count
- * @flags:		node flags
- * @timestamp:		destruction timestamp; 0 if not live yet; 1 if live;
- *			even timestamp if destruction is committed
+ * @flags:		node flags, see enum bus1_node_bit
+ * @timestamp:		destruction timestamp (0 if still live)
  * @list_handles:	linked list of registered handles
  * @qnode:		queue entry for release notification
  * @owner:		embedded handle of node owner
+ *
+ * Every existing node is represented by a single bus1_node object. A node is
+ * always connected to its owner, which is embedded with its own handle as
+ * @owner. @ref and @flags must be accessed with atomic operations, everything
+ * else is protected by the peer-lock (or queue-lock respectively) of
+ * node->owner.holder.
+ *
+ * A node represents the context shared by all handles connected to that node.
+ * The node itself is not linked into any lookup trees, nor should anyone but
+ * handles take references to the node. To pin a node, always pin the handle
+ * you want to use to access the node through. A bus1_node object itself does
+ * not give any guarantee about node->owner, hence, you might not be able to
+ * lock the required mutices.
  */
 struct bus1_node {
 	struct kref ref;
