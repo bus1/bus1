@@ -420,12 +420,9 @@ static void bus1_node_dequeue_notification(struct bus1_node *node,
 	mutex_lock(&owner_info->qlock);
 	if (bus1_queue_node_is_queued(&node->qnode)) {
 		bus1_queue_remove(&owner_info->queue, &node->qnode);
-		mutex_unlock(&owner_info->qlock);
-
 		bus1_handle_unref(&node->owner);
-	} else {
-		mutex_unlock(&owner_info->qlock);
 	}
+	mutex_unlock(&owner_info->qlock);
 }
 
 static void bus1_handle_attach_internal(struct bus1_handle *handle,
