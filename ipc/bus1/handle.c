@@ -323,6 +323,20 @@ static struct bus1_handle *bus1_handle_unref(struct bus1_handle *handle)
 	return NULL;
 }
 
+static struct bus1_handle *
+bus1_handle_from_queue_node(struct bus1_queue_node *node)
+{
+	switch (bus1_queue_node_get_type(node)) {
+	case BUS1_QUEUE_NODE_HANDLE_DESTRUCTION:
+		return container_of(node, struct bus1_handle, qnode);
+	case BUS1_QUEUE_NODE_HANDLE_RELEASE:
+		return &container_of(node, struct bus1_node, qnode)->owner;
+	default:
+		WARN(1, "Invalid queue-node type");
+		return NULL;
+	}
+}
+
 /**
  * bus1_handle_from_queue() - peek or dequeue at queued handle
  * @node:		node to operate on
@@ -346,20 +360,8 @@ u64 bus1_handle_from_queue(struct bus1_queue_node *node,
 
 	lockdep_assert_held(&peer_info->lock);
 
-	switch (bus1_queue_node_get_type(node)) {
-	case BUS1_QUEUE_NODE_HANDLE_DESTRUCTION:
-		handle = container_of(node, struct bus1_handle, qnode);
-		break;
-	case BUS1_QUEUE_NODE_HANDLE_RELEASE:
-		handle = &container_of(node, struct bus1_node, qnode)->owner;
-		break;
-	default:
-		WARN(1, "Invalid queue-node type");
-		return BUS1_HANDLE_INVALID;
-	}
-
+	handle = bus1_handle_from_queue_node(node);
 	id = handle->id;
-
 	if (drop)
 		bus1_handle_unref(handle);
 
