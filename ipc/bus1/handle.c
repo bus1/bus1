@@ -377,11 +377,9 @@ bus1_handle_acquire_holder(struct bus1_handle *handle,
 	rcu_read_lock();
 	peer = bus1_peer_acquire(rcu_dereference(handle->holder));
 	rcu_read_unlock();
+	if (peer)
+		*infop = bus1_peer_dereference(peer);
 
-	if (!peer)
-		return NULL;
-
-	*infop = bus1_peer_dereference(peer);
 	return peer;
 }
 
