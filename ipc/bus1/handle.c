@@ -214,7 +214,7 @@ static void bus1_handle_init(struct bus1_handle *handle, struct bus1_node *node)
 	kref_get(&node->ref);
 }
 
-static void bus1_handle_destroy(struct bus1_handle *handle)
+static void bus1_handle_finish(struct bus1_handle *handle)
 {
 	WARN_ON(!list_empty(&handle->link_node));
 	WARN_ON(!RB_EMPTY_NODE(&handle->rb_node));
@@ -297,14 +297,14 @@ static void bus1_handle_free(struct kref *ref)
 	/*
 	 * Owner-handles are embedded into the linked node. They own a
 	 * reference to the node, effectively making their ref-count a subset
-	 * of the node ref-count. bus1_handle_destroy() drops the
+	 * of the node ref-count. bus1_handle_finish() drops the
 	 * ref-count to the node, as such, the handle itself might already be
 	 * gone once it returns. Therefore, check whether the handle is an
 	 * owner-handle before destroying it, and then skip releasing the
 	 * memory if it is the owner handle.
 	 */
 	is_owner = bus1_handle_is_owner(handle);
-	bus1_handle_destroy(handle);
+	bus1_handle_finish(handle);
 	if (!is_owner)
 		kfree_rcu(handle, qnode.rcu);
 }
