@@ -383,8 +383,8 @@ bus1_handle_acquire_holder(struct bus1_handle *handle,
 	return peer;
 }
 
-static void bus1_node_queue(struct bus1_node *node,
-			    struct bus1_peer_info *owner_info)
+static void bus1_node_queue_notification(struct bus1_node *node,
+					 struct bus1_peer_info *owner_info)
 {
 	u64 timestamp;
 
@@ -408,8 +408,8 @@ static void bus1_node_queue(struct bus1_node *node,
 	mutex_unlock(&owner_info->qlock);
 }
 
-static void bus1_node_dequeue(struct bus1_node *node,
-			      struct bus1_peer_info *owner_info)
+static void bus1_node_dequeue_notification(struct bus1_node *node,
+					   struct bus1_peer_info *owner_info)
 {
 	/*
 	 * Dequeue any node-release notification on @owner_info if queued,
@@ -456,7 +456,7 @@ static void bus1_handle_attach_internal(struct bus1_handle *handle,
 	lockdep_assert_held(&owner_info->lock);
 
 	/* flush any release-notification whenever a new handle is attached */
-	bus1_node_dequeue(handle->node, owner_info);
+	bus1_node_dequeue_notification(handle->node, owner_info);
 }
 
 static void bus1_handle_attach_owner(struct bus1_handle *handle,
@@ -782,7 +782,7 @@ static void bus1_handle_detach_internal(struct bus1_handle *handle,
 		if (1 || RB_EMPTY_NODE(&handle->node->owner.rb_id))
 			bus1_node_stage(handle->node, owner_info);
 		else
-			bus1_node_queue(handle->node, owner_info);
+			bus1_node_queue_notification(handle->node, owner_info);
 	}
 }
 
@@ -831,7 +831,7 @@ bus1_handle_acquire(struct bus1_handle *handle,
 				      &handle->node->list_handles);
 
 			/* flush any release-notification */
-			bus1_node_dequeue(handle->node, peer_info);
+			bus1_node_dequeue_notification(handle->node, peer_info);
 		}
 		mutex_unlock(&peer_info->lock);
 	}
