@@ -772,9 +772,9 @@ static void bus1_handle_detach_internal(struct bus1_handle *handle,
 	 * destruction.
 	 */
 	if (list_empty(&handle->node->list_handles)) {
-		if (1 || RB_EMPTY_NODE(&handle->node->owner.rb_id))
+		if (RB_EMPTY_NODE(&handle->node->owner.rb_id))
 			bus1_node_stage(handle->node, owner_info);
-		else
+		else if (!bus1_node_is_destroyed(handle->node))
 			bus1_node_queue_notification(handle->node, owner_info);
 	}
 }
