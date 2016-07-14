@@ -402,8 +402,7 @@ static void bus1_node_queue_notification(struct bus1_node *node,
 		bus1_handle_ref(&node->owner);
 		bus1_queue_sync(&owner_info->queue, 0);
 		timestamp = bus1_queue_tick(&owner_info->queue);
-		bus1_queue_commit(&owner_info->queue, &node->owner.qnode,
-				  timestamp);
+		bus1_queue_commit(&owner_info->queue, &node->qnode, timestamp);
 	}
 	mutex_unlock(&owner_info->qlock);
 }
