@@ -369,37 +369,6 @@ u64 bus1_handle_from_queue(struct bus1_queue_node *node,
 }
 
 static struct bus1_peer *
-bus1_handle_lock_owner(struct bus1_handle *handle,
-		       struct bus1_peer_info **infop)
-{
-	struct bus1_peer_info *peer_info;
-	struct bus1_peer *peer;
-
-	rcu_read_lock();
-	peer = bus1_peer_acquire(rcu_dereference(handle->node->owner.holder));
-	rcu_read_unlock();
-
-	if (!peer)
-		return NULL;
-
-	peer_info = bus1_peer_dereference(peer);
-	mutex_lock(&peer_info->lock);
-	*infop = peer_info;
-	return peer;
-}
-
-static struct bus1_peer *
-bus1_handle_unlock_peer(struct bus1_peer *peer,
-			struct bus1_peer_info *peer_info)
-{
-	if (peer) {
-		mutex_unlock(&peer_info->lock);
-		bus1_peer_release(peer);
-	}
-	return NULL;
-}
-
-static struct bus1_peer *
 bus1_handle_acquire_holder(struct bus1_handle *handle,
 			   struct bus1_peer_info **infop)
 {
@@ -834,10 +803,13 @@ static void bus1_handle_detach_holder(struct bus1_handle *handle)
 	WARN_ON(bus1_handle_is_owner(handle));
 	WARN_ON(rcu_access_pointer(handle->holder));
 
-	owner = bus1_handle_lock_owner(handle, &owner_info);
-	if (owner)
+	owner = bus1_handle_acquire_holder(&handle->node->owner, &owner_info);
+	if (owner) {
+		mutex_lock(&owner_info->lock);
 		bus1_handle_detach_internal(handle, owner_info);
-	bus1_handle_unlock_peer(owner, owner_info);
+		mutex_unlock(&owner_info->lock);
+		bus1_peer_release(owner);
+	}
 }
 
 static struct bus1_handle *
@@ -2171,12 +2143,20 @@ void bus1_handle_inflight_install(struct bus1_handle_inflight *inflight,
 			if (!h || bus1_handle_was_attached(h))
 				continue;
 
-			owner = bus1_handle_lock_owner(h, &owner_info);
-			if (!owner || !bus1_handle_attach_holder(h, dst)) {
+			owner = bus1_handle_acquire_holder(&h->node->owner,
+							   &owner_info);
+			if (owner) {
+				mutex_lock(&owner_info->lock);
+				if (!bus1_handle_attach_holder(h, dst)) {
+					e->handle = bus1_handle_unref(h);
+					--n_installs;
+				}
+				mutex_unlock(&owner_info->lock);
+				bus1_peer_release(owner);
+			} else {
 				e->handle = bus1_handle_unref(h);
 				--n_installs;
 			}
-			bus1_handle_unlock_peer(owner, owner_info);
 
 			if (--inflight->n_new < 1)
 				break;
