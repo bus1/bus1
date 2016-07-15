@@ -706,32 +706,20 @@ static void bus1_node_stage(struct bus1_node *node,
 	 * better skip the notification. We still queue it on @list_notify to
 	 * trigger the cleanup.
 	 */
+	mutex_lock(&peer_info->qlock);
 	if (likely(!RB_EMPTY_NODE(&node->owner.rb_id))) {
 		bus1_handle_ref(&node->owner);
-
-		mutex_lock(&peer_info->qlock);
 		timestamp = bus1_queue_stage(&peer_info->queue,
 					     &node->owner.qnode, timestamp);
 	} else {
-		mutex_lock(&peer_info->qlock);
 		bus1_queue_sync(&peer_info->queue, timestamp);
 	}
-
-	/* Fetch final timestamp from the sending queue. */
-	timestamp = bus1_queue_tick(&peer_info->queue);
-
-	/*
-	 * Set the timestamp on the node, mark as committed afterwards.
-	 * test_and_set_bit() provides the required barrier, so node->timestamp
-	 * is visible if the flag is.
-	 */
-	node->timestamp = timestamp;
+	node->timestamp = bus1_queue_tick(&peer_info->queue);
+	/* test_and_set_bit() provides barriers for node->timestamp */
 	WARN_ON(test_and_set_bit(BUS1_NODE_BIT_DESTROYED, &node->flags));
-
 	mutex_unlock(&peer_info->qlock);
 
 	list_add_tail(&node->owner.link_node, &list_notify);
-
 	bus1_node_stage_flush(&list_notify);
 
 done:
