@@ -8,6 +8,7 @@
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+#include <linux/atomic.h>
 #include <linux/err.h>
 #include <linux/kernel.h>
 #include <linux/lockdep.h>
@@ -87,6 +88,7 @@ void bus1_queue_init(struct bus1_queue *queue, wait_queue_head_t *waitq)
 	queue->clock = 0;
 	rcu_assign_pointer(queue->front, NULL);
 	queue->waitq = waitq;
+	queue->seed = NULL;
 	queue->messages = RB_ROOT;
 	mutex_init(&queue->qlock);
 	atomic_set(&queue->n_dropped, 0);
@@ -112,6 +114,7 @@ void bus1_queue_destroy(struct bus1_queue *queue)
 
 	mutex_destroy(&queue->qlock);
 	WARN_ON(!RB_EMPTY_ROOT(&queue->messages));
+	WARN_ON(queue->seed);
 	WARN_ON(rcu_access_pointer(queue->front));
 }
 
@@ -119,22 +122,33 @@ void bus1_queue_destroy(struct bus1_queue *queue)
  * bus1_queue_flush() - flush message queue
  * @queue:		queue to flush
  * @list:		list to put flushed messages to
+ * @final:		whether this is the final flush
  *
  * This flushes all entries from @queue and puts them into @list (no particular
  * order) for the caller to clean up. All the entries returned in @list must be
  * unref'ed by the caller.
+ *
+ * If @final is true, this will flush everything, even persistent state.
  */
-void bus1_queue_flush(struct bus1_queue *queue, struct list_head *list)
+void bus1_queue_flush(struct bus1_queue *queue,
+		      struct list_head *list,
+		      bool final)
 {
 	struct bus1_queue_node *node, *t;
 
 	lockdep_assert_held(&queue->qlock);
 
-	/* transfer all nodes (including their ref) into @list, then clear */
+	/* transfer all nodes (including their ref) onto @list, then clear */
 	rbtree_postorder_for_each_entry_safe(node, t, &queue->messages, rb)
 		list_add(&node->link, list);
 	queue->messages = RB_ROOT;
 	rcu_assign_pointer(queue->front, NULL);
+
+	/* move seed onto @list, and clear to NULL, but only if requested */
+	if (final && queue->seed) {
+		list_add(&queue->seed->link, list);
+		queue->seed = NULL;
+	}
 }
 
 static int bus1_queue_node_compare(struct bus1_queue_node *a,
@@ -368,7 +382,17 @@ void bus1_queue_remove(struct bus1_queue *queue, struct bus1_queue_node *node)
 
 	lockdep_assert_held(&queue->qlock);
 
-	if (!node || RB_EMPTY_NODE(&node->rb))
+	if (!node)
+		return;
+
+	/* A) if it occupies the seed slot, clear it */
+	if (node == queue->seed) {
+		queue->seed = NULL;
+		kref_put(&node->ref, bus1_queue_node_no_free);
+	}
+
+	/* B) drop from tree, if linked, otherwise bail out */
+	if (RB_EMPTY_NODE(&node->rb))
 		return;
 
 	readable = bus1_queue_is_readable(queue);
@@ -418,6 +442,7 @@ void bus1_queue_drop(struct bus1_queue *queue, struct bus1_queue_node *node)
 /**
  * bus1_queue_peek() - peek first available entry
  * @queue:	queue to operate on
+ * @seed:	whether to peek at seed
  *
  * This returns a reference to the first available entry in the given queue, or
  * NULL if there is none. The queue stays unmodified and the returned entry
@@ -426,21 +451,34 @@ void bus1_queue_drop(struct bus1_queue *queue, struct bus1_queue_node *node)
  * This only returns entries that are ready to be dequeued. Entries that are
  * still in staging mode will not be considered.
  *
- * The caller must hold the read-side peer-qlock of the parent peer.
+ * If @seed is true, this will fetch the currently set seed rather than look at
+ * the message queue.
+ *
+ * The caller must hold the queue lock.
  *
  * Return: Reference to first available entry, NULL if none available.
  */
-struct bus1_queue_node *bus1_queue_peek(struct bus1_queue *queue)
+struct bus1_queue_node *bus1_queue_peek(struct bus1_queue *queue, bool seed)
 {
-	struct bus1_queue_node *node = NULL;
+	struct bus1_queue_node *node;
 	struct rb_node *n;
 
-	n = rcu_dereference_protected(queue->front,
-				      lockdep_is_held(&queue->qlock));
-	if (n) {
+	if (seed) {
+		if (!queue->seed)
+			return NULL;
+
+		node = queue->seed;
+	} else {
+		n = rcu_dereference_protected(queue->front,
+					      lockdep_is_held(&queue->qlock));
+		if (!n)
+			return NULL;
+
 		node = container_of(n, struct bus1_queue_node, rb);
-		kref_get(&node->ref);
 	}
+
+	kref_get(&node->ref);
+
 	return node;
 }
 

@@ -88,11 +88,15 @@
  * queue is empty, the front pointer is NULL.
  */
 
+#include <linux/atomic.h>
 #include <linux/kernel.h>
 #include <linux/kref.h>
 #include <linux/list.h>
+#include <linux/mutex.h>
 #include <linux/rbtree.h>
 #include <linux/rcupdate.h>
+
+struct bus1_queue_node;
 
 enum {
 	BUS1_QUEUE_NODE_MESSAGE_NORMAL,
@@ -106,6 +110,7 @@ enum {
  * @clock:		local clock (used for Lamport Timestamps)
  * @front:		cached front entry
  * @waitq:		pointer to wait-queue to use for wake-ups
+ * @seed:		seed message
  * @messages:		queued messages
  * @qlock:		data lock
  * @n_dropped:		number of dropped messages since last report
@@ -114,6 +119,7 @@ struct bus1_queue {
 	u64 clock;
 	struct rb_node __rcu *front;
 	wait_queue_head_t *waitq;
+	struct bus1_queue_node *seed;
 	struct rb_root messages;
 	struct mutex qlock;
 	atomic_t n_dropped;
@@ -142,7 +148,9 @@ struct bus1_queue_node {
 /* queue */
 void bus1_queue_init(struct bus1_queue *queue, wait_queue_head_t *waitq);
 void bus1_queue_destroy(struct bus1_queue *queue);
-void bus1_queue_flush(struct bus1_queue *queue, struct list_head *list);
+void bus1_queue_flush(struct bus1_queue *queue,
+		      struct list_head *list,
+		      bool final);
 u64 bus1_queue_stage(struct bus1_queue *queue,
 		     struct bus1_queue_node *node,
 		     u64 timestamp);
@@ -151,7 +159,9 @@ void bus1_queue_commit(struct bus1_queue *queue,
 		       u64 timestamp);
 void bus1_queue_remove(struct bus1_queue *queue, struct bus1_queue_node *node);
 void bus1_queue_drop(struct bus1_queue *queue, struct bus1_queue_node *node);
-struct bus1_queue_node *bus1_queue_peek(struct bus1_queue *queue);
+struct bus1_queue_node *bus1_queue_peek(struct bus1_queue *queue, bool seed);
+struct bus1_queue_node *bus1_queue_swap_seed(struct bus1_queue *queue,
+					     struct bus1_queue_node *node);
 
 /* nodes */
 void bus1_queue_node_init(struct bus1_queue_node *node,
@@ -237,6 +247,26 @@ static inline bool bus1_queue_is_readable(struct bus1_queue *queue)
 {
 	return rcu_access_pointer(queue->front) ||
 	       atomic_read(&queue->n_dropped) > 0;
+}
+
+/**
+ * bus1_queue_xchg_seed() - change seed message of a queue
+ * @queue:		queue to operate on
+ * @node:		new seed to set, or NULL to clear
+ *
+ * This changes the pinned seed message of a queue, returning the old one. The
+ * ref-count to @node is taken over by this function, and the old seed (if any)
+ * is returned to the caller for destruction.
+ *
+ * Return: The old seed is returned, or NULL if none was set.
+ */
+static inline struct bus1_queue_node *
+bus1_queue_xchg_seed(struct bus1_queue *queue, struct bus1_queue_node *node)
+{
+	mutex_lock(&queue->qlock);
+	swap(node, queue->seed);
+	mutex_unlock(&queue->qlock);
+	return node;
 }
 
 #endif /* __BUS1_QUEUE_H */

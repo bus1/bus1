@@ -45,16 +45,12 @@ static void bus1_peer_info_reset(struct bus1_peer_info *peer_info, bool final)
 	bus1_handle_flush_all(peer_info, final);
 
 	mutex_lock(&peer_info->queue.qlock);
-	bus1_queue_flush(&peer_info->queue, &list);
+	bus1_queue_flush(&peer_info->queue, &list, final);
 	mutex_unlock(&peer_info->queue.qlock);
 
 	mutex_lock(&peer_info->lock);
 	bus1_pool_flush(&peer_info->pool, &n_slices, &size);
 	bus1_user_quota_release_slices(peer_info, n_slices, size);
-	if (final && peer_info->seed) {
-		list_add(&peer_info->seed->qnode.link, &list);
-		peer_info->seed = NULL;
-	}
 	mutex_unlock(&peer_info->lock);
 
 	while ((node = list_first_entry_or_null(&list, struct bus1_queue_node,
@@ -136,7 +132,6 @@ static struct bus1_peer_info *bus1_peer_info_new(wait_queue_head_t *waitq,
 	peer_info->cred = get_cred(current_cred());
 	peer_info->pid_ns = get_pid_ns(task_active_pid_ns(current));
 	peer_info->user = NULL;
-	peer_info->seed = NULL;
 	bus1_user_quota_init(&peer_info->quota);
 	peer_info->pool = BUS1_POOL_NULL;
 	bus1_queue_init(&peer_info->queue, waitq);
@@ -617,19 +612,12 @@ bus1_peer_queue_peek(struct bus1_peer_info *peer_info,
 		     struct bus1_cmd_recv *param,
 		     bool drop)
 {
+	struct bus1_queue_node *node;
 	struct bus1_message *message = NULL;
-	struct bus1_queue_node *node = NULL;
 	int r;
 
-	if (param->flags & BUS1_RECV_FLAG_SEED) {
-		if (peer_info->seed) {
-			node = &peer_info->seed->qnode;
-			kref_get(&node->ref);
-		}
-	} else {
-		node = bus1_queue_peek(&peer_info->queue);
-	}
-
+	node = bus1_queue_peek(&peer_info->queue,
+			       !!(param->flags & BUS1_RECV_FLAG_SEED));
 	if (!node)
 		return NULL;
 
@@ -643,14 +631,8 @@ bus1_peer_queue_peek(struct bus1_peer_info *peer_info,
 		}
 	}
 
-	if (drop) {
-		if (message == peer_info->seed) {
-			bus1_message_unref(message);
-			peer_info->seed = NULL;
-		} else {
-			bus1_queue_remove(&peer_info->queue, node);
-		}
-	}
+	if (drop)
+		bus1_queue_remove(&peer_info->queue, node);
 
 	return node;
 }

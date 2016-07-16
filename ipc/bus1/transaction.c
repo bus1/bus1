@@ -650,6 +650,7 @@ int bus1_transaction_commit_for_id(struct bus1_transaction *transaction,
  */
 int bus1_transaction_commit_seed(struct bus1_transaction *transaction)
 {
+	struct bus1_queue_node *node;
 	struct bus1_message *seed;
 	u64 __user *idp;
 	int r;
@@ -672,9 +673,10 @@ int bus1_transaction_commit_seed(struct bus1_transaction *transaction)
 
 	bus1_handle_inflight_install(&seed->handles, transaction->peer);
 
-	mutex_lock(&transaction->peer_info->lock);
-	swap(seed, transaction->peer_info->seed);
-	mutex_unlock(&transaction->peer_info->lock);
+	/* swap seed; we rely on possible old seeds to be messages as well */
+	node = bus1_queue_xchg_seed(&transaction->peer_info->queue,
+				    &seed->qnode);
+	seed = node ? bus1_message_from_node(node) : NULL;
 
 exit:
 	if (seed) {

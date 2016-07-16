@@ -44,7 +44,6 @@ struct bus1_message;
  * @pid_ns:			user pid namespace
  * @waitq:			assigned wait-queue
  * @user:			object owner
- * @seed:			seed message
  * @quota:			quota handling
  * @pool:			data pool
  * @queue:			message queue, rcu-accessible
@@ -65,7 +64,6 @@ struct bus1_peer_info {
 	const struct cred *cred;
 	struct pid_namespace *pid_ns;
 	struct bus1_user *user;
-	struct bus1_message *seed;
 	struct bus1_user_quota quota;
 	struct bus1_pool pool;
 	struct bus1_queue queue;
