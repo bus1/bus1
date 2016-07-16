@@ -78,11 +78,15 @@ bus1_peer_info_flush(struct bus1_peer_info *peer_info, bool final)
 	bus1_queue_post_flush(&peer_info->queue);
 	mutex_unlock(&peer_info->qlock);
 
+	if (final && peer_info->seed) {
+		bus1_message_deallocate(peer_info->seed, peer_info);
+		peer_info->seed->transaction.next = list;
+		list = peer_info->seed;
+		peer_info->seed = NULL;
+	}
+
 	for (message = list; message; message = message->transaction.next)
 		bus1_message_deallocate(message, peer_info);
-
-	if (final && peer_info->seed)
-		bus1_message_deallocate(peer_info->seed, peer_info);
 
 	return list;
 }
@@ -106,11 +110,6 @@ static void bus1_peer_info_reset(struct bus1_peer_info *peer_info, bool final)
 		message->transaction.next = NULL;
 		bus1_message_flush(message, peer_info);
 		bus1_message_free(message);
-	}
-
-	if (final && peer_info->seed) {
-		bus1_message_flush(peer_info->seed, peer_info);
-		peer_info->seed = bus1_message_free(peer_info->seed);
 	}
 }
 
