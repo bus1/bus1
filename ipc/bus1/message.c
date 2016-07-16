@@ -131,8 +131,7 @@ struct bus1_message *bus1_message_free(struct bus1_message *message)
  * @peer_info:		destination peer
  *
  * Allocate a pool slice for the given message, and charge the quota of the
- * given user for all the associated in-flight resources. The peer_info lock
- * must be held by the caller.
+ * given user for all the associated in-flight resources.
  *
  * Return: 0 on success, negative error code on failure.
  */
@@ -143,17 +142,17 @@ int bus1_message_allocate(struct bus1_message *message,
 	size_t slice_size;
 	int r;
 
-	lockdep_assert_held(&peer_info->lock);
-
 	if (WARN_ON(message->slice))
 		return -ENOTRECOVERABLE;
+
+	mutex_lock(&peer_info->lock);
 
 	r = bus1_user_quota_charge(peer_info, message->user,
 				   message->data.n_bytes,
 				   message->data.n_handles,
 				   message->data.n_fds);
 	if (r < 0)
-		return r;
+		goto exit;
 
 	/* cannot overflow as all of those are limited */
 	slice_size = ALIGN(message->data.n_bytes, 8) +
@@ -166,12 +165,17 @@ int bus1_message_allocate(struct bus1_message *message,
 					  message->data.n_bytes,
 					  message->data.n_handles,
 					  message->data.n_fds);
-		return PTR_ERR(slice);
+		r = PTR_ERR(slice);
+		goto exit;
 	}
 
 	message->slice = slice;
 	message->data.offset = slice->offset;
-	return 0;
+	r = 0;
+
+exit:
+	mutex_unlock(&peer_info->lock);
+	return r;
 }
 
 /**

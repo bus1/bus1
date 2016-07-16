@@ -280,9 +280,7 @@ bus1_transaction_instantiate_message(struct bus1_transaction *transaction,
 	if (IS_ERR(message))
 		return message;
 
-	mutex_lock(&peer_info->lock);
 	r = bus1_message_allocate(message, peer_info);
-	mutex_unlock(&peer_info->lock);
 	if (r < 0) {
 		/*
 		 * If BUS1_SEND_FLAG_CONTINUE is specified, target errors are
