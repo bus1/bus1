@@ -205,16 +205,16 @@ exit:
 void bus1_message_deallocate(struct bus1_message *message,
 			     struct bus1_peer_info *peer_info)
 {
+	mutex_lock(&peer_info->lock);
 	if (message->slice) {
-		mutex_lock(&peer_info->lock);
 		message->slice = bus1_pool_release_kernel(&peer_info->pool,
 							  message->slice);
 		bus1_user_quota_discharge(peer_info, message->user,
 					  message->data.n_bytes,
 					  message->data.n_handles,
 					  message->data.n_fds);
-		mutex_unlock(&peer_info->lock);
 	}
+	mutex_unlock(&peer_info->lock);
 }
 
 /**
