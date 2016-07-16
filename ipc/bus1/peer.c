@@ -43,10 +43,7 @@ static void bus1_peer_info_reset(struct bus1_peer_info *peer_info, bool final)
 	LIST_HEAD(list);
 
 	bus1_handle_flush_all(peer_info, final);
-
-	mutex_lock(&peer_info->queue.qlock);
 	bus1_queue_flush(&peer_info->queue, &list, final);
-	mutex_unlock(&peer_info->queue.qlock);
 
 	mutex_lock(&peer_info->lock);
 	bus1_pool_flush(&peer_info->pool, &n_slices, &size);

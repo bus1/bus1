@@ -136,7 +136,7 @@ void bus1_queue_flush(struct bus1_queue *queue,
 {
 	struct bus1_queue_node *node, *t;
 
-	lockdep_assert_held(&queue->qlock);
+	mutex_lock(&queue->qlock);
 
 	/* transfer all nodes (including their ref) onto @list, then clear */
 	rbtree_postorder_for_each_entry_safe(node, t, &queue->messages, rb)
@@ -149,6 +149,8 @@ void bus1_queue_flush(struct bus1_queue *queue,
 		list_add(&queue->seed->link, list);
 		queue->seed = NULL;
 	}
+
+	mutex_unlock(&queue->qlock);
 }
 
 static int bus1_queue_node_compare(struct bus1_queue_node *a,
