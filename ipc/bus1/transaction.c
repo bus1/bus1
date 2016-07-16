@@ -117,7 +117,8 @@ static void bus1_transaction_destroy(struct bus1_transaction *transaction)
 		mutex_unlock(&peer_info->lock);
 
 		bus1_active_lockdep_released(&dest.raw_peer->active);
-		bus1_message_free(message, peer_info);
+		bus1_message_flush(message, peer_info);
+		bus1_message_free(message);
 		bus1_handle_dest_destroy(&dest, transaction->peer_info);
 	}
 
@@ -328,7 +329,10 @@ error:
 		mutex_unlock(&peer_info->lock);
 	}
 	if (r < 0) {
-		bus1_message_free(message, peer_info);
+		if (message) {
+			bus1_message_flush(message, peer_info);
+			bus1_message_free(message);
+		}
 		message = ERR_PTR(r);
 	}
 	return message;
@@ -415,7 +419,8 @@ void bus1_transaction_commit_one(struct bus1_transaction *transaction,
 		bus1_queue_drop(&peer_info->queue, &message->qnode);
 		mutex_unlock(&peer_info->qlock);
 
-		bus1_message_free(message, peer_info);
+		bus1_message_flush(message, peer_info);
+		bus1_message_free(message);
 
 		return;
 	}
@@ -436,7 +441,8 @@ void bus1_transaction_commit_one(struct bus1_transaction *transaction,
 		bus1_queue_remove(&peer_info->queue, &message->qnode);
 		mutex_unlock(&peer_info->qlock);
 
-		bus1_message_free(message, peer_info);
+		bus1_message_flush(message, peer_info);
+		bus1_message_free(message);
 
 		return;
 	}
@@ -460,7 +466,8 @@ void bus1_transaction_commit_one(struct bus1_transaction *transaction,
 		bus1_message_deallocate(message, peer_info);
 		mutex_unlock(&peer_info->lock);
 
-		bus1_message_free(message, peer_info);
+		bus1_message_flush(message, peer_info);
+		bus1_message_free(message);
 	}
 }
 
@@ -687,6 +694,9 @@ int bus1_transaction_commit_seed(struct bus1_transaction *transaction)
 	mutex_unlock(&transaction->peer_info->lock);
 
 exit:
-	bus1_message_free(seed, transaction->peer_info);
+	if (seed) {
+		bus1_message_flush(seed, transaction->peer_info);
+		bus1_message_free(seed);
+	}
 	return r;
 }

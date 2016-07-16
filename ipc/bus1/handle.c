@@ -2017,22 +2017,28 @@ void bus1_handle_inflight_init(struct bus1_handle_inflight *inflight,
 
 /**
  * bus1_handle_inflight_destroy() - destroy inflight-context
- * @inflight:		inflight context to destroy, or NULL
+ * @inflight:		inflight context to destroy
+ *
+ * This destroys the inflight context. The caller must make sure to flush the
+ * context before destroying it, in case any handles were imported.
+ */
+void bus1_handle_inflight_destroy(struct bus1_handle_inflight *inflight)
+{
+	bus1_handle_batch_destroy(&inflight->batch);
+}
+
+/**
+ * bus1_handle_inflight_flush() - flush pinned resources
+ * @inflight:		inflight context to flush
  * @peer_info:		owning peer
  *
- * This releases all data allocated, or pinned by an inflight-context. If NULL
- * is passed, or if the inflight context was already destroyed, then nothing is
- * done.
+ * This releases all handles that were pinned on the inflight context. This
+ * might require locking the owning peer.
  */
-void bus1_handle_inflight_destroy(struct bus1_handle_inflight *inflight,
-				  struct bus1_peer_info *peer_info)
+void bus1_handle_inflight_flush(struct bus1_handle_inflight *inflight,
+				struct bus1_peer_info *peer_info)
 {
-	if (!inflight)
-		return;
-
-	/* safe to be called multiple times */
 	bus1_handle_batch_release(&inflight->batch, peer_info);
-	bus1_handle_batch_destroy(&inflight->batch);
 }
 
 /**

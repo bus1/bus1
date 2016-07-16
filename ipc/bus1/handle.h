@@ -233,8 +233,9 @@ int bus1_handle_transfer_export(struct bus1_handle_transfer *transfer,
 /* inflight tracking */
 void bus1_handle_inflight_init(struct bus1_handle_inflight *inflight,
 			       size_t n_entries);
-void bus1_handle_inflight_destroy(struct bus1_handle_inflight *inflight,
-				  struct bus1_peer_info *peer_info);
+void bus1_handle_inflight_destroy(struct bus1_handle_inflight *inflight);
+void bus1_handle_inflight_flush(struct bus1_handle_inflight *inflight,
+				struct bus1_peer_info *peer_info);
 int bus1_handle_inflight_import(struct bus1_handle_inflight *inflight,
 				struct bus1_peer_info *peer_info,
 				struct bus1_handle_transfer *transfer);

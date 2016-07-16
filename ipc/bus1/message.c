@@ -75,19 +75,31 @@ struct bus1_message *bus1_message_new(size_t n_bytes,
 }
 
 /**
+ * bus1_message_flush() - flush pinned resources
+ * @message:		message to flush
+ * @peer_info:		owning peer
+ *
+ * This flushes all pinned resources of the message. This might require locking
+ * the owning peer.
+ */
+void bus1_message_flush(struct bus1_message *message,
+			struct bus1_peer_info *peer_info)
+{
+	bus1_handle_inflight_flush(&message->handles, peer_info);
+}
+
+/**
  * bus1_message_free() - destroy a message
  * @message:		message to destroy, or NULL
- * @peer_info:		owning peer
  *
  * This deallocates, destroys, and frees a message that was previously created
  * via bus1_message_new(). The caller must take care to unlink the message from
- * any queues before calling this. Furthermore, quotas must be handled before
- * as well.
+ * any queues before calling this, as well as flushing the message in case it
+ * was ever allocated and possibly committing quotas.
  *
  * Return: NULL is returned.
  */
-struct bus1_message *bus1_message_free(struct bus1_message *message,
-				       struct bus1_peer_info *peer_info)
+struct bus1_message *bus1_message_free(struct bus1_message *message)
 {
 	size_t i;
 
@@ -103,7 +115,7 @@ struct bus1_message *bus1_message_free(struct bus1_message *message,
 		if (message->files[i])
 			fput(message->files[i]);
 
-	bus1_handle_inflight_destroy(&message->handles, peer_info);
+	bus1_handle_inflight_destroy(&message->handles);
 	bus1_queue_node_destroy(&message->qnode);
 
 	message->user = bus1_user_unref(message->user);

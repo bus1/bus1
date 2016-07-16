@@ -104,11 +104,14 @@ static void bus1_peer_info_reset(struct bus1_peer_info *peer_info, bool final)
 	while ((message = list)) {
 		list = message->transaction.next;
 		message->transaction.next = NULL;
-		bus1_message_free(message, peer_info);
+		bus1_message_flush(message, peer_info);
+		bus1_message_free(message);
 	}
 
-	if (final)
-		peer_info->seed = bus1_message_free(peer_info->seed, peer_info);
+	if (final && peer_info->seed) {
+		bus1_message_flush(peer_info->seed, peer_info);
+		peer_info->seed = bus1_message_free(peer_info->seed);
+	}
 }
 
 static struct bus1_peer_info *
@@ -720,7 +723,8 @@ static int bus1_peer_dequeue(struct bus1_peer_info *peer_info,
 
 exit:
 	mutex_unlock(&peer_info->lock);
-	bus1_message_free(message, peer_info);
+	bus1_message_flush(message, peer_info);
+	bus1_message_free(message);
 	return r;
 }
 
