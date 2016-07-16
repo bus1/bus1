@@ -456,30 +456,30 @@ void bus1_queue_drop(struct bus1_queue *queue, struct bus1_queue_node *node)
  * If @seed is true, this will fetch the currently set seed rather than look at
  * the message queue.
  *
- * The caller must hold the queue lock.
- *
  * Return: Reference to first available entry, NULL if none available.
  */
 struct bus1_queue_node *bus1_queue_peek(struct bus1_queue *queue, bool seed)
 {
-	struct bus1_queue_node *node;
+	struct bus1_queue_node *node = NULL;
 	struct rb_node *n;
 
-	if (seed) {
-		if (!queue->seed)
-			return NULL;
+	mutex_lock(&queue->qlock);
 
-		node = queue->seed;
+	if (seed) {
+		if (queue->seed) {
+			node = queue->seed;
+			kref_get(&node->ref);
+		}
 	} else {
 		n = rcu_dereference_protected(queue->front,
 					      lockdep_is_held(&queue->qlock));
-		if (!n)
-			return NULL;
-
-		node = container_of(n, struct bus1_queue_node, rb);
+		if (n) {
+			node = container_of(n, struct bus1_queue_node, rb);
+			kref_get(&node->ref);
+		}
 	}
 
-	kref_get(&node->ref);
+	mutex_unlock(&queue->qlock);
 
 	return node;
 }

@@ -613,23 +613,42 @@ bus1_peer_queue_peek(struct bus1_peer_info *peer_info,
 	struct bus1_message *message = NULL;
 	int r;
 
+	/*
+	 * Any dequeue operation might be raced by a RESET or similar message
+	 * removal. Therefore, we rely on the peer-lock to be held for the
+	 * entire time of this dequeue operation. This guarantees that any
+	 * racing RESET cannot release message resources and as such blocks on
+	 * the dequeue operation. Hence, we can safely access the message
+	 * without requiring the queue to stay locked.
+	 */
+
+	lockdep_assert_held(&peer_info->lock);
+
 	node = bus1_queue_peek(&peer_info->queue,
 			       !!(param->flags & BUS1_RECV_FLAG_SEED));
-	if (!node)
-		return NULL;
+	if (node) {
+		if (bus1_queue_node_get_type(node) ==
+					BUS1_QUEUE_NODE_MESSAGE_NORMAL) {
+			message = bus1_message_from_node(node);
 
-	if (bus1_queue_node_get_type(node) == BUS1_QUEUE_NODE_MESSAGE_NORMAL) {
-		message = bus1_message_from_node(node);
+			r = bus1_message_install(message, peer_info);
+			if (r < 0) {
+				bus1_message_unref(message);
+				return ERR_PTR(r);
+			}
+		}
 
-		r = bus1_message_install(message, peer_info);
-		if (r < 0) {
-			bus1_message_unref(message);
-			return ERR_PTR(r);
+		if (drop) {
+			mutex_lock(&peer_info->queue.qlock);
+			bus1_queue_remove(&peer_info->queue, node);
+			mutex_unlock(&peer_info->queue.qlock);
 		}
 	}
 
 	if (drop)
-		bus1_queue_remove(&peer_info->queue, node);
+		param->n_dropped = bus1_queue_flush_dropped(&peer_info->queue);
+	else
+		param->n_dropped = bus1_queue_peek_dropped(&peer_info->queue);
 
 	return node;
 }
@@ -643,18 +662,11 @@ static int bus1_peer_dequeue(struct bus1_peer_info *peer_info,
 
 	mutex_lock(&peer_info->lock);
 
-	mutex_lock(&peer_info->queue.qlock);
 	node = bus1_peer_queue_peek(peer_info, param, true);
-	mutex_unlock(&peer_info->queue.qlock);
-	if (IS_ERR(node)) {
+	if (IS_ERR_OR_NULL(node)) {
 		r = PTR_ERR(node);
 		goto exit;
 	}
-
-	r = 0;
-	param->n_dropped = bus1_queue_flush_dropped(&peer_info->queue);
-	if (!node)
-		goto exit;
 
 	switch (bus1_queue_node_get_type(node)) {
 	case BUS1_QUEUE_NODE_MESSAGE_NORMAL:
@@ -682,6 +694,8 @@ static int bus1_peer_dequeue(struct bus1_peer_info *peer_info,
 		break;
 	}
 
+	r = 0;
+
 exit:
 	mutex_unlock(&peer_info->lock);
 	if (message) {
@@ -700,18 +714,11 @@ static int bus1_peer_peek(struct bus1_peer_info *peer_info,
 
 	mutex_lock(&peer_info->lock);
 
-	mutex_lock(&peer_info->queue.qlock);
 	node = bus1_peer_queue_peek(peer_info, param, false);
-	mutex_unlock(&peer_info->queue.qlock);
-	if (IS_ERR(node)) {
+	if (IS_ERR_OR_NULL(node)) {
 		r = PTR_ERR(node);
 		goto exit;
 	}
-
-	r = 0;
-	param->n_dropped = bus1_queue_peek_dropped(&peer_info->queue);
-	if (!node)
-		goto exit;
 
 	switch (bus1_queue_node_get_type(node)) {
 	case BUS1_QUEUE_NODE_MESSAGE_NORMAL:
@@ -737,6 +744,8 @@ static int bus1_peer_peek(struct bus1_peer_info *peer_info,
 		WARN(1, "Invalid queue-node type");
 		break;
 	}
+
+	r = 0;
 
 exit:
 	mutex_unlock(&peer_info->lock);
