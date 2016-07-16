@@ -723,8 +723,10 @@ static int bus1_peer_dequeue(struct bus1_peer_info *peer_info,
 
 exit:
 	mutex_unlock(&peer_info->lock);
-	bus1_message_flush(message, peer_info);
-	bus1_message_free(message);
+	if (message) {
+		bus1_message_flush(message, peer_info);
+		bus1_message_free(message);
+	}
 	return r;
 }
 
