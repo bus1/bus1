@@ -76,6 +76,12 @@ static void bus1_queue_node_set_timestamp(struct bus1_queue_node *node, u64 ts)
 	node->timestamp_and_type |= ts;
 }
 
+static void bus1_queue_node_no_free(struct kref *ref)
+{
+	/* no-op kref_put() callback that is used if we hold >1 reference */
+	WARN(1, "Queue node freed unexpectedly");
+}
+
 /**
  * bus1_queue_init_internal() - initialize queue
  * @queue:	queue to initialize
@@ -121,23 +127,23 @@ void bus1_queue_destroy(struct bus1_queue *queue)
 }
 
 /**
- * bus1_queue_post_flush() - flush queue
+ * bus1_queue_flush() - flush message queue
  * @queue:		queue to flush
+ * @list:		list to put flushed messages to
  *
- * To flush an entire queue, callers should lock the peer and iterate the
- * entire message tree, removing each entry without touching the tree. When
- * done, calling into bus1_queue_post_flush() will reset the tree, assuming the
- * caller completely cleared all entries.
- *
- * We cannot implement flushing inside of queue-handling, as it requires
- * knowledge about the attached payload of each message. Hence, we'd have to
- * use a callback to let the caller release each message. This is cumbersome,
- * hence we decided to force callers to traverse the tree themselves.
+ * This flushes all entries from @queue and puts them into @list (no particular
+ * order) for the caller to clean up. All the entries returned in @list must be
+ * unref'ed by the caller.
  */
-void bus1_queue_post_flush(struct bus1_queue *queue)
+void bus1_queue_flush(struct bus1_queue *queue, struct list_head *list)
 {
+	struct bus1_queue_node *node, *t;
+
 	bus1_queue_assert_held(queue);
 
+	/* transfer all nodes (including their ref) into @list, then clear */
+	rbtree_postorder_for_each_entry_safe(node, t, &queue->messages, rb)
+		list_add(&node->link, list);
 	queue->messages = RB_ROOT;
 	rcu_assign_pointer(queue->front, NULL);
 }
@@ -251,10 +257,11 @@ static void bus1_queue_add(struct bus1_queue *queue,
 		}
 	}
 
-	if (!RB_EMPTY_NODE(&node->rb)) {
+	/* must be staging, so it cannot be pointed to by queue->front */
+	if (RB_EMPTY_NODE(&node->rb))
+		kref_get(&node->ref);
+	else
 		rb_erase(&node->rb, &queue->messages);
-		/* must be staging, so no need to adjust queue->front */
-	}
 
 	bus1_queue_node_set_timestamp(node, timestamp);
 
@@ -300,6 +307,9 @@ static void bus1_queue_add(struct bus1_queue *queue,
  * The caller must provide an even timestamp and the entry may not already have
  * been committed.
  *
+ * The queue owns its own reference to the node, so the caller retains their
+ * reference after this call returns.
+ *
  * Return: The timestamp used.
  */
 u64 bus1_queue_stage(struct bus1_queue *queue,
@@ -331,6 +341,9 @@ u64 bus1_queue_stage(struct bus1_queue *queue,
  * Furthermore, the queue clock must be synced with the new timestamp *before*
  * staging an entry. Similarly, the timestamp of an entry can only be
  * increased, never decreased.
+ *
+ * The queue owns its own reference to the node, so the caller retains their
+ * reference after this call returns.
  */
 void bus1_queue_commit(struct bus1_queue *queue,
 		       struct bus1_queue_node *node,
@@ -352,9 +365,13 @@ void bus1_queue_commit(struct bus1_queue *queue,
  * If @node was still in staging, this call might uncover a new front entry and
  * as such turn the queue readable. Hence, the caller *must* handle its return
  * value.
+ *
+ * The queue will drop its reference to the node, but rely on the caller to
+ * have a reference on their own (which is implied by passing @node as argument
+ * to this function). The caller retains their reference after this call
+ * returns.
  */
-void bus1_queue_remove(struct bus1_queue *queue,
-		       struct bus1_queue_node *node)
+void bus1_queue_remove(struct bus1_queue *queue, struct bus1_queue_node *node)
 {
 	struct bus1_queue_node *iter;
 	struct rb_node *front, *n;
@@ -388,6 +405,7 @@ void bus1_queue_remove(struct bus1_queue *queue,
 
 	rb_erase(&node->rb, &queue->messages);
 	RB_CLEAR_NODE(&node->rb);
+	kref_put(&node->ref, bus1_queue_node_no_free);
 
 	if (!readable && bus1_queue_is_readable(queue))
 		wake_up_interruptible(queue->waitq);
@@ -412,7 +430,7 @@ void bus1_queue_drop(struct bus1_queue *queue, struct bus1_queue_node *node)
  * bus1_queue_peek() - peek first available entry
  * @queue:	queue to operate on
  *
- * This returns a pointer to the first available entry in the given queue, or
+ * This returns a reference to the first available entry in the given queue, or
  * NULL if there is none. The queue stays unmodified and the returned entry
  * remains on the queue.
  *
@@ -421,15 +439,19 @@ void bus1_queue_drop(struct bus1_queue *queue, struct bus1_queue_node *node)
  *
  * The caller must hold the read-side peer-qlock of the parent peer.
  *
- * Return: Pointer to first available entry, NULL if none available.
+ * Return: Reference to first available entry, NULL if none available.
  */
 struct bus1_queue_node *bus1_queue_peek(struct bus1_queue *queue)
 {
+	struct bus1_queue_node *node = NULL;
 	struct rb_node *n;
 
-	n = rcu_dereference_protected(queue->front,
-				      bus1_queue_is_held(queue));
-	return n ? container_of(n, struct bus1_queue_node, rb) : NULL;
+	n = rcu_dereference_protected(queue->front, bus1_queue_is_held(queue));
+	if (n) {
+		node = container_of(n, struct bus1_queue_node, rb);
+		kref_get(&node->ref);
+	}
+	return node;
 }
 
 /**

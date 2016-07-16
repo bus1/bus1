@@ -452,11 +452,11 @@ void bus1_transaction_commit_one(struct bus1_transaction *transaction,
 		 * The message has been flushed from the queue, but it has not
 		 * been cleaned up. Release all resources.
 		 */
-
 		bus1_message_deallocate(message, peer_info);
 		bus1_message_flush(message, peer_info);
-		bus1_message_unref(message);
 	}
+
+	bus1_message_unref(message);
 }
 
 /**

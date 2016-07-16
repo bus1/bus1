@@ -189,9 +189,7 @@ struct bus1_handle_inflight {
 };
 
 /* api */
-u64 bus1_handle_from_queue(struct bus1_queue_node *node,
-			   struct bus1_peer_info *peer_info,
-			   bool drop);
+u64 bus1_handle_unref_queued(struct bus1_queue_node *node);
 int bus1_handle_pair(struct bus1_peer *peer,
 		     struct bus1_peer *clone,
 		     u64 *node_idp,

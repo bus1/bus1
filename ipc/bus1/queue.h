@@ -147,17 +147,15 @@ struct bus1_queue_node {
 void bus1_queue_init_internal(struct bus1_queue *queue,
 			      wait_queue_head_t *waitq);
 void bus1_queue_destroy(struct bus1_queue *queue);
-void bus1_queue_post_flush(struct bus1_queue *queue);
+void bus1_queue_flush(struct bus1_queue *queue, struct list_head *list);
 u64 bus1_queue_stage(struct bus1_queue *queue,
 		     struct bus1_queue_node *node,
 		     u64 timestamp);
 void bus1_queue_commit(struct bus1_queue *queue,
 		       struct bus1_queue_node *node,
 		       u64 timestamp);
-void bus1_queue_remove(struct bus1_queue *queue,
-		       struct bus1_queue_node *node);
-void bus1_queue_drop(struct bus1_queue *queue,
-		     struct bus1_queue_node *node);
+void bus1_queue_remove(struct bus1_queue *queue, struct bus1_queue_node *node);
+void bus1_queue_drop(struct bus1_queue *queue, struct bus1_queue_node *node);
 struct bus1_queue_node *bus1_queue_peek(struct bus1_queue *queue);
 
 /* nodes */

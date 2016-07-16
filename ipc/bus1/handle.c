@@ -304,47 +304,45 @@ static struct bus1_handle *bus1_handle_unref(struct bus1_handle *handle)
 	return NULL;
 }
 
-static struct bus1_handle *
-bus1_handle_from_queue_node(struct bus1_queue_node *node)
-{
-	switch (bus1_queue_node_get_type(node)) {
-	case BUS1_QUEUE_NODE_HANDLE_DESTRUCTION:
-		return container_of(node, struct bus1_handle, qnode);
-	case BUS1_QUEUE_NODE_HANDLE_RELEASE:
-		return &container_of(node, struct bus1_node, qnode)->owner;
-	default:
-		WARN(1, "Invalid queue-node type");
-		return NULL;
-	}
-}
-
 /**
- * bus1_handle_from_queue() - peek or dequeue at queued handle
- * @node:		node to operate on
- * @peer_info:		peer that owns the entry
- * @drop:		whether to drop the queue entry
+ * bus1_handle_unref_queued() - unref queued handle
+ * @qnode:		queue node to operate on, or NULL
  *
- * This returns the handle-id of the queued handle-notification @node.
- * @peer_info must be the holder of @node and must be locked by the caller.
+ * This returns the handle-id of the queued handle notification @qnode and
+ * drops a single reference of @qnode.
  *
- * If @drop is true, @node is dequeued and destroyed. Otherwise, it is left on
- * the queue.
+ * If the returned ID is required to be stable and valid, the owning peer of
+ * the respective handle must be locked.
+ *
+ * If NULL is passed, this is a no-op and returns BUS1_HANDLE_INVALID.
  *
  * Return: Handle ID, or BUS1_HANDLE_INVALID if unknown to the user.
  */
-u64 bus1_handle_from_queue(struct bus1_queue_node *node,
-			   struct bus1_peer_info *peer_info,
-			   bool drop)
+u64 bus1_handle_unref_queued(struct bus1_queue_node *qnode)
 {
 	struct bus1_handle *handle;
+	struct bus1_node *node;
 	u64 id;
 
-	lockdep_assert_held(&peer_info->lock);
+	if (!qnode)
+		return BUS1_HANDLE_INVALID;
 
-	handle = bus1_handle_from_queue_node(node);
-	id = handle->id;
-	if (drop)
-		bus1_handle_unref(handle);
+	switch (bus1_queue_node_get_type(qnode)) {
+	case BUS1_QUEUE_NODE_HANDLE_DESTRUCTION:
+		handle = container_of(qnode, struct bus1_handle, qnode);
+		id = handle->id;
+		kref_put(&qnode->ref, bus1_handle_free);
+		break;
+	case BUS1_QUEUE_NODE_HANDLE_RELEASE:
+		node = container_of(qnode, struct bus1_node, qnode);
+		id = node->owner.id;
+		kref_put(&qnode->ref, bus1_node_free);
+		break;
+	default:
+		WARN(1, "Invalid queue-node type");
+		id = BUS1_HANDLE_INVALID;
+		break;
+	}
 
 	return id;
 }
@@ -380,7 +378,6 @@ static void bus1_node_queue_notification(struct bus1_node *node,
 
 	mutex_lock(&owner_info->qlock);
 	if (!bus1_queue_node_is_queued(&node->qnode)) {
-		bus1_handle_ref(&node->owner);
 		bus1_queue_sync(&owner_info->queue, 0);
 		timestamp = bus1_queue_tick(&owner_info->queue);
 		bus1_queue_commit(&owner_info->queue, &node->qnode, timestamp);
@@ -398,10 +395,7 @@ static void bus1_node_dequeue_notification(struct bus1_node *node,
 	 */
 
 	mutex_lock(&owner_info->qlock);
-	if (bus1_queue_node_is_queued(&node->qnode)) {
-		bus1_queue_remove(&owner_info->queue, &node->qnode);
-		bus1_handle_unref(&node->owner);
-	}
+	bus1_queue_remove(&owner_info->queue, &node->qnode);
 	mutex_unlock(&owner_info->qlock);
 }
 
@@ -591,10 +585,7 @@ static void bus1_handle_uninstall_holder(struct bus1_handle *handle,
 	 */
 
 	mutex_lock(&peer_info->qlock);
-	if (bus1_queue_node_is_queued(&handle->qnode)) {
-		bus1_queue_remove(&peer_info->queue, &handle->qnode);
-		bus1_handle_unref(handle);
-	}
+	bus1_queue_remove(&peer_info->queue, &handle->qnode);
 	mutex_unlock(&peer_info->qlock);
 }
 
@@ -663,7 +654,6 @@ static void bus1_node_stage(struct bus1_node *node,
 
 		holder = bus1_handle_acquire_holder(h, &holder_info);
 		if (holder) {
-			bus1_handle_ref(h);
 			mutex_lock(&holder_info->qlock);
 			timestamp = bus1_queue_stage(&holder_info->queue,
 						     &h->qnode, timestamp);
@@ -682,13 +672,11 @@ static void bus1_node_stage(struct bus1_node *node,
 	 * trigger the cleanup.
 	 */
 	mutex_lock(&peer_info->qlock);
-	if (likely(!RB_EMPTY_NODE(&node->owner.rb_id))) {
-		bus1_handle_ref(&node->owner);
+	if (likely(!RB_EMPTY_NODE(&node->owner.rb_id)))
 		timestamp = bus1_queue_stage(&peer_info->queue,
 					     &node->owner.qnode, timestamp);
-	} else {
+	else
 		bus1_queue_sync(&peer_info->queue, timestamp);
-	}
 	node->timestamp = bus1_queue_tick(&peer_info->queue);
 	/* test_and_set_bit() provides barriers for node->timestamp */
 	WARN_ON(test_and_set_bit(BUS1_NODE_BIT_DESTROYED, &node->flags));

@@ -35,77 +35,50 @@
 #include "user.h"
 #include "util.h"
 
-static struct bus1_message *
-bus1_peer_info_flush(struct bus1_peer_info *peer_info, bool final)
+static void bus1_peer_info_reset(struct bus1_peer_info *peer_info, bool final)
 {
-	struct bus1_queue_node *node, *t;
-	struct bus1_message *message, *list = NULL;
+	struct bus1_queue_node *node;
+	struct bus1_message *message;
+	size_t n_slices, size;
+	LIST_HEAD(list);
 
-	/*
-	 * This flushes all messages from a peer-queue. The parent peer is
-	 * expected to be locked by the caller.
-	 * We first lock the queue and detach all messages from it. In case
-	 * some cleanup of the message is needed, we remember it in a temporary
-	 * list. Once the queue is flushed, we return the list for cleanup to
-	 * the caller.
-	 */
-
-	lockdep_assert_held(&peer_info->lock);
+	bus1_handle_flush_all(peer_info, final);
 
 	mutex_lock(&peer_info->qlock);
-	rbtree_postorder_for_each_entry_safe(node, t,
-					     &peer_info->queue.messages, rb) {
+	bus1_queue_flush(&peer_info->queue, &list);
+	mutex_unlock(&peer_info->qlock);
+
+	mutex_lock(&peer_info->lock);
+	bus1_pool_flush(&peer_info->pool, &n_slices, &size);
+	bus1_user_quota_release_slices(peer_info, n_slices, size);
+	if (final && peer_info->seed) {
+		list_add(&peer_info->seed->qnode.link, &list);
+		peer_info->seed = NULL;
+	}
+	mutex_unlock(&peer_info->lock);
+
+	while ((node = list_first_entry_or_null(&list, struct bus1_queue_node,
+						link))) {
+		list_del(&node->link);
+		RB_CLEAR_NODE(&node->rb);
+
 		switch (bus1_queue_node_get_type(node)) {
 		case BUS1_QUEUE_NODE_MESSAGE_NORMAL:
 			message = bus1_message_from_node(node);
-			RB_CLEAR_NODE(&node->rb); /* mark as dropped */
 			if (bus1_queue_node_is_committed(node)) {
-				message->transaction.next = list;
-				list = message;
+				bus1_message_deallocate(message, peer_info);
+				bus1_message_flush(message, peer_info);
 			}
+			bus1_message_unref(message);
 			break;
 		case BUS1_QUEUE_NODE_HANDLE_DESTRUCTION:
 		case BUS1_QUEUE_NODE_HANDLE_RELEASE:
-			RB_CLEAR_NODE(&node->rb);
-			bus1_handle_from_queue(node, peer_info, true);
+			bus1_handle_unref_queued(node);
 			break;
 		default:
 			WARN(1, "Invalid queue-node type");
 			break;
 		}
-	}
-	bus1_queue_post_flush(&peer_info->queue);
-	mutex_unlock(&peer_info->qlock);
-
-	if (final && peer_info->seed) {
-		peer_info->seed->transaction.next = list;
-		list = peer_info->seed;
-		peer_info->seed = NULL;
-	}
-
-	return list;
-}
-
-static void bus1_peer_info_reset(struct bus1_peer_info *peer_info, bool final)
-{
-	struct bus1_message *message, *list;
-	size_t n_slices, size;
-
-	bus1_handle_flush_all(peer_info, final);
-
-	mutex_lock(&peer_info->lock);
-	list = bus1_peer_info_flush(peer_info, final);
-	bus1_pool_flush(&peer_info->pool, &n_slices, &size);
-	mutex_unlock(&peer_info->lock);
-
-	bus1_user_quota_release_slices(peer_info, n_slices, size);
-
-	while ((message = list)) {
-		list = message->transaction.next;
-		message->transaction.next = NULL;
-		bus1_message_deallocate(message, peer_info);
-		bus1_message_flush(message, peer_info);
-		bus1_message_unref(message);
 	}
 }
 
@@ -638,13 +611,17 @@ bus1_peer_queue_peek(struct bus1_peer_info *peer_info,
 		     bool drop)
 {
 	struct bus1_message *message = NULL;
-	struct bus1_queue_node *node;
+	struct bus1_queue_node *node = NULL;
 	int r;
 
-	if (param->flags & BUS1_RECV_FLAG_SEED)
-		node = peer_info->seed ? &peer_info->seed->qnode : NULL;
-	else
+	if (param->flags & BUS1_RECV_FLAG_SEED) {
+		if (peer_info->seed) {
+			node = &peer_info->seed->qnode;
+			kref_get(&node->ref);
+		}
+	} else {
 		node = bus1_queue_peek(&peer_info->queue);
+	}
 
 	if (!node)
 		return NULL;
@@ -653,14 +630,17 @@ bus1_peer_queue_peek(struct bus1_peer_info *peer_info,
 		message = bus1_message_from_node(node);
 
 		r = bus1_message_install(message, peer_info);
-		if (r < 0)
+		if (r < 0) {
+			bus1_message_unref(message);
 			return ERR_PTR(r);
+		}
 	}
 
 	if (drop) {
-		bus1_queue_remove(&peer_info->queue, node);
 		if (message == peer_info->seed)
 			peer_info->seed = NULL;
+		else
+			bus1_queue_remove(&peer_info->queue, node);
 	}
 
 	return node;
@@ -700,14 +680,12 @@ static int bus1_peer_dequeue(struct bus1_peer_info *peer_info,
 
 	case BUS1_QUEUE_NODE_HANDLE_DESTRUCTION:
 		param->type = BUS1_MSG_NODE_DESTROY;
-		param->node_destroy.handle =
-			bus1_handle_from_queue(node, peer_info, true);
+		param->node_destroy.handle = bus1_handle_unref_queued(node);
 		break;
 
 	case BUS1_QUEUE_NODE_HANDLE_RELEASE:
 		param->type = BUS1_MSG_NODE_RELEASE;
-		param->node_release.handle =
-			bus1_handle_from_queue(node, peer_info, true);
+		param->node_release.handle = bus1_handle_unref_queued(node);
 		break;
 
 	default:
@@ -733,9 +711,10 @@ static int bus1_peer_peek(struct bus1_peer_info *peer_info,
 	int r;
 
 	mutex_lock(&peer_info->lock);
-	mutex_lock(&peer_info->qlock);
 
+	mutex_lock(&peer_info->qlock);
 	node = bus1_peer_queue_peek(peer_info, param, false);
+	mutex_unlock(&peer_info->qlock);
 	if (IS_ERR(node)) {
 		r = PTR_ERR(node);
 		goto exit;
@@ -753,18 +732,17 @@ static int bus1_peer_peek(struct bus1_peer_info *peer_info,
 		param->type = BUS1_MSG_DATA;
 		memcpy(&param->data, &message->data,
 		       sizeof(param->data));
+		bus1_message_unref(message);
 		break;
 
 	case BUS1_QUEUE_NODE_HANDLE_DESTRUCTION:
 		param->type = BUS1_MSG_NODE_DESTROY;
-		param->node_destroy.handle =
-			bus1_handle_from_queue(node, peer_info, false);
+		param->node_destroy.handle = bus1_handle_unref_queued(node);
 		break;
 
 	case BUS1_QUEUE_NODE_HANDLE_RELEASE:
 		param->type = BUS1_MSG_NODE_RELEASE;
-		param->node_release.handle =
-			bus1_handle_from_queue(node, peer_info, false);
+		param->node_release.handle = bus1_handle_unref_queued(node);
 		break;
 
 	default:
@@ -773,7 +751,6 @@ static int bus1_peer_peek(struct bus1_peer_info *peer_info,
 	}
 
 exit:
-	mutex_unlock(&peer_info->qlock);
 	mutex_unlock(&peer_info->lock);
 	return r;
 }
