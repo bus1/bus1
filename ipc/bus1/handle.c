@@ -393,10 +393,7 @@ static void bus1_node_dequeue_notification(struct bus1_node *node,
 	 * regardless whether it is already committed or not. It is simply
 	 * flushed from the message queue and then dropped.
 	 */
-
-	mutex_lock(&owner_info->queue.qlock);
 	bus1_queue_remove(&owner_info->queue, &node->qnode);
-	mutex_unlock(&owner_info->queue.qlock);
 }
 
 static void bus1_handle_attach_internal(struct bus1_handle *handle,
@@ -583,10 +580,7 @@ static void bus1_handle_uninstall_holder(struct bus1_handle *handle,
 	 * dequeue it so we can use the handle->qnode as a union for other
 	 * state *after* a handle is uninstalled.
 	 */
-
-	mutex_lock(&peer_info->queue.qlock);
 	bus1_queue_remove(&peer_info->queue, &handle->qnode);
-	mutex_unlock(&peer_info->queue.qlock);
 }
 
 static void bus1_node_stage_flush(struct list_head *list_notify)

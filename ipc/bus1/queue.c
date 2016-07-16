@@ -382,10 +382,10 @@ void bus1_queue_remove(struct bus1_queue *queue, struct bus1_queue_node *node)
 	struct rb_node *front, *n;
 	bool readable;
 
-	lockdep_assert_held(&queue->qlock);
-
 	if (!node)
 		return;
+
+	mutex_lock(&queue->qlock);
 
 	/* A) if it occupies the seed slot, clear it */
 	if (node == queue->seed) {
@@ -395,7 +395,7 @@ void bus1_queue_remove(struct bus1_queue *queue, struct bus1_queue_node *node)
 
 	/* B) drop from tree, if linked, otherwise bail out */
 	if (RB_EMPTY_NODE(&node->rb))
-		return;
+		goto exit;
 
 	readable = bus1_queue_is_readable(queue);
 	front = rcu_dereference_protected(queue->front,
@@ -424,20 +424,15 @@ void bus1_queue_remove(struct bus1_queue *queue, struct bus1_queue_node *node)
 
 	if (!readable && bus1_queue_is_readable(queue))
 		wake_up_interruptible(queue->waitq);
+
+exit:
+	mutex_unlock(&queue->qlock);
 }
 
 void bus1_queue_drop(struct bus1_queue *queue, struct bus1_queue_node *node)
 {
-	bool readable;
-
-	lockdep_assert_held(&queue->qlock);
-
 	bus1_queue_remove(queue, node);
-
-	readable = bus1_queue_is_readable(queue);
-	atomic_inc(&queue->n_dropped);
-
-	if (!readable)
+	if (atomic_inc_return(&queue->n_dropped) == 1)
 		wake_up_interruptible(queue->waitq);
 }
 

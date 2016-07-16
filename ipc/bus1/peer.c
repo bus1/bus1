@@ -638,11 +638,8 @@ bus1_peer_queue_peek(struct bus1_peer_info *peer_info,
 			}
 		}
 
-		if (drop) {
-			mutex_lock(&peer_info->queue.qlock);
+		if (drop)
 			bus1_queue_remove(&peer_info->queue, node);
-			mutex_unlock(&peer_info->queue.qlock);
-		}
 	}
 
 	if (drop)

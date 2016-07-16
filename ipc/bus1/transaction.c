@@ -108,14 +108,11 @@ static void bus1_transaction_destroy(struct bus1_transaction *transaction)
 		message->transaction.next = NULL;
 		message->transaction.dest = (struct bus1_handle_dest){};
 
-		mutex_lock(&peer_info->queue.qlock);
 		bus1_queue_remove(&peer_info->queue, &message->qnode);
-		mutex_unlock(&peer_info->queue.qlock);
-
-		bus1_active_lockdep_released(&dest.raw_peer->active);
 		bus1_message_deallocate(message, peer_info);
 		bus1_message_flush(message, peer_info);
 		bus1_message_unref(message);
+		bus1_active_lockdep_released(&dest.raw_peer->active);
 		bus1_handle_dest_destroy(&dest, transaction->peer_info);
 	}
 
@@ -407,13 +404,9 @@ void bus1_transaction_commit_one(struct bus1_transaction *transaction,
 		 * without informing the sender. The count of dropped messages
 		 * is increased in the receiving queue.
 		 */
-		mutex_lock(&peer_info->queue.qlock);
 		bus1_queue_drop(&peer_info->queue, &message->qnode);
-		mutex_unlock(&peer_info->queue.qlock);
-
 		bus1_message_flush(message, peer_info);
 		bus1_message_unref(message);
-
 		return;
 	}
 
@@ -427,15 +420,10 @@ void bus1_transaction_commit_one(struct bus1_transaction *transaction,
 		 * flag was set. Silently drop the message without infroming the
 		 * sender nor the receiver.
 		 */
-
-		mutex_lock(&peer_info->queue.qlock);
 		bus1_queue_remove(&peer_info->queue, &message->qnode);
-		mutex_unlock(&peer_info->queue.qlock);
-
 		bus1_message_deallocate(message, peer_info);
 		bus1_message_flush(message, peer_info);
 		bus1_message_unref(message);
-
 		return;
 	}
 
