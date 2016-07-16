@@ -112,11 +112,8 @@ static void bus1_transaction_destroy(struct bus1_transaction *transaction)
 		bus1_queue_remove(&peer_info->queue, &message->qnode);
 		mutex_unlock(&peer_info->qlock);
 
-		mutex_lock(&peer_info->lock);
-		bus1_message_deallocate(message, peer_info);
-		mutex_unlock(&peer_info->lock);
-
 		bus1_active_lockdep_released(&dest.raw_peer->active);
+		bus1_message_deallocate(message, peer_info);
 		bus1_message_flush(message, peer_info);
 		bus1_message_free(message);
 		bus1_handle_dest_destroy(&dest, transaction->peer_info);
@@ -321,11 +318,8 @@ bus1_transaction_instantiate_message(struct bus1_transaction *transaction,
 	return message;
 
 error:
-	if (message) {
-		mutex_lock(&peer_info->lock);
+	if (message)
 		bus1_message_deallocate(message, peer_info);
-		mutex_unlock(&peer_info->lock);
-	}
 	if (r < 0) {
 		if (message) {
 			bus1_message_flush(message, peer_info);
@@ -426,25 +420,24 @@ void bus1_transaction_commit_one(struct bus1_transaction *transaction,
 	mutex_lock(&peer_info->lock);
 	id = bus1_handle_dest_export(dest, peer_info, timestamp,
 				     message->qnode.sender, true);
+	mutex_unlock(&peer_info->lock);
 	if (id == BUS1_HANDLE_INVALID) {
 		/*
 		 * The destination node is no longer valid, and the CONTINUE
 		 * flag was set. Silently drop the message without infroming the
 		 * sender nor the receiver.
 		 */
-		bus1_message_deallocate(message, peer_info);
-		mutex_unlock(&peer_info->lock);
 
 		mutex_lock(&peer_info->qlock);
 		bus1_queue_remove(&peer_info->queue, &message->qnode);
 		mutex_unlock(&peer_info->qlock);
 
+		bus1_message_deallocate(message, peer_info);
 		bus1_message_flush(message, peer_info);
 		bus1_message_free(message);
 
 		return;
 	}
-	mutex_unlock(&peer_info->lock);
 
 	message->data.destination = id;
 
@@ -460,10 +453,7 @@ void bus1_transaction_commit_one(struct bus1_transaction *transaction,
 		 * been cleaned up. Release all resources.
 		 */
 
-		mutex_lock(&peer_info->lock);
 		bus1_message_deallocate(message, peer_info);
-		mutex_unlock(&peer_info->lock);
-
 		bus1_message_flush(message, peer_info);
 		bus1_message_free(message);
 	}
@@ -676,23 +666,19 @@ int bus1_transaction_commit_seed(struct bus1_transaction *transaction)
 	r = bus1_handle_transfer_export(&transaction->handles,
 					transaction->peer_info,
 					idp, transaction->param->n_handles);
-	if (r < 0) {
-		bus1_message_deallocate(seed, transaction->peer_info);
-		mutex_unlock(&transaction->peer_info->lock);
-		goto exit;
-	}
 	mutex_unlock(&transaction->peer_info->lock);
+	if (r < 0)
+		goto exit;
 
 	bus1_handle_inflight_install(&seed->handles, transaction->peer);
 
 	mutex_lock(&transaction->peer_info->lock);
 	swap(seed, transaction->peer_info->seed);
-	if (seed)
-		bus1_message_deallocate(seed, transaction->peer_info);
 	mutex_unlock(&transaction->peer_info->lock);
 
 exit:
 	if (seed) {
+		bus1_message_deallocate(seed, transaction->peer_info);
 		bus1_message_flush(seed, transaction->peer_info);
 		bus1_message_free(seed);
 	}

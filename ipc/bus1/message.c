@@ -184,20 +184,20 @@ exit:
  * @peer_info:		destination peer
  *
  * If allocated, deallocate the slice for the given peer and discharge the
- * associated user quota. The peer_info lock must be held by the caller.
+ * associated user quota.
  */
 void bus1_message_deallocate(struct bus1_message *message,
 			     struct bus1_peer_info *peer_info)
 {
-	lockdep_assert_held(&peer_info->lock);
-
 	if (message->slice) {
+		mutex_lock(&peer_info->lock);
 		message->slice = bus1_pool_release_kernel(&peer_info->pool,
 							  message->slice);
 		bus1_user_quota_discharge(peer_info, message->user,
 					  message->data.n_bytes,
 					  message->data.n_handles,
 					  message->data.n_fds);
+		mutex_unlock(&peer_info->lock);
 	}
 }
 

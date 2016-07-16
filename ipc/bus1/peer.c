@@ -46,9 +46,8 @@ bus1_peer_info_flush(struct bus1_peer_info *peer_info, bool final)
 	 * expected to be locked by the caller.
 	 * We first lock the queue and detach all messages from it. In case
 	 * some cleanup of the message is needed, we remember it in a temporary
-	 * list. Once the queue is flushed, we unlock it and perform the
-	 * cleanup on each message. The list is then returned to the caller in
-	 * case further cleanups are needed with the peer unlocked.
+	 * list. Once the queue is flushed, we return the list for cleanup to
+	 * the caller.
 	 */
 
 	lockdep_assert_held(&peer_info->lock);
@@ -79,14 +78,10 @@ bus1_peer_info_flush(struct bus1_peer_info *peer_info, bool final)
 	mutex_unlock(&peer_info->qlock);
 
 	if (final && peer_info->seed) {
-		bus1_message_deallocate(peer_info->seed, peer_info);
 		peer_info->seed->transaction.next = list;
 		list = peer_info->seed;
 		peer_info->seed = NULL;
 	}
-
-	for (message = list; message; message = message->transaction.next)
-		bus1_message_deallocate(message, peer_info);
 
 	return list;
 }
@@ -108,6 +103,7 @@ static void bus1_peer_info_reset(struct bus1_peer_info *peer_info, bool final)
 	while ((message = list)) {
 		list = message->transaction.next;
 		message->transaction.next = NULL;
+		bus1_message_deallocate(message, peer_info);
 		bus1_message_flush(message, peer_info);
 		bus1_message_free(message);
 	}
