@@ -636,10 +636,12 @@ bus1_peer_queue_peek(struct bus1_peer_info *peer_info,
 	}
 
 	if (drop) {
-		if (message == peer_info->seed)
+		if (message == peer_info->seed) {
+			bus1_message_unref(message);
 			peer_info->seed = NULL;
-		else
+		} else {
 			bus1_queue_remove(&peer_info->queue, node);
+		}
 	}
 
 	return node;
