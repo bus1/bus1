@@ -439,16 +439,17 @@ struct bus1_queue_node *bus1_queue_peek(struct bus1_queue *queue)
  * @sender:		sender tag
  *
  * This initializes a previously unused node, and prepares it for use with a
- * message queue.
+ * message queue. The initial ref-count is set to 1.
  */
 void bus1_queue_node_init(struct bus1_queue_node *node,
 			  unsigned int type,
 			  unsigned long sender)
 {
 	RB_CLEAR_NODE(&node->rb);
+	kref_init(&node->ref);
+	node->sender = sender;
 	node->timestamp_and_type = 0;
 	bus1_queue_node_set_type(node, type);
-	node->sender = sender;
 }
 
 /**
@@ -457,10 +458,16 @@ void bus1_queue_node_init(struct bus1_queue_node *node,
  *
  * This destroys a previously initialized queue node. This is a no-op and only
  * serves as debugger, testing whether the node was properly unqueued before.
+ * This must not be called if there are still references left to the node. That
+ * is, this function should rather be called from your kref_put() callback.
  */
 void bus1_queue_node_destroy(struct bus1_queue_node *node)
 {
-	WARN_ON(node && !RB_EMPTY_NODE(&node->rb));
+	if (!node)
+		return;
+
+	WARN_ON(!RB_EMPTY_NODE(&node->rb));
+	WARN_ON(atomic_read(&node->ref.refcount) > 0);
 }
 
 /**

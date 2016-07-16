@@ -96,6 +96,8 @@
  */
 
 #include <linux/kernel.h>
+#include <linux/kref.h>
+#include <linux/list.h>
 #include <linux/rbtree.h>
 #include <linux/rcupdate.h>
 
@@ -124,17 +126,21 @@ struct bus1_queue {
 /**
  * struct bus1_queue_node - node into message queue
  * @rb:				link into sorted message queue
+ * @link:			link for off-queue use
  * @rcu:			rcu
- * @timestamp_and_type:		message timestamp and type of parent object
+ * @ref:			reference counter
  * @sender:			sender tag
+ * @timestamp_and_type:		message timestamp and type of parent object
  */
 struct bus1_queue_node {
 	union {
 		struct rb_node rb;
+		struct list_head link;
 		struct rcu_head rcu;
 	};
-	u64 timestamp_and_type;
+	struct kref ref;
 	unsigned long sender;
+	u64 timestamp_and_type;
 };
 
 /* queue */

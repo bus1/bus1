@@ -29,7 +29,7 @@
 
 /**
  * struct bus1_handle - handle objects
- * @ref:		object ref-count
+ * @qnode:		embedded queue node (used for destruction notification)
  * @n_inflight:		number of inflight references; initially -1 if
  *			unattached; >0 if live; 0 if about to be detached
  * @n_user:		number of user-visible references (shifted by -1)
@@ -39,8 +39,6 @@
  * @id:			current ID of this handle
  * @holder:		holder of this node
  * @link_node:		link into the node
- * @qnode:		queue entry for destruction notification
- * @link_flush:		temporary link during flush operations of non-owners
  *
  * Handle objects represent an accessor to nodes. A handle is always owned by a
  * specific peer, and by that peer only. The peer-lock (or queue-lock
@@ -90,7 +88,7 @@
  * the handle->link_node links are cleared).
  */
 struct bus1_handle {
-	struct kref ref;
+	struct bus1_queue_node qnode;
 	atomic_t n_inflight;
 	atomic_t n_user;
 	struct rb_node rb_id;
@@ -99,10 +97,6 @@ struct bus1_handle {
 	u64 id;
 	struct bus1_peer __rcu *holder;
 	struct list_head link_node;
-	union {
-		struct bus1_queue_node qnode;
-		struct list_head link_flush;
-	};
 };
 
 /**
@@ -126,11 +120,10 @@ enum bus1_node_bit {
 
 /**
  * struct bus1_node - node objects
- * @ref:		object ref-count
+ * @qnode:		embedded queue node (used for release notification)
  * @flags:		node flags, see enum bus1_node_bit
  * @timestamp:		destruction timestamp (0 if still live)
  * @list_handles:	linked list of registered handles
- * @qnode:		queue entry for release notification
  * @owner:		embedded handle of node owner
  *
  * Every existing node is represented by a single bus1_node object. A node is
@@ -147,11 +140,10 @@ enum bus1_node_bit {
  * lock the required mutices.
  */
 struct bus1_node {
-	struct kref ref;
+	struct bus1_queue_node qnode;
 	unsigned long flags;
 	u64 timestamp;
 	struct list_head list_handles;
-	struct bus1_queue_node qnode;
 	struct bus1_handle owner;
 };
 
@@ -162,14 +154,14 @@ static bool bus1_node_is_destroyed(struct bus1_node *node)
 
 static void bus1_node_free(struct kref *ref)
 {
-	struct bus1_node *node = container_of(ref, struct bus1_node, ref);
+	struct bus1_node *node = container_of(ref, struct bus1_node, qnode.ref);
 
 	WARN_ON(rcu_access_pointer(node->owner.holder));
 	WARN_ON(!list_empty(&node->list_handles));
 	WARN_ON(test_bit(BUS1_NODE_BIT_ATTACHED, &node->flags) !=
 		test_bit(BUS1_NODE_BIT_DESTROYED, &node->flags));
 	bus1_queue_node_destroy(&node->qnode);
-	kfree_rcu(node, owner.qnode.rcu);
+	kfree_rcu(node, qnode.rcu);
 }
 
 static void bus1_node_no_free(struct kref *ref)
@@ -201,17 +193,18 @@ static bool bus1_handle_is_attached(struct bus1_handle *handle)
 
 static void bus1_handle_init(struct bus1_handle *handle, struct bus1_node *node)
 {
+	bus1_queue_node_init(&handle->qnode, BUS1_QUEUE_NODE_HANDLE_DESTRUCTION,
+			     (unsigned long)handle);
+	atomic_set(&handle->n_inflight, -1);
+	atomic_set(&handle->n_user, -1);
 	RB_CLEAR_NODE(&handle->rb_id);
 	RB_CLEAR_NODE(&handle->rb_node);
 	handle->node = node;
 	handle->id = BUS1_HANDLE_INVALID;
 	rcu_assign_pointer(handle->holder, NULL);
 	INIT_LIST_HEAD(&handle->link_node);
-	kref_init(&handle->ref);
-	atomic_set(&handle->n_inflight, -1);
-	atomic_set(&handle->n_user, -1);
 
-	kref_get(&node->ref);
+	kref_get(&node->qnode.ref);
 }
 
 static void bus1_handle_finish(struct bus1_handle *handle)
@@ -223,25 +216,13 @@ static void bus1_handle_finish(struct bus1_handle *handle)
 	WARN_ON(atomic_read(&handle->n_inflight) > 0);
 	WARN_ON(handle->holder);
 
-	if (bus1_handle_was_attached(handle)) {
-		/*
-		 * If a handle was attached, then for owners the qnode is valid
-		 * as long as the handle is. For non-owners, the qnode is
-		 * destroyed at uninstall and turned into a flush-link instead.
-		 * If a handle was never attached, the corresponding memory is
-		 * never used and stays uninitialized.
-		 */
-		if (bus1_handle_is_owner(handle))
-			bus1_queue_node_destroy(&handle->qnode);
-		else
-			WARN_ON(!list_empty(&handle->link_flush));
-	}
+	bus1_queue_node_destroy(&handle->qnode);
 
 	/*
 	 * CAUTION: The handle might be embedded into the node. Make sure not
 	 * to touch @handle after we dropped the reference.
 	 */
-	kref_put(&handle->node->ref, bus1_node_free);
+	kref_put(&handle->node->qnode.ref, bus1_node_free);
 }
 
 static struct bus1_handle *bus1_handle_new_owner(u64 id)
@@ -259,7 +240,6 @@ static struct bus1_handle *bus1_handle_new_owner(u64 id)
 	if (!node)
 		return ERR_PTR(-ENOMEM);
 
-	kref_init(&node->ref);
 	node->flags = 0;
 	node->timestamp = 0;
 	INIT_LIST_HEAD(&node->list_handles);
@@ -271,7 +251,7 @@ static struct bus1_handle *bus1_handle_new_owner(u64 id)
 		__set_bit(BUS1_NODE_BIT_PERSISTENT, &node->flags);
 
 	/* node->owner owns a reference to the node, drop the initial one */
-	kref_put(&node->ref, bus1_node_no_free);
+	kref_put(&node->qnode.ref, bus1_node_no_free);
 
 	/* return the exclusive reference to @node->owner, and as such @node */
 	return &node->owner;
@@ -291,7 +271,8 @@ static struct bus1_handle *bus1_handle_new_holder(struct bus1_node *node)
 
 static void bus1_handle_free(struct kref *ref)
 {
-	struct bus1_handle *handle = container_of(ref, struct bus1_handle, ref);
+	struct bus1_handle *handle = container_of(ref, struct bus1_handle,
+						  qnode.ref);
 	bool is_owner;
 
 	/*
@@ -312,14 +293,14 @@ static void bus1_handle_free(struct kref *ref)
 static struct bus1_handle *bus1_handle_ref(struct bus1_handle *handle)
 {
 	if (handle)
-		kref_get(&handle->ref);
+		kref_get(&handle->qnode.ref);
 	return handle;
 }
 
 static struct bus1_handle *bus1_handle_unref(struct bus1_handle *handle)
 {
 	if (handle)
-		kref_put(&handle->ref, bus1_handle_free);
+		kref_put(&handle->qnode.ref, bus1_handle_free);
 	return NULL;
 }
 
@@ -434,9 +415,6 @@ static void bus1_handle_attach_internal(struct bus1_handle *handle,
 	WARN_ON(bus1_handle_was_attached(handle));
 	WARN_ON(bus1_node_is_destroyed(handle->node));
 
-	bus1_queue_node_init(&handle->qnode,
-			     BUS1_QUEUE_NODE_HANDLE_DESTRUCTION,
-			     (unsigned long)handle);
 	atomic_set(&handle->n_inflight, 1);
 	rcu_assign_pointer(handle->holder, peer);
 	list_add_tail(&handle->link_node, &handle->node->list_handles);
@@ -618,9 +596,6 @@ static void bus1_handle_uninstall_holder(struct bus1_handle *handle,
 		bus1_handle_unref(handle);
 	}
 	mutex_unlock(&peer_info->qlock);
-
-	bus1_queue_node_destroy(&handle->qnode);
-	INIT_LIST_HEAD(&handle->link_flush);
 }
 
 static void bus1_node_stage_flush(struct list_head *list_notify)
@@ -1043,7 +1018,7 @@ bus1_handle_find_by_id(struct bus1_peer_info *peer_info, u64 id)
 		while (n) {
 			handle = container_of(n, struct bus1_handle, rb_id);
 			if (id == handle->id) {
-				if (kref_get_unless_zero(&handle->ref))
+				if (kref_get_unless_zero(&handle->qnode.ref))
 					res = handle;
 				break;
 			} else if (id < handle->id) {
@@ -1074,7 +1049,7 @@ bus1_handle_find_by_node(struct bus1_peer_info *peer_info,
 		while (n) {
 			handle = container_of(n, struct bus1_handle, rb_node);
 			if (node == handle->node) {
-				if (kref_get_unless_zero(&handle->ref))
+				if (kref_get_unless_zero(&handle->qnode.ref))
 					res = handle;
 				break;
 			} else if (node < handle->node) {
@@ -1357,16 +1332,17 @@ void bus1_handle_flush_all(struct bus1_peer_info *peer_info, bool final)
 			RB_CLEAR_NODE(&h->rb_node); /* steal ref */
 
 			bus1_handle_uninstall_holder(h, peer_info);
-			WARN_ON(!list_empty(&h->link_flush));
-			list_add(&h->link_flush, &list_remote);
+			WARN_ON(!RB_EMPTY_NODE(&h->qnode.rb));
+			list_add(&h->qnode.link, &list_remote);
 		}
 	}
 	mutex_unlock(&peer_info->lock);
 
 	/* for each detached remote node, we must also remote-detach it */
 	while ((h = list_first_entry_or_null(&list_remote, struct bus1_handle,
-					     link_flush))) {
-		list_del_init(&h->link_flush);
+					     qnode.link))) {
+		list_del(&h->qnode.link);
+		RB_CLEAR_NODE(&h->qnode.rb);
 		bus1_handle_detach_holder(h);
 		bus1_handle_unref(h);
 	}

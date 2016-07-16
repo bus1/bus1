@@ -59,7 +59,8 @@ struct bus1_message *bus1_message_new(size_t n_bytes,
 				      size_t n_files,
 				      size_t n_handles,
 				      struct bus1_peer_info *peer_info);
-struct bus1_message *bus1_message_free(struct bus1_message *message);
+struct bus1_message *bus1_message_ref(struct bus1_message *message);
+struct bus1_message *bus1_message_unref(struct bus1_message *message);
 void bus1_message_flush(struct bus1_message *message,
 			struct bus1_peer_info *peer_info);
 int bus1_message_allocate(struct bus1_message *message,

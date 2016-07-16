@@ -105,7 +105,7 @@ static void bus1_peer_info_reset(struct bus1_peer_info *peer_info, bool final)
 		message->transaction.next = NULL;
 		bus1_message_deallocate(message, peer_info);
 		bus1_message_flush(message, peer_info);
-		bus1_message_free(message);
+		bus1_message_unref(message);
 	}
 }
 
@@ -720,7 +720,7 @@ exit:
 	mutex_unlock(&peer_info->lock);
 	if (message) {
 		bus1_message_flush(message, peer_info);
-		bus1_message_free(message);
+		bus1_message_unref(message);
 	}
 	return r;
 }
