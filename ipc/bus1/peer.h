@@ -42,7 +42,6 @@ struct bus1_message;
  * @lock:			data lock
  * @cred:			user creds
  * @pid_ns:			user pid namespace
- * @waitq:			assigned wait-queue
  * @user:			object owner
  * @quota:			quota handling
  * @pool:			data pool
