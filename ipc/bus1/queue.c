@@ -17,14 +17,6 @@
 #include "peer.h"
 #include "queue.h"
 
-/* lockdep assertion to verify the parent peer is locked */
-#define bus1_queue_assert_held(_queue)				\
-	lockdep_assert_held(&container_of((_queue),		\
-					  struct bus1_peer_info, queue)->qlock)
-#define bus1_queue_is_held(_queue)				\
-	lockdep_is_held(&container_of((_queue),			\
-				      struct bus1_peer_info, queue)->qlock)
-
 /* distinguish different node types via these masks */
 #define BUS1_QUEUE_TYPE_SHIFT (62)
 #define BUS1_QUEUE_TYPE_MASK (((u64)3ULL) << BUS1_QUEUE_TYPE_SHIFT)
@@ -85,6 +77,7 @@ static void bus1_queue_node_no_free(struct kref *ref)
 /**
  * bus1_queue_init_internal() - initialize queue
  * @queue:	queue to initialize
+ * @waitq:	wait queue to use for wake-ups
  *
  * This initializes a new queue. The queue memory is considered uninitialized,
  * any previous content is lost unrecoverably.
@@ -97,11 +90,12 @@ static void bus1_queue_node_no_free(struct kref *ref)
 void bus1_queue_init_internal(struct bus1_queue *queue,
 			      wait_queue_head_t *waitq)
 {
-	queue->messages = RB_ROOT;
-	rcu_assign_pointer(queue->front, NULL);
 	queue->clock = 0;
-	atomic_set(&queue->n_dropped, 0);
+	rcu_assign_pointer(queue->front, NULL);
 	queue->waitq = waitq;
+	queue->messages = RB_ROOT;
+	mutex_init(&queue->qlock);
+	atomic_set(&queue->n_dropped, 0);
 }
 
 /**
@@ -122,8 +116,9 @@ void bus1_queue_destroy(struct bus1_queue *queue)
 	if (!queue)
 		return;
 
-	WARN_ON(rcu_access_pointer(queue->front));
+	mutex_destroy(&queue->qlock);
 	WARN_ON(!RB_EMPTY_ROOT(&queue->messages));
+	WARN_ON(rcu_access_pointer(queue->front));
 }
 
 /**
@@ -139,7 +134,7 @@ void bus1_queue_flush(struct bus1_queue *queue, struct list_head *list)
 {
 	struct bus1_queue_node *node, *t;
 
-	bus1_queue_assert_held(queue);
+	lockdep_assert_held(&queue->qlock);
 
 	/* transfer all nodes (including their ref) into @list, then clear */
 	rbtree_postorder_for_each_entry_safe(node, t, &queue->messages, rb)
@@ -207,7 +202,7 @@ static void bus1_queue_add(struct bus1_queue *queue,
 	u64 ts;
 	int r;
 
-	bus1_queue_assert_held(queue);
+	lockdep_assert_held(&queue->qlock);
 	ts = bus1_queue_node_get_timestamp(node);
 	readable = bus1_queue_is_readable(queue);
 
@@ -232,7 +227,7 @@ static void bus1_queue_add(struct bus1_queue *queue,
 	 * set as front, yet. If there is a front, it is some other node.
 	 */
 	front = rcu_dereference_protected(queue->front,
-					  bus1_queue_is_held(queue));
+					  lockdep_is_held(&queue->qlock));
 	if (front) {
 		/*
 		 * If there already is a front entry, just verify that we will
@@ -377,14 +372,14 @@ void bus1_queue_remove(struct bus1_queue *queue, struct bus1_queue_node *node)
 	struct rb_node *front, *n;
 	bool readable;
 
-	bus1_queue_assert_held(queue);
+	lockdep_assert_held(&queue->qlock);
 
 	if (!node || RB_EMPTY_NODE(&node->rb))
 		return;
 
 	readable = bus1_queue_is_readable(queue);
 	front = rcu_dereference_protected(queue->front,
-					  bus1_queue_is_held(queue));
+					  lockdep_is_held(&queue->qlock));
 
 	if (!rb_prev(&node->rb)) {
 		/*
@@ -415,7 +410,7 @@ void bus1_queue_drop(struct bus1_queue *queue, struct bus1_queue_node *node)
 {
 	bool readable;
 
-	bus1_queue_assert_held(queue);
+	lockdep_assert_held(&queue->qlock);
 
 	bus1_queue_remove(queue, node);
 
@@ -446,7 +441,8 @@ struct bus1_queue_node *bus1_queue_peek(struct bus1_queue *queue)
 	struct bus1_queue_node *node = NULL;
 	struct rb_node *n;
 
-	n = rcu_dereference_protected(queue->front, bus1_queue_is_held(queue));
+	n = rcu_dereference_protected(queue->front,
+				      lockdep_is_held(&queue->qlock));
 	if (n) {
 		node = container_of(n, struct bus1_queue_node, rb);
 		kref_get(&node->ref);

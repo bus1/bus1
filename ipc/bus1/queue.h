@@ -110,17 +110,20 @@ enum {
 
 /**
  * struct bus1_queue - message queue
- * @messages:		queued messages
- * @front:		cached front entry
  * @clock:		local clock (used for Lamport Timestamps)
+ * @front:		cached front entry
+ * @waitq:		pointer to wait-queue to use for wake-ups
+ * @messages:		queued messages
+ * @qlock:		data lock
  * @n_dropped:		number of dropped messages since last report
  */
 struct bus1_queue {
-	struct rb_root messages;
-	struct rb_node __rcu *front;
 	u64 clock;
-	atomic_t n_dropped;
+	struct rb_node __rcu *front;
 	wait_queue_head_t *waitq;
+	struct rb_root messages;
+	struct mutex qlock;
+	atomic_t n_dropped;
 };
 
 /**
