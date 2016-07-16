@@ -75,20 +75,14 @@ static void bus1_queue_node_no_free(struct kref *ref)
 }
 
 /**
- * bus1_queue_init_internal() - initialize queue
+ * bus1_queue_init() - initialize queue
  * @queue:	queue to initialize
  * @waitq:	wait queue to use for wake-ups
  *
  * This initializes a new queue. The queue memory is considered uninitialized,
  * any previous content is lost unrecoverably.
- *
- * Note that all queues must be embedded into a parent bus1_peer_info object.
- * The code works fine, if you don't, but the lockdep-annotations will fail
- * horribly. They rely on container_of() to be valid on every queue. Use the
- * bus1_queue_init_for_peer() macro to make sure you never violate this rule.
  */
-void bus1_queue_init_internal(struct bus1_queue *queue,
-			      wait_queue_head_t *waitq)
+void bus1_queue_init(struct bus1_queue *queue, wait_queue_head_t *waitq)
 {
 	queue->clock = 0;
 	rcu_assign_pointer(queue->front, NULL);

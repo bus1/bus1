@@ -376,13 +376,13 @@ static void bus1_node_queue_notification(struct bus1_node *node,
 
 	WARN_ON(RB_EMPTY_NODE(&node->owner.rb_id));
 
-	mutex_lock(&owner_info->qlock);
+	mutex_lock(&owner_info->queue.qlock);
 	if (!bus1_queue_node_is_queued(&node->qnode)) {
 		bus1_queue_sync(&owner_info->queue, 0);
 		timestamp = bus1_queue_tick(&owner_info->queue);
 		bus1_queue_commit(&owner_info->queue, &node->qnode, timestamp);
 	}
-	mutex_unlock(&owner_info->qlock);
+	mutex_unlock(&owner_info->queue.qlock);
 }
 
 static void bus1_node_dequeue_notification(struct bus1_node *node,
@@ -394,9 +394,9 @@ static void bus1_node_dequeue_notification(struct bus1_node *node,
 	 * flushed from the message queue and then dropped.
 	 */
 
-	mutex_lock(&owner_info->qlock);
+	mutex_lock(&owner_info->queue.qlock);
 	bus1_queue_remove(&owner_info->queue, &node->qnode);
-	mutex_unlock(&owner_info->qlock);
+	mutex_unlock(&owner_info->queue.qlock);
 }
 
 static void bus1_handle_attach_internal(struct bus1_handle *handle,
@@ -584,9 +584,9 @@ static void bus1_handle_uninstall_holder(struct bus1_handle *handle,
 	 * state *after* a handle is uninstalled.
 	 */
 
-	mutex_lock(&peer_info->qlock);
+	mutex_lock(&peer_info->queue.qlock);
 	bus1_queue_remove(&peer_info->queue, &handle->qnode);
-	mutex_unlock(&peer_info->qlock);
+	mutex_unlock(&peer_info->queue.qlock);
 }
 
 static void bus1_node_stage_flush(struct list_head *list_notify)
@@ -599,9 +599,9 @@ static void bus1_node_stage_flush(struct list_head *list_notify)
 	list_for_each_entry(h, list_notify, link_node) {
 		peer = bus1_handle_acquire_holder(h, &peer_info);
 		if (peer) {
-			mutex_lock(&peer_info->qlock);
+			mutex_lock(&peer_info->queue.qlock);
 			bus1_queue_sync(&peer_info->queue, h->node->timestamp);
-			mutex_unlock(&peer_info->qlock);
+			mutex_unlock(&peer_info->queue.qlock);
 			bus1_peer_release(peer);
 		}
 	}
@@ -613,11 +613,11 @@ static void bus1_node_stage_flush(struct list_head *list_notify)
 
 		peer = bus1_handle_acquire_holder(h, &peer_info);
 		if (peer) {
-			mutex_lock(&peer_info->qlock);
+			mutex_lock(&peer_info->queue.qlock);
 			if (bus1_queue_node_is_queued(&h->qnode))
 				bus1_queue_commit(&peer_info->queue, &h->qnode,
 						  h->node->timestamp);
-			mutex_unlock(&peer_info->qlock);
+			mutex_unlock(&peer_info->queue.qlock);
 			bus1_peer_release(peer);
 		}
 
@@ -654,10 +654,10 @@ static void bus1_node_stage(struct bus1_node *node,
 
 		holder = bus1_handle_acquire_holder(h, &holder_info);
 		if (holder) {
-			mutex_lock(&holder_info->qlock);
+			mutex_lock(&holder_info->queue.qlock);
 			timestamp = bus1_queue_stage(&holder_info->queue,
 						     &h->qnode, timestamp);
-			mutex_unlock(&holder_info->qlock);
+			mutex_unlock(&holder_info->queue.qlock);
 			list_add(&h->link_node, &list_notify);
 			bus1_peer_release(holder);
 		} else {
@@ -671,7 +671,7 @@ static void bus1_node_stage(struct bus1_node *node,
 	 * better skip the notification. We still queue it on @list_notify to
 	 * trigger the cleanup.
 	 */
-	mutex_lock(&peer_info->qlock);
+	mutex_lock(&peer_info->queue.qlock);
 	if (likely(!RB_EMPTY_NODE(&node->owner.rb_id)))
 		timestamp = bus1_queue_stage(&peer_info->queue,
 					     &node->owner.qnode, timestamp);
@@ -680,7 +680,7 @@ static void bus1_node_stage(struct bus1_node *node,
 	node->timestamp = bus1_queue_tick(&peer_info->queue);
 	/* test_and_set_bit() provides barriers for node->timestamp */
 	WARN_ON(test_and_set_bit(BUS1_NODE_BIT_DESTROYED, &node->flags));
-	mutex_unlock(&peer_info->qlock);
+	mutex_unlock(&peer_info->queue.qlock);
 
 	list_add_tail(&node->owner.link_node, &list_notify);
 	bus1_node_stage_flush(&list_notify);

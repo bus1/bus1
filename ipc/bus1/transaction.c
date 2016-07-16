@@ -108,9 +108,9 @@ static void bus1_transaction_destroy(struct bus1_transaction *transaction)
 		message->transaction.next = NULL;
 		message->transaction.dest = (struct bus1_handle_dest){};
 
-		mutex_lock(&peer_info->qlock);
+		mutex_lock(&peer_info->queue.qlock);
 		bus1_queue_remove(&peer_info->queue, &message->qnode);
-		mutex_unlock(&peer_info->qlock);
+		mutex_unlock(&peer_info->queue.qlock);
 
 		bus1_active_lockdep_released(&dest.raw_peer->active);
 		bus1_message_deallocate(message, peer_info);
@@ -407,9 +407,9 @@ void bus1_transaction_commit_one(struct bus1_transaction *transaction,
 		 * without informing the sender. The count of dropped messages
 		 * is increased in the receiving queue.
 		 */
-		mutex_lock(&peer_info->qlock);
+		mutex_lock(&peer_info->queue.qlock);
 		bus1_queue_drop(&peer_info->queue, &message->qnode);
-		mutex_unlock(&peer_info->qlock);
+		mutex_unlock(&peer_info->queue.qlock);
 
 		bus1_message_flush(message, peer_info);
 		bus1_message_unref(message);
@@ -428,9 +428,9 @@ void bus1_transaction_commit_one(struct bus1_transaction *transaction,
 		 * sender nor the receiver.
 		 */
 
-		mutex_lock(&peer_info->qlock);
+		mutex_lock(&peer_info->queue.qlock);
 		bus1_queue_remove(&peer_info->queue, &message->qnode);
-		mutex_unlock(&peer_info->qlock);
+		mutex_unlock(&peer_info->queue.qlock);
 
 		bus1_message_deallocate(message, peer_info);
 		bus1_message_flush(message, peer_info);
@@ -441,13 +441,13 @@ void bus1_transaction_commit_one(struct bus1_transaction *transaction,
 
 	message->data.destination = id;
 
-	mutex_lock(&peer_info->qlock);
+	mutex_lock(&peer_info->queue.qlock);
 	if (bus1_queue_node_is_queued(&message->qnode)) {
 		bus1_queue_commit(&peer_info->queue, &message->qnode,
 				  timestamp);
-		mutex_unlock(&peer_info->qlock);
+		mutex_unlock(&peer_info->queue.qlock);
 	} else {
-		mutex_unlock(&peer_info->qlock);
+		mutex_unlock(&peer_info->queue.qlock);
 		/*
 		 * The message has been flushed from the queue, but it has not
 		 * been cleaned up. Release all resources.
@@ -512,10 +512,10 @@ int bus1_transaction_commit(struct bus1_transaction *transaction)
 		bus1_active_lockdep_acquired(&peer->active);
 		peer_info = bus1_peer_dereference(peer);
 
-		mutex_lock(&peer_info->qlock);
+		mutex_lock(&peer_info->queue.qlock);
 		timestamp = bus1_queue_stage(&peer_info->queue, &message->qnode,
 					     timestamp);
-		mutex_unlock(&peer_info->qlock);
+		mutex_unlock(&peer_info->queue.qlock);
 
 		bus1_active_lockdep_released(&peer->active);
 	}
@@ -526,10 +526,10 @@ int bus1_transaction_commit(struct bus1_transaction *transaction)
 	 * sending clock. Note that it may not be unique on the destination
 	 * queues.
 	 */
-	mutex_lock(&transaction->peer_info->qlock);
+	mutex_lock(&transaction->peer_info->queue.qlock);
 	timestamp = bus1_queue_sync(&transaction->peer_info->queue, timestamp);
 	timestamp = bus1_queue_tick(&transaction->peer_info->queue);
-	mutex_unlock(&transaction->peer_info->qlock);
+	mutex_unlock(&transaction->peer_info->queue.qlock);
 
 	mutex_lock(&transaction->peer_info->lock);
 	bus1_handle_transfer_install(&transaction->handles, transaction->peer);
@@ -547,9 +547,9 @@ int bus1_transaction_commit(struct bus1_transaction *transaction)
 		bus1_active_lockdep_acquired(&peer->active);
 		peer_info = bus1_peer_dereference(peer);
 
-		mutex_lock(&peer_info->qlock);
+		mutex_lock(&peer_info->queue.qlock);
 		bus1_queue_sync(&peer_info->queue, timestamp);
-		mutex_unlock(&peer_info->qlock);
+		mutex_unlock(&peer_info->queue.qlock);
 
 		mutex_lock(&peer_info->lock);
 		id = bus1_handle_dest_export(&message->transaction.dest,

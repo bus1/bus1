@@ -40,7 +40,6 @@ struct bus1_message;
  * struct bus1_peer_info - peer specific runtime information
  * @rcu:			rcu
  * @lock:			data lock
- * @qlock:			queue lock
  * @cred:			user creds
  * @pid_ns:			user pid namespace
  * @waitq:			assigned wait-queue
@@ -63,7 +62,6 @@ struct bus1_peer_info {
 		struct rcu_head rcu;
 		struct mutex lock;
 	};
-	struct mutex qlock;
 	const struct cred *cred;
 	struct pid_namespace *pid_ns;
 	struct bus1_user *user;

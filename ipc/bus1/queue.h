@@ -86,13 +86,6 @@
  * the first entry in the queue is ready to be dequeued (that is, it has an
  * even timestamp). If the first entry is not ready to be dequeued, or if the
  * queue is empty, the front pointer is NULL.
- *
- * The queue itself must be embedded into the parent peer structure. We do not
- * access any of the peer-data from within the queue, but we rely on the
- * peer-qlock to be held by the caller (see each function for details of which
- * locks are required). Therefore, the lockdep annotations might access the
- * surrounding peer object that the queue is embedded in. See
- * bus1_queue_init_internal() for details.
  */
 
 #include <linux/kernel.h>
@@ -147,8 +140,7 @@ struct bus1_queue_node {
 };
 
 /* queue */
-void bus1_queue_init_internal(struct bus1_queue *queue,
-			      wait_queue_head_t *waitq);
+void bus1_queue_init(struct bus1_queue *queue, wait_queue_head_t *waitq);
 void bus1_queue_destroy(struct bus1_queue *queue);
 void bus1_queue_flush(struct bus1_queue *queue, struct list_head *list);
 u64 bus1_queue_stage(struct bus1_queue *queue,
@@ -170,11 +162,6 @@ bool bus1_queue_node_is_queued(struct bus1_queue_node *node);
 bool bus1_queue_node_is_committed(struct bus1_queue_node *node);
 unsigned int bus1_queue_node_get_type(struct bus1_queue_node *node);
 u64 bus1_queue_node_get_timestamp(struct bus1_queue_node *node);
-
-/* see bus1_queue_init_internal() for details */
-#define bus1_queue_init_for_peer(_peer, waitq) ({			\
-		bus1_queue_init_internal(&(_peer)->queue, waitq);	\
-	})
 
 /**
  * bus1_queue_tick() - increment queue clock
