@@ -65,7 +65,15 @@ static void bus1_peer_info_reset(struct bus1_peer_info *peer_info, bool final)
 		switch (bus1_queue_node_get_type(node)) {
 		case BUS1_QUEUE_NODE_MESSAGE_NORMAL:
 			message = bus1_message_from_node(node);
-			if (bus1_queue_node_is_committed(node)) {
+			/*
+			 * If a message was either never staged, or it was fully
+			 * committed, we know that a possible transaction is
+			 * done. Hence, we are responsible of cleanup. In all
+			 * other cases, the transaction is still ongoing and
+			 * will notify the queue-removal and cleanup the node.
+			 */
+			if (bus1_queue_node_is_committed(node) ||
+			    !bus1_queue_node_get_timestamp(node)) {
 				bus1_message_deallocate(message, peer_info);
 				bus1_message_flush(message, peer_info);
 			}
