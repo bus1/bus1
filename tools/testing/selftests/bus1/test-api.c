@@ -120,7 +120,7 @@ static void test_api_connect(void)
 	c2 = bus1_client_free(c2);
 	assert(!c2);
 
-	/* drop @c1 eventually */
+	/* drop @c1 */
 
 	c1 = bus1_client_free(c1);
 	assert(!c1);

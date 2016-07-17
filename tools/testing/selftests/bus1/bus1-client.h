@@ -75,7 +75,8 @@ static inline void bus1_client_freep(struct bus1_client **client)
 }
 
 static inline int bus1_client_send(struct bus1_client *client,
-				   struct bus1_cmd_send *send) {
+				   struct bus1_cmd_send *send)
+{
 	int r;
 
 	static_assert(_IOC_SIZE(BUS1_CMD_SEND) == sizeof(*send),
@@ -89,7 +90,8 @@ static inline int bus1_client_send(struct bus1_client *client,
 }
 
 static inline int bus1_client_recv(struct bus1_client *client,
-				   struct bus1_cmd_recv *recv) {
+				   struct bus1_cmd_recv *recv)
+{
 	int r;
 
 	static_assert(_IOC_SIZE(BUS1_CMD_RECV) == sizeof(*recv),
