@@ -45,13 +45,17 @@ struct test {
 int test_api(void);
 int test_io(void);
 int test_peer(void);
+int test_xfer(void);
 
 static const struct test tests[] = {
 	{ .name = "api", .main = test_api },
 	{ .name = "io", .main = test_io },
 	{ .name = "peer", .main = test_peer },
+	{ .name = "xfer", .main = test_xfer },
 };
 
 int c_sys_clone(unsigned long flags, void *child_stack);
+
+#define c_align_to(_val, _to) (((_val) + (_to) - 1) & ~((_to) - 1))
 
 #endif /* __TEST_H */
