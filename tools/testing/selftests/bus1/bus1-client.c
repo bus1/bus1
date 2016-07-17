@@ -21,9 +21,9 @@
 #include "bus1-client.h"
 
 struct bus1_client {
-	int fd;
 	void *pool;
 	size_t pool_size;
+	int fd;
 };
 
 #define _cleanup_(_x) __attribute__((__cleanup__(_x)))
