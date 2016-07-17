@@ -162,8 +162,6 @@ void bus1_queue_commit_unstaged(struct bus1_queue *queue,
 void bus1_queue_remove(struct bus1_queue *queue, struct bus1_queue_node *node);
 void bus1_queue_drop(struct bus1_queue *queue, struct bus1_queue_node *node);
 struct bus1_queue_node *bus1_queue_peek(struct bus1_queue *queue, bool seed);
-struct bus1_queue_node *bus1_queue_swap_seed(struct bus1_queue *queue,
-					     struct bus1_queue_node *node);
 
 /* nodes */
 void bus1_queue_node_init(struct bus1_queue_node *node,
