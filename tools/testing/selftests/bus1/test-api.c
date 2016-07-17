@@ -126,6 +126,102 @@ static void test_api_connect(void)
 	assert(!c1);
 }
 
+/* make sure basic handle-release/destroy (with notifications) works */
+static void test_api_handle(void)
+{
+	struct bus1_cmd_recv recv;
+	struct bus1_client *c1, *c2;
+	uint64_t node, handle;
+	int r, fd;
+
+	/* create new peer and one clone */
+
+	r = bus1_client_new_from_path(&c1, test_path);
+	assert(r >= 0);
+	r = bus1_client_init(c1, BUS1_CLIENT_POOL_SIZE);
+	assert(r >= 0);
+
+	node = BUS1_NODE_FLAG_MANAGED | BUS1_NODE_FLAG_ALLOCATE;
+	handle = BUS1_HANDLE_INVALID;
+	fd = -1;
+	r = bus1_client_clone(c1, &node, &handle, &fd, BUS1_CLIENT_POOL_SIZE);
+	assert(r >= 0);
+	assert(node != (BUS1_NODE_FLAG_MANAGED | BUS1_NODE_FLAG_ALLOCATE));
+	assert(handle != BUS1_HANDLE_INVALID);
+	assert(fd >= 0);
+
+	r = bus1_client_new_from_fd(&c2, fd);
+	assert(r >= 0);
+
+	/* verify clone-handle has no DESTROY access */
+
+	r = bus1_client_node_destroy(c2, handle);
+	assert(r < 0);
+	assert(r == -ENXIO);
+
+	/* verify clone-handle can release its handle exactly once */
+
+	r = bus1_client_handle_release(c2, handle);
+	assert(r >= 0);
+	r = bus1_client_handle_release(c2, handle);
+	assert(r < 0);
+	assert(r == -ENXIO);
+
+	/* verify that no notification has been queued, yet */
+
+	recv = (struct bus1_cmd_recv){};
+	r = bus1_client_recv(c1, &recv);
+	assert(r == -EAGAIN);
+	r = bus1_client_recv(c2, &recv);
+	assert(r == -EAGAIN);
+
+	/* verify that the owner can release its handle exactly once */
+
+	r = bus1_client_handle_release(c1, handle);
+	assert(r >= 0);
+	r = bus1_client_handle_release(c1, handle);
+	assert(r < 0);
+	assert(r == -ENXIO);
+
+	/* verify that a release notification was queued */
+
+	recv = (struct bus1_cmd_recv){};
+	r = bus1_client_recv(c1, &recv);
+	assert(r >= 0);
+	assert(recv.type == BUS1_MSG_NODE_RELEASE);
+
+	/* verify that the owner can destroy its handle exactly once */
+
+	r = bus1_client_node_destroy(c1, handle);
+	assert(r >= 0);
+	r = bus1_client_node_destroy(c1, handle);
+	assert(r < 0);
+	assert(r == -ENXIO);
+
+	/* verify that a destruction notification was queued */
+
+	recv = (struct bus1_cmd_recv){};
+	r = bus1_client_recv(c1, &recv);
+	assert(r >= 0);
+	assert(recv.type == BUS1_MSG_NODE_DESTROY);
+
+	/* verify that both queues are empty (no unexpected notifications) */
+
+	recv = (struct bus1_cmd_recv){};
+	r = bus1_client_recv(c1, &recv);
+	assert(r == -EAGAIN);
+	r = bus1_client_recv(c2, &recv);
+	assert(r == -EAGAIN);
+
+	/* drop peers */
+
+	c2 = bus1_client_free(c2);
+	assert(!c2);
+
+	c1 = bus1_client_free(c1);
+	assert(!c1);
+}
+
 /* make sure we can set + get seed */
 static void test_api_seed(void)
 {
@@ -202,6 +298,7 @@ int test_api(void)
 	test_api_cdev();
 	test_api_client();
 	test_api_connect();
+	test_api_handle();
 	test_api_seed();
 	return TEST_OK;
 }
