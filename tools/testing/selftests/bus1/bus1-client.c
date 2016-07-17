@@ -111,6 +111,7 @@ _public_ int bus1_client_ioctl(struct bus1_client *client,
 _public_ int bus1_client_query(struct bus1_client *client, size_t *pool_sizep)
 {
 	struct bus1_cmd_peer_init peer_init;
+	size_t old_size;
 	int r;
 
 	if (_likely_(client->pool_size > 0)) {
@@ -129,6 +130,11 @@ _public_ int bus1_client_query(struct bus1_client *client, size_t *pool_sizep)
 		return r;
 
 	assert(peer_init.pool_size != 0);
+
+	/* no reason to be atomic, but lets verify the semantics nonetheless */
+	old_size = __atomic_exchange_n(&client->pool_size, peer_init.pool_size,
+				       __ATOMIC_RELEASE);
+	assert(old_size == 0 || old_size == peer_init.pool_size);
 
 	*pool_sizep = peer_init.pool_size;
 	return 0;
