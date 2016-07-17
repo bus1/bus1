@@ -67,12 +67,12 @@ static void test_api_connect(void)
 
 	/* verify clone fails if origin is unconnected */
 
-	node = BUS1_HANDLE_INVALID;
+	node = BUS1_NODE_FLAG_MANAGED | BUS1_NODE_FLAG_ALLOCATE;
 	handle = BUS1_HANDLE_INVALID;
 	fd = -1;
 	r = bus1_client_clone(c1, &node, &handle, &fd, BUS1_CLIENT_POOL_SIZE);
 	assert(r < 0);
-	assert(node == BUS1_HANDLE_INVALID);
+	assert(node == (BUS1_NODE_FLAG_MANAGED | BUS1_NODE_FLAG_ALLOCATE));
 	assert(handle == BUS1_HANDLE_INVALID);
 	assert(fd == -1);
 
