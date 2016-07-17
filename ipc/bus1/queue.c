@@ -331,14 +331,14 @@ u64 bus1_queue_stage(struct bus1_queue *queue,
 }
 
 /**
- * bus1_queue_commit() - commit queue entry with new timestamp
+ * bus1_queue_commit_staged() - commit staged queue entry with new timestamp
  * @queue:		queue to operate on
  * @node:		queue entry to commit
  * @timestamp:		new timestamp for @node
  *
- * Link or update a queue entry according to @timestamp. If the entry was not
- * linked, yet, this will insert the entry into the queue. If it was already
- * linked, it is updated and sorted according to @timestamp.
+ * Update a queue entry according to @timestamp. If the queue entry is already
+ * staged on the queue, it is updated and sorted according to @timestamp.
+ * Otherwise, nothing is done.
  *
  * The caller must provide an even timestamp and the entry may not already have
  * been committed.
@@ -349,14 +349,48 @@ u64 bus1_queue_stage(struct bus1_queue *queue,
  *
  * The queue owns its own reference to the node, so the caller retains their
  * reference after this call returns.
+ *
+ * Returns: True if the entry was committed, false otherwise.
  */
-void bus1_queue_commit(struct bus1_queue *queue,
-		       struct bus1_queue_node *node,
-		       u64 timestamp)
+bool bus1_queue_commit_staged(struct bus1_queue *queue,
+			      struct bus1_queue_node *node,
+			      u64 timestamp)
 {
 	WARN_ON(timestamp & 1);
 
-	bus1_queue_add(queue, node, timestamp);
+	mutex_lock(&queue->qlock);
+	if (bus1_queue_node_is_queued(node)) {
+		bus1_queue_add(queue, node, timestamp);
+		mutex_unlock(&queue->qlock);
+		return true;
+	} else {
+		mutex_unlock(&queue->qlock);
+		return false;
+	}
+}
+
+/**
+ * bus1_queue_commit_unstaged() - commit unstaged queue entry with new timestamp
+ * @queue:		queue to operate on
+ * @node:		queue entry to commit
+ *
+ * Directly commit an unstaged queue entry to the destination queue. If the
+ * queue entry is already, nothing is done.
+ *
+ * The destination queue is ticked and the resulting timestamp is used to commit
+ * the queue entry.
+ *
+ * The queue owns its own reference to the node, so the caller retains their
+ * reference after this call returns.
+ */
+void bus1_queue_commit_unstaged(struct bus1_queue *queue,
+				struct bus1_queue_node *node)
+{
+	mutex_lock(&queue->qlock);
+	if (!bus1_queue_node_is_queued(node)) {
+		bus1_queue_add(queue, node, bus1_queue_tick(queue));
+	}
+	mutex_unlock(&queue->qlock);
 }
 
 /**

@@ -429,13 +429,8 @@ void bus1_transaction_commit_one(struct bus1_transaction *transaction,
 
 	message->data.destination = id;
 
-	mutex_lock(&peer_info->queue.qlock);
-	if (bus1_queue_node_is_queued(&message->qnode)) {
-		bus1_queue_commit(&peer_info->queue, &message->qnode,
-				  timestamp);
-		mutex_unlock(&peer_info->queue.qlock);
-	} else {
-		mutex_unlock(&peer_info->queue.qlock);
+	if (!bus1_queue_commit_staged(&peer_info->queue, &message->qnode,
+				      timestamp)) {
 		/*
 		 * The message has been flushed from the queue, but it has not
 		 * been cleaned up. Release all resources.

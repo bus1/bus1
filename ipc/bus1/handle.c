@@ -365,8 +365,6 @@ bus1_handle_acquire_holder(struct bus1_handle *handle,
 static void bus1_node_queue_notification(struct bus1_node *node,
 					 struct bus1_peer_info *owner_info)
 {
-	u64 timestamp;
-
 	/*
 	 * Queue a node-release notification on @owner_info if not already
 	 * queued. Note that the caller must make sure to never call this on
@@ -376,12 +374,7 @@ static void bus1_node_queue_notification(struct bus1_node *node,
 
 	WARN_ON(RB_EMPTY_NODE(&node->owner.rb_id));
 
-	mutex_lock(&owner_info->queue.qlock);
-	if (!bus1_queue_node_is_queued(&node->qnode)) {
-		timestamp = bus1_queue_tick(&owner_info->queue);
-		bus1_queue_commit(&owner_info->queue, &node->qnode, timestamp);
-	}
-	mutex_unlock(&owner_info->queue.qlock);
+	bus1_queue_commit_unstaged(&owner_info->queue, &node->qnode);
 }
 
 static void bus1_node_dequeue_notification(struct bus1_node *node,
@@ -606,11 +599,8 @@ static void bus1_node_stage_flush(struct list_head *list_notify)
 
 		peer = bus1_handle_acquire_holder(h, &peer_info);
 		if (peer) {
-			mutex_lock(&peer_info->queue.qlock);
-			if (bus1_queue_node_is_queued(&h->qnode))
-				bus1_queue_commit(&peer_info->queue, &h->qnode,
-						  h->node->timestamp);
-			mutex_unlock(&peer_info->queue.qlock);
+			bus1_queue_commit_staged(&peer_info->queue, &h->qnode,
+						 h->node->timestamp);
 			bus1_peer_release(peer);
 		}
 
