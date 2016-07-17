@@ -278,7 +278,7 @@ _public_ int bus1_client_slice_release(struct bus1_client *client,
 _public_ const void *bus1_client_slice_from_offset(struct bus1_client *client,
 						   uint64_t offset)
 {
-	if (!client->pool || offset >= client->pool_size)
+	if (_unlikely_(!client->pool || offset >= client->pool_size))
 		return NULL;
 
 	return client->pool + offset;
