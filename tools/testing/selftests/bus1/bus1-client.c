@@ -215,6 +215,18 @@ _public_ int bus1_client_init(struct bus1_client *client, size_t pool_size)
 	return 0;
 }
 
+_public_ int bus1_client_reset(struct bus1_client *client)
+{
+	struct bus1_cmd_peer_reset peer_reset;
+
+	peer_reset.flags = 0;
+
+	static_assert(_IOC_SIZE(BUS1_CMD_PEER_RESET) == sizeof(peer_reset),
+		      "ioctl is called with invalid argument size");
+
+	return bus1_client_ioctl(client, BUS1_CMD_PEER_RESET, &peer_reset);
+}
+
 _public_ int bus1_client_clone(struct bus1_client *client,
 			       uint64_t *parent_handlep,
 			       uint64_t *child_handlep,
