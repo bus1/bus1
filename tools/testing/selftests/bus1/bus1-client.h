@@ -45,7 +45,7 @@ struct bus1_client *bus1_client_free(struct bus1_client *client);
 
 int bus1_client_get_fd(struct bus1_client *client);
 size_t bus1_client_get_pool_size(struct bus1_client *client);
-void *bus1_client_get_pool(struct bus1_client *client);
+const void *bus1_client_get_pool(struct bus1_client *client);
 
 int bus1_client_ioctl(struct bus1_client *client, unsigned int cmd, void *arg);
 int bus1_client_query(struct bus1_client *client, size_t *pool_sizep);
@@ -61,8 +61,8 @@ int bus1_client_node_destroy(struct bus1_client *client, uint64_t handle);
 int bus1_client_handle_release(struct bus1_client *client, uint64_t handle);
 int bus1_client_slice_release(struct bus1_client *client, uint64_t offset);
 
-void *bus1_client_slice_from_offset(struct bus1_client *client,
-				    uint64_t offset);
+const void *bus1_client_slice_from_offset(struct bus1_client *client,
+					  uint64_t offset);
 uint64_t bus1_client_slice_to_offset(struct bus1_client *client,
 				     const void *slice);
 

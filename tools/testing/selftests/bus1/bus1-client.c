@@ -21,7 +21,7 @@
 #include "bus1-client.h"
 
 struct bus1_client {
-	void *pool;
+	const uint8_t *pool;
 	size_t pool_size;
 	int fd;
 };
@@ -75,7 +75,7 @@ _public_ struct bus1_client *bus1_client_free(struct bus1_client *client)
 		return NULL;
 
 	if (client->pool)
-		munmap(client->pool, client->pool_size);
+		munmap((void *)client->pool, client->pool_size);
 
 	close(client->fd);
 	free(client);
@@ -93,7 +93,7 @@ _public_ size_t bus1_client_get_pool_size(struct bus1_client *client)
 	return client ? client->pool_size : 0;
 }
 
-_public_ void *bus1_client_get_pool(struct bus1_client *client)
+_public_ const void *bus1_client_get_pool(struct bus1_client *client)
 {
 	return client ? client->pool : NULL;
 }
@@ -275,22 +275,23 @@ _public_ int bus1_client_slice_release(struct bus1_client *client,
 	return bus1_client_ioctl(client, BUS1_CMD_SLICE_RELEASE, &offset);
 }
 
-_public_ void *bus1_client_slice_from_offset(struct bus1_client *client,
-					     uint64_t offset)
+_public_ const void *bus1_client_slice_from_offset(struct bus1_client *client,
+						   uint64_t offset)
 {
 	if (!client->pool || offset >= client->pool_size)
 		return NULL;
 
-	return (uint8_t *)client->pool + offset;
+	return client->pool + offset;
 }
 
 _public_ uint64_t bus1_client_slice_to_offset(struct bus1_client *client,
 					      const void *slice)
 {
-	if (_unlikely_(!client->pool || !client->pool_size || slice < client->pool))
-		return BUS1_OFFSET_INVALID;
-	if (_unlikely_((uint8_t *)slice >= (uint8_t *)client->pool + client->pool_size))
+	if (_unlikely_(!client->pool ||
+		       !client->pool_size ||
+		       (uint8_t *)slice < client->pool ||
+		       (uint8_t *)slice >= client->pool + client->pool_size))
 		return BUS1_OFFSET_INVALID;
 
-	return (uint8_t *)slice - (uint8_t *)client->pool;
+	return (uint8_t *)slice - client->pool;
 }

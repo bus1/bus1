@@ -150,7 +150,7 @@ static void test_api_seed(void)
 	struct bus1_cmd_recv recv = {
 		.flags = BUS1_RECV_FLAG_SEED,
 	};
-	void *slice;
+	const void *slice;
 	uint64_t handle_id;
 	int r;
 

@@ -30,7 +30,9 @@ static int client_send(struct bus1_client *client, uint64_t *destinations,
 	return bus1_client_send(client, &send);
 }
 
-static int client_recv(struct bus1_client *client, void **datap, size_t *lenp)
+static int client_recv(struct bus1_client *client,
+		       const void **datap,
+		       size_t *lenp)
 {
 	struct bus1_cmd_recv recv = {};
 	int r;
@@ -160,7 +162,7 @@ static void test_basic(void)
 	r = client_send(parent, child_handles, 2, payload, strlen(payload) + 1);
 	assert(r >= 0);
 
-	r = client_recv(child1, (void**)&reply_payload, &reply_len);
+	r = client_recv(child1, (const void**)&reply_payload, &reply_len);
 	assert(r >= 0);
 
 	assert(reply_len == strlen(payload) + 1);
@@ -169,7 +171,7 @@ static void test_basic(void)
 	r = client_slice_release(child1, reply_payload);
 	assert(r >= 0);
 
-	r = client_recv(child2, (void**)&reply_payload, &reply_len);
+	r = client_recv(child2, (const void**)&reply_payload, &reply_len);
 	assert(r >= 0);
 
 	assert(reply_len == strlen(payload) + 1);
@@ -270,7 +272,8 @@ static uint64_t test_iterate(unsigned int iterations,
 
 		/* receive */
 		for (i = 0; i < n_destinations; i++) {
-			r = client_recv(children[i], (void**)&reply_payload,
+			r = client_recv(children[i],
+					(const void**)&reply_payload,
 					&reply_len);
 			assert(r >= 0);
 
