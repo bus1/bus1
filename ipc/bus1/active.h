@@ -94,8 +94,8 @@ void bus1_active_lockdep_acquired(struct bus1_active *active);
 void bus1_active_lockdep_released(struct bus1_active *active);
 #else
 #  define bus1_active_init(_active) bus1_active_init_private(_active)
-static inline void bus1_active_lockdep_acquired(struct bus1_active *active) { }
-static inline void bus1_active_lockdep_released(struct bus1_active *active) { }
+static inline void bus1_active_lockdep_acquired(struct bus1_active *active) {}
+static inline void bus1_active_lockdep_released(struct bus1_active *active) {}
 #endif
 
 /**
