@@ -121,6 +121,9 @@ _public_ int bus1_client_query(struct bus1_client *client, size_t *pool_sizep)
 
 	peer_init.flags = 0;
 	peer_init.n_bytes = 0;
+	peer_init.n_slices = 0;
+	peer_init.n_handles = 0;
+	peer_init.n_fds = 0;
 
 	static_assert(_IOC_SIZE(BUS1_CMD_PEER_QUERY) == sizeof(peer_init),
 		      "ioctl is called with invalid argument size");
@@ -205,6 +208,9 @@ _public_ int bus1_client_init(struct bus1_client *client, size_t pool_size)
 
 	peer_init.flags = 0;
 	peer_init.n_bytes = pool_size;
+	peer_init.n_slices = -1;
+	peer_init.n_handles = -1;
+	peer_init.n_fds = -1;
 
 	static_assert(_IOC_SIZE(BUS1_CMD_PEER_INIT) == sizeof(peer_init),
 		      "ioctl is called with invalid argument size");
@@ -244,6 +250,9 @@ _public_ int bus1_client_clone(struct bus1_client *client,
 
 	peer_clone.flags = 0;
 	peer_clone.n_bytes = pool_size;
+	peer_clone.n_slices = -1;
+	peer_clone.n_handles = -1;
+	peer_clone.n_fds = -1;
 	peer_clone.parent_handle = *parent_handlep;
 	peer_clone.child_handle = *child_handlep;
 	peer_clone.fd = (uint64_t)*fdp;

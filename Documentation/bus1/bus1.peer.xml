@@ -38,6 +38,9 @@
 struct bus1_cmd_peer_init {
   __u64 flags;
   __u64 n_bytes;
+  __u64 n_slices;
+  __u64 n_handles;
+  __u64 n_fds;
 };
     </programlisting>
 
@@ -59,6 +62,28 @@ struct bus1_cmd_peer_init {
         </para></listitem>
       </varlistentry>
 
+      <varlistentry>
+        <term><varname>n_slices</varname></term>
+        <listitem><para>
+          The maximum number of slices in the pool to create for the new peer.
+        </para></listitem>
+      </varlistentry>
+
+      <varlistentry>
+        <term><varname>n_handles</varname></term>
+        <listitem><para>
+          The maximum number of handles the new peer can hold, in-flight or
+          received.
+        </para></listitem>
+      </varlistentry>
+
+      <varlistentry>
+        <term><varname>n_fds</varname></term>
+        <listitem><para>
+          The maximum number of in-flight fds destined for this peer.
+        </para></listitem>
+      </varlistentry>
+
     </variablelist>
   </refsect1>
 
@@ -74,6 +99,9 @@ struct bus1_cmd_peer_init {
 struct bus1_cmd_peer_init {
   __u64 flags;
   __u64 n_bytes;
+  __u64 n_slices;
+  __u64 n_handles;
+  __u64 n_fds;
 };
     </programlisting>
 
@@ -94,6 +122,30 @@ struct bus1_cmd_peer_init {
           The size of the pool in bytes to create for this peer. This must be
           set to <constant>0</constant> and is set to the existing pool size on
           return.
+        </para></listitem>
+      </varlistentry>
+
+      <varlistentry>
+        <term><varname>n_slices</varname></term>
+        <listitem><para>
+          Unused. This must be set to <constant>0</constant> and is set to
+          <constant>0</constant> on return.
+        </para></listitem>
+      </varlistentry>
+
+      <varlistentry>
+        <term><varname>n_handles</varname></term>
+        <listitem><para>
+          Unused. This must be set to <constant>0</constant> and is set to
+          <constant>0</constant> on return.
+        </para></listitem>
+      </varlistentry>
+
+      <varlistentry>
+        <term><varname>n_fds</varname></term>
+        <listitem><para>
+          Unused. This must be set to <constant>0</constant> and is set to
+          <constant>0</constant> on return.
         </para></listitem>
       </varlistentry>
 
@@ -146,6 +198,9 @@ struct bus1_cmd_peer_reset {
 struct bus1_cmd_peer_clone {
   __u64 flags;
   __u64 n_bytes;
+  __u64 n_slices;
+  __u64 n_handles;
+  __u64 n_fds;
   __u64 node;
   __u64 handle;
   __u64 fd;
@@ -167,6 +222,28 @@ struct bus1_cmd_peer_clone {
         <term><varname>n_bytes</varname></term>
         <listitem><para>
           The size of the pool in bytes to create for the new peer.
+        </para></listitem>
+      </varlistentry>
+
+      <varlistentry>
+        <term><varname>n_slices</varname></term>
+        <listitem><para>
+          The maximum number of slices in the pool to create for the new peer.
+        </para></listitem>
+      </varlistentry>
+
+      <varlistentry>
+        <term><varname>n_handles</varname></term>
+        <listitem><para>
+          The maximum number of handles the new peer can hold, in-flight or
+          received.
+        </para></listitem>
+      </varlistentry>
+
+      <varlistentry>
+        <term><varname>n_fds</varname></term>
+        <listitem><para>
+          The maximum number of in-flight fds destined for this peer.
         </para></listitem>
       </varlistentry>
 
