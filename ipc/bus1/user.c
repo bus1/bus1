@@ -337,8 +337,8 @@ int bus1_user_quota_charge(struct bus1_peer_info *peer_info,
 	BUILD_BUG_ON(BUS1_FDS_MAX > U16_MAX);
 
 	r = bus1_user_quota_charge_one(NULL,
-				       peer_info->n_allocated,
-				       stats->n_allocated,
+				       peer_info->n_bytes,
+				       stats->n_bytes,
 				       size);
 	if (r < 0)
 		return r;
@@ -365,11 +365,11 @@ int bus1_user_quota_charge(struct bus1_peer_info *peer_info,
 		goto error_handles;
 
 	/* charge the local quotas */
-	peer_info->n_allocated -= size;
+	peer_info->n_bytes -= size;
 	peer_info->n_messages -= 1;
 	peer_info->n_handles -= n_handles;
 	peer_info->n_fds -= n_fds;
-	stats->n_allocated += size;
+	stats->n_bytes += size;
 	stats->n_messages += 1;
 	stats->n_handles += n_handles;
 	stats->n_fds += n_fds;
@@ -409,11 +409,11 @@ void bus1_user_quota_discharge(struct bus1_peer_info *peer_info,
 	if (WARN_ON(IS_ERR_OR_NULL(stats)))
 		return;
 
-	peer_info->n_allocated += size;
+	peer_info->n_bytes += size;
 	peer_info->n_messages += 1;
 	peer_info->n_handles += n_handles;
 	peer_info->n_fds += n_fds;
-	stats->n_allocated -= size;
+	stats->n_bytes -= size;
 	stats->n_messages -= 1;
 	stats->n_handles -= n_handles;
 	stats->n_fds -= n_fds;
@@ -446,7 +446,7 @@ void bus1_user_quota_commit(struct bus1_peer_info *peer_info,
 	if (WARN_ON(IS_ERR_OR_NULL(stats)))
 		return;
 
-	stats->n_allocated -= size;
+	stats->n_bytes -= size;
 	stats->n_messages -= 1;
 	stats->n_handles -= n_handles;
 	stats->n_fds -= n_fds;
@@ -471,7 +471,7 @@ void bus1_user_quota_commit(struct bus1_peer_info *peer_info,
 void bus1_user_quota_release_slices(struct bus1_peer_info *peer_info,
 				    size_t n_slices, size_t size)
 {
-	peer_info->n_allocated += size;
+	peer_info->n_bytes += size;
 	peer_info->n_messages += n_slices;
 	atomic_add(n_slices, &peer_info->user->n_messages);
 

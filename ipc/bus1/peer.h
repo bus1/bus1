@@ -71,7 +71,7 @@ struct bus1_peer_info {
 	struct seqcount seqcount;
 	u64 handle_ids;
 
-	size_t n_allocated;
+	size_t n_bytes;
 	size_t n_messages;
 	size_t n_handles;
 	size_t n_fds;
