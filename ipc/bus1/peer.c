@@ -113,15 +113,15 @@ bus1_peer_info_free(struct bus1_peer_info *peer_info)
 }
 
 static struct bus1_peer_info *bus1_peer_info_new(wait_queue_head_t *waitq,
-						 size_t n_bytes,
-						 size_t n_slices,
-						 size_t n_handles,
-						 size_t n_fds)
+						 size_t max_bytes,
+						 size_t max_slices,
+						 size_t max_handles,
+						 size_t max_fds)
 {
 	struct bus1_peer_info *peer_info;
 	int r;
 
-	if (unlikely(n_bytes == 0 || !IS_ALIGNED(n_bytes, PAGE_SIZE)))
+	if (unlikely(max_bytes == 0 || !IS_ALIGNED(max_bytes, PAGE_SIZE)))
 		return ERR_PTR(-EINVAL);
 
 	peer_info = kmalloc(sizeof(*peer_info), GFP_KERNEL);
@@ -147,12 +147,12 @@ static struct bus1_peer_info *bus1_peer_info_new(wait_queue_head_t *waitq,
 		goto error;
 	}
 
-	peer_info->n_bytes = n_bytes;
-	peer_info->n_slices = n_slices;
-	peer_info->n_handles = n_handles;
-	peer_info->n_fds = n_fds;
+	peer_info->n_bytes = max_bytes;
+	peer_info->n_slices = max_slices;
+	peer_info->n_handles = max_handles;
+	peer_info->n_fds = max_fds;
 
-	r = bus1_pool_create_for_peer(peer_info, n_bytes);
+	r = bus1_pool_create_for_peer(peer_info, max_bytes);
 	if (r < 0)
 		goto error;
 
@@ -296,8 +296,8 @@ int bus1_peer_ioctl_init(struct bus1_peer *peer, unsigned long arg)
 
 	if (copy_from_user(&param, (void __user *)arg, sizeof(param)))
 		return -EFAULT;
-	if (unlikely(param.flags) || unlikely(param.n_bytes == 0) ||
-	    unlikely(param.n_slices == 0))
+	if (unlikely(param.flags) || unlikely(param.max_bytes == 0) ||
+	    unlikely(param.max_slices == 0))
 		return -EINVAL;
 
 	/*
@@ -309,9 +309,9 @@ int bus1_peer_ioctl_init(struct bus1_peer *peer, unsigned long arg)
 	 * bus1_active_activate() for details). Hence, borrowing the waitq-lock
 	 * is perfectly fine.
 	 */
-	peer_info = bus1_peer_info_new(&peer->waitq, param.n_bytes,
-				       param.n_slices, param.n_handles,
-				       param.n_fds);
+	peer_info = bus1_peer_info_new(&peer->waitq, param.max_bytes,
+				       param.max_slices, param.max_handles,
+				       param.max_fds);
 	if (IS_ERR(peer_info))
 		return PTR_ERR(peer_info);
 
@@ -345,15 +345,15 @@ static int bus1_peer_ioctl_query(struct bus1_peer *peer, unsigned long arg)
 
 	if (copy_from_user(&param, (void __user *)arg, sizeof(param)))
 		return -EFAULT;
-	if (unlikely(param.flags) || unlikely(param.n_bytes) ||
-	    unlikely(param.n_slices) || unlikely(param.n_handles) ||
-	    unlikely(param.n_fds))
+	if (unlikely(param.flags) || unlikely(param.max_bytes) ||
+	    unlikely(param.max_slices) || unlikely(param.max_handles) ||
+	    unlikely(param.max_fds))
 		return -EINVAL;
 
 	peer_info = bus1_peer_dereference(peer);
 
 	/* XXX: report also the original n_slices, n_handles and n_fds */
-	if (put_user(peer_info->pool.size, &uparam->n_bytes))
+	if (put_user(peer_info->pool.size, &uparam->max_bytes))
 		return -EFAULT;
 
 	return 0;
@@ -399,8 +399,8 @@ static int bus1_peer_ioctl_clone(struct bus1_peer *peer,
 	if (copy_from_user(&param, (void __user *)arg, sizeof(param)))
 		return -EFAULT;
 	if (unlikely(param.flags) ||
-	    unlikely(param.n_bytes == 0) ||
-	    unlikely(param.n_slices == 0) ||
+	    unlikely(param.max_bytes == 0) ||
+	    unlikely(param.max_slices == 0) ||
 	    unlikely(param.child_handle != BUS1_HANDLE_INVALID) ||
 	    unlikely(param.fd != (u64)-1))
 		return -EINVAL;
@@ -428,9 +428,9 @@ static int bus1_peer_ioctl_clone(struct bus1_peer *peer,
 	}
 	clone_file->private_data = clone; /* released via f_op->release() */
 
-	clone_info = bus1_peer_info_new(&clone->waitq, param.n_bytes,
-					param.n_slices, param.n_handles,
-					param.n_fds);
+	clone_info = bus1_peer_info_new(&clone->waitq, param.max_bytes,
+					param.max_slices, param.max_handles,
+					param.max_fds);
 	if (IS_ERR(clone_info)) {
 		r = PTR_ERR(clone_info);
 		clone_info = NULL;
