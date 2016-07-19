@@ -147,7 +147,7 @@ static struct bus1_peer_info *bus1_peer_info_new(wait_queue_head_t *waitq,
 	peer_info->n_bytes = n_bytes;
 	peer_info->n_slices = -1;
 	peer_info->n_handles = -1;
-	peer_info->n_fds = rlimit(RLIMIT_NOFILE);
+	peer_info->n_fds = -1;
 
 	r = bus1_pool_create_for_peer(peer_info, n_bytes);
 	if (r < 0)
