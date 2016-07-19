@@ -103,12 +103,12 @@
  * is just the global limit, a per-peer limit can be set at runtime as well, if
  * required.
  *
- * The FD-limit controls how many inflight FDs are allowed to be destined fro a
+ * The FD-limit controls how many inflight FDs are allowed to be destined for a
  * given user. It is accounted for on SEND, and de-accounted on RECV. After RECV
  * it is subject to RLIM_NOFILE and under full control of the receiver. All
  * inflight FD accounting is accounting is subject to per-sending-user quotas.
  */
-#define BUS1_FDS_MAX (65535)
+#define BUS1_FDS_MAX (4096)
 
 /**
  * bus1_fops - file-operations of bus1 character devices
