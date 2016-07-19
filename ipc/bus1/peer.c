@@ -360,8 +360,10 @@ static int bus1_peer_ioctl_query(struct bus1_peer *peer, unsigned long arg)
 
 	peer_info = bus1_peer_dereference(peer);
 
-	/* XXX: report also the original n_slices, n_handles and n_fds */
-	if (put_user(peer_info->pool.size, &uparam->max_bytes))
+	if (put_user(peer_info->max_bytes, &uparam->max_bytes) ||
+	    put_user(peer_info->max_slices, &uparam->max_slices) ||
+	    put_user(peer_info->max_handles, &uparam->max_handles) ||
+	    put_user(peer_info->max_fds, &uparam->max_fds))
 		return -EFAULT;
 
 	return 0;
