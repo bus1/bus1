@@ -119,17 +119,17 @@ void bus1_user_quota_init(struct bus1_user_quota *quota);
 void bus1_user_quota_destroy(struct bus1_user_quota *quota);
 int bus1_user_quota_charge(struct bus1_peer_info *peer_info,
 			   struct bus1_user *user,
-			   size_t size,
+			   size_t n_bytes,
 			   size_t n_handles,
 			   size_t n_fds);
 void bus1_user_quota_discharge(struct bus1_peer_info *peer_info,
 			       struct bus1_user *user,
-			       size_t size,
+			       size_t n_bytes,
 			       size_t n_handles,
 			       size_t n_fds);
 void bus1_user_quota_commit(struct bus1_peer_info *peer_info,
 			    struct bus1_user *user,
-			    size_t size,
+			    size_t n_bytes,
 			    size_t n_handles,
 			    size_t n_fds);
 

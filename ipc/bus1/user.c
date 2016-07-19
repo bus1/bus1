@@ -297,7 +297,7 @@ static int bus1_user_quota_charge_one(atomic_t *global,
  * bus1_user_quota_charge() - try charging a user
  * @peer_info:		peer with quota to operate on
  * @user:		user to charge
- * @size:		size to charge
+ * @n_bytes:		number of bytes to charge
  * @n_handles:		number of handles to charge
  * @n_fds:		number of FDs to charge
  *
@@ -306,14 +306,14 @@ static int bus1_user_quota_charge_one(atomic_t *global,
  * charge. If the charge is successful, the available resources are adjusted
  * accordingly both locally on @peer_info and globally on the associated user.
  *
- * This charges for _one_ message with a size of @size bytes, carrying
+ * This charges for _one_ message with a size of @n_bytes, carrying
  * @n_handles handles and @n_fds file descriptors as payload.
  *
  * Return: 0 on success, negative error code on failure.
  */
 int bus1_user_quota_charge(struct bus1_peer_info *peer_info,
 			   struct bus1_user *user,
-			   size_t size,
+			   size_t n_bytes,
 			   size_t n_handles,
 			   size_t n_fds)
 {
@@ -339,7 +339,7 @@ int bus1_user_quota_charge(struct bus1_peer_info *peer_info,
 	r = bus1_user_quota_charge_one(NULL,
 				       peer_info->n_bytes,
 				       stats->n_bytes,
-				       size);
+				       n_bytes);
 	if (r < 0)
 		return r;
 
@@ -365,11 +365,11 @@ int bus1_user_quota_charge(struct bus1_peer_info *peer_info,
 		goto error_handles;
 
 	/* charge the local quotas */
-	peer_info->n_bytes -= size;
+	peer_info->n_bytes -= n_bytes;
 	peer_info->n_slices -= 1;
 	peer_info->n_handles -= n_handles;
 	peer_info->n_fds -= n_fds;
-	stats->n_bytes += size;
+	stats->n_bytes += n_bytes;
 	stats->n_slices += 1;
 	stats->n_handles += n_handles;
 	stats->n_fds += n_fds;
@@ -389,17 +389,17 @@ error_allocated:
  * bus1_user_quota_discharge() - discharge a user
  * @peer_info:		peer with quota to operate on
  * @user:		user to discharge
- * @size:		size to discharge
+ * @n_bytes:		number of bytes to discharge
  * @n_handles:		number of handles to discharge
  * @n_fds:		number of FDs to discharge
  *
  * This reverts a single charge done via bus1_user_quota_charge(). It
- * discharges a single message with a slice size of @size, @n_handles handles
+ * discharges a single message with a slice of size @n_bytes, @n_handles handles
  * and @n_fds file-descriptors.
  */
 void bus1_user_quota_discharge(struct bus1_peer_info *peer_info,
 			       struct bus1_user *user,
-			       size_t size,
+			       size_t n_bytes,
 			       size_t n_handles,
 			       size_t n_fds)
 {
@@ -409,11 +409,11 @@ void bus1_user_quota_discharge(struct bus1_peer_info *peer_info,
 	if (WARN_ON(IS_ERR_OR_NULL(stats)))
 		return;
 
-	peer_info->n_bytes += size;
+	peer_info->n_bytes += n_bytes;
 	peer_info->n_slices += 1;
 	peer_info->n_handles += n_handles;
 	peer_info->n_fds += n_fds;
-	stats->n_bytes -= size;
+	stats->n_bytes -= n_bytes;
 	stats->n_slices -= 1;
 	stats->n_handles -= n_handles;
 	stats->n_fds -= n_fds;
@@ -426,7 +426,7 @@ void bus1_user_quota_discharge(struct bus1_peer_info *peer_info,
  * bus1_user_quota_commit() - commit a quota charge
  * @peer_info:		peer with quota to operate on
  * @user:		user to commit for
- * @size:		size to commit
+ * @n_bytes:		number of bytes to commit
  * @n_handles:		number of handles to commit
  * @n_fds:		number of FDs to commit
  *
@@ -436,7 +436,7 @@ void bus1_user_quota_discharge(struct bus1_peer_info *peer_info,
  */
 void bus1_user_quota_commit(struct bus1_peer_info *peer_info,
 			    struct bus1_user *user,
-			    size_t size,
+			    size_t n_bytes,
 			    size_t n_handles,
 			    size_t n_fds)
 {
@@ -446,7 +446,7 @@ void bus1_user_quota_commit(struct bus1_peer_info *peer_info,
 	if (WARN_ON(IS_ERR_OR_NULL(stats)))
 		return;
 
-	stats->n_bytes -= size;
+	stats->n_bytes -= n_bytes;
 	stats->n_slices -= 1;
 	stats->n_handles -= n_handles;
 	stats->n_fds -= n_fds;
