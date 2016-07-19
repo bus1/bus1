@@ -99,6 +99,10 @@ bus1_peer_info_free(struct bus1_peer_info *peer_info)
 	put_pid_ns(peer_info->pid_ns);
 	put_cred(peer_info->cred);
 
+	WARN_ON(peer_info->n_bytes);
+	WARN_ON(peer_info->n_slices);
+	WARN_ON(peer_info->n_handles);
+	WARN_ON(peer_info->n_fds);
 	WARN_ON(!RB_EMPTY_ROOT(&peer_info->map_handles_by_node));
 	WARN_ON(!RB_EMPTY_ROOT(&peer_info->map_handles_by_id));
 
@@ -139,6 +143,15 @@ static struct bus1_peer_info *bus1_peer_info_new(wait_queue_head_t *waitq,
 	peer_info->map_handles_by_node = RB_ROOT;
 	seqcount_init(&peer_info->seqcount);
 	peer_info->handle_ids = 0;
+	peer_info->n_bytes = 0;
+	peer_info->n_slices = 0;
+	peer_info->n_handles = 0;
+	peer_info->n_fds = 0;
+	peer_info->max_bytes = max_bytes;
+	peer_info->max_slices = max_slices;
+	peer_info->max_handles = max_handles;
+	peer_info->max_fds = max_fds;
+
 
 	peer_info->user = bus1_user_ref_by_uid(peer_info->cred->uid);
 	if (IS_ERR(peer_info->user)) {
@@ -146,11 +159,6 @@ static struct bus1_peer_info *bus1_peer_info_new(wait_queue_head_t *waitq,
 		peer_info->user = NULL;
 		goto error;
 	}
-
-	peer_info->n_bytes = max_bytes;
-	peer_info->n_slices = max_slices;
-	peer_info->n_handles = max_handles;
-	peer_info->n_fds = max_fds;
 
 	r = bus1_pool_create_for_peer(peer_info, max_bytes);
 	if (r < 0)

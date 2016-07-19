@@ -337,38 +337,46 @@ int bus1_user_quota_charge(struct bus1_peer_info *peer_info,
 	BUILD_BUG_ON(BUS1_FDS_MAX > U16_MAX);
 
 	r = bus1_user_quota_charge_one(NULL,
-				       peer_info->n_bytes,
-				       stats->n_bytes,
-				       n_bytes);
+				peer_info->n_bytes < peer_info->max_bytes ?
+				peer_info->max_bytes - peer_info->n_bytes :
+				0,
+				stats->n_bytes,
+				n_bytes);
 	if (r < 0)
 		return r;
 
 	r = bus1_user_quota_charge_one(&peer_info->user->n_slices,
-				       peer_info->n_slices,
-				       stats->n_slices,
-				       1);
+				peer_info->n_slices < peer_info->max_slices ?
+				peer_info->max_slices - peer_info->n_slices :
+				0,
+				stats->n_slices,
+				1);
 	if (r < 0)
 		goto error_allocated;
 
 	r = bus1_user_quota_charge_one(&peer_info->user->n_handles,
-				       peer_info->n_handles,
-				       stats->n_handles,
-				       n_handles);
+				peer_info->n_handles < peer_info->max_handles ?
+				peer_info->max_handles - peer_info->n_handles :
+				0,
+				stats->n_handles,
+				n_handles);
 	if (r < 0)
 		goto error_messages;
 
 	r = bus1_user_quota_charge_one(&peer_info->user->n_fds,
-				       peer_info->n_fds,
+				       peer_info->n_fds < peer_info->max_fds ?
+				       peer_info->max_fds - peer_info->n_fds :
+				       0,
 				       stats->n_fds,
 				       n_fds);
 	if (r < 0)
 		goto error_handles;
 
 	/* charge the local quotas */
-	peer_info->n_bytes -= n_bytes;
-	peer_info->n_slices -= 1;
-	peer_info->n_handles -= n_handles;
-	peer_info->n_fds -= n_fds;
+	peer_info->n_bytes += n_bytes;
+	peer_info->n_slices += 1;
+	peer_info->n_handles += n_handles;
+	peer_info->n_fds += n_fds;
 	stats->n_bytes += n_bytes;
 	stats->n_slices += 1;
 	stats->n_handles += n_handles;
@@ -409,10 +417,19 @@ void bus1_user_quota_discharge(struct bus1_peer_info *peer_info,
 	if (WARN_ON(IS_ERR_OR_NULL(stats)))
 		return;
 
-	peer_info->n_bytes += n_bytes;
-	peer_info->n_slices += 1;
-	peer_info->n_handles += n_handles;
-	peer_info->n_fds += n_fds;
+	WARN_ON(peer_info->n_bytes < n_bytes);
+	WARN_ON(peer_info->n_slices < 1);
+	WARN_ON(peer_info->n_handles < n_handles);
+	WARN_ON(peer_info->n_fds < n_fds);
+	WARN_ON(stats->n_bytes < n_bytes);
+	WARN_ON(stats->n_slices < 1);
+	WARN_ON(stats->n_handles < n_handles);
+	WARN_ON(stats->n_fds < n_fds);
+
+	peer_info->n_bytes -= n_bytes;
+	peer_info->n_slices -= 1;
+	peer_info->n_handles -= n_handles;
+	peer_info->n_fds -= n_fds;
 	stats->n_bytes -= n_bytes;
 	stats->n_slices -= 1;
 	stats->n_handles -= n_handles;
@@ -446,20 +463,28 @@ void bus1_user_quota_commit(struct bus1_peer_info *peer_info,
 	if (WARN_ON(IS_ERR_OR_NULL(stats)))
 		return;
 
+	WARN_ON(peer_info->n_bytes < n_bytes);
+	WARN_ON(peer_info->n_handles < n_handles);
+	WARN_ON(peer_info->n_fds < n_fds);
+	WARN_ON(stats->n_bytes < n_bytes);
+	WARN_ON(stats->n_slices < 1);
+	WARN_ON(stats->n_handles < n_handles);
+	WARN_ON(stats->n_fds < n_fds);
+
 	stats->n_bytes -= n_bytes;
 	stats->n_slices -= 1;
 	stats->n_handles -= n_handles;
 	stats->n_fds -= n_fds;
 
 	/* Non-inflight memory is accounted externally; we can ignore it */
-	peer_info->n_bytes += n_bytes;
+	peer_info->n_bytes -= n_bytes;
 
 	/* FDs are externally accounted if non-inflight; we can ignore them */
-	peer_info->n_fds += n_fds;
+	peer_info->n_fds -= n_fds;
 	atomic_add(n_fds, &peer_info->user->n_fds);
 
 	/* XXX: properly track count of non-inflight handles */
-	peer_info->n_handles += n_handles;
+	peer_info->n_handles -= n_handles;
 	atomic_add(n_handles, &peer_info->user->n_handles);
 }
 

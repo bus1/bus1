@@ -75,6 +75,10 @@ struct bus1_peer_info {
 	size_t n_slices;
 	size_t n_handles;
 	size_t n_fds;
+	size_t max_bytes;
+	size_t max_slices;
+	size_t max_handles;
+	size_t max_fds;
 };
 
 /**
