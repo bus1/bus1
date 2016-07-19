@@ -39,10 +39,10 @@ static struct bus1_user *bus1_user_new(void)
 	kref_init(&u->ref);
 	u->id = BUS1_INTERNAL_UID_INVALID;
 	u->uid = INVALID_UID;
-	atomic_set(&u->n_messages, BUS1_MESSAGES_MAX);
+	atomic_set(&u->n_slices, BUS1_SLICES_MAX);
 	atomic_set(&u->n_handles, BUS1_HANDLES_MAX);
 	atomic_set(&u->n_fds, BUS1_FDS_MAX);
-	atomic_set(&u->max_messages, BUS1_MESSAGES_MAX);
+	atomic_set(&u->max_slices, BUS1_SLICES_MAX);
 	atomic_set(&u->max_handles, BUS1_HANDLES_MAX);
 	atomic_set(&u->max_fds, BUS1_FDS_MAX);
 
@@ -57,8 +57,8 @@ static void bus1_user_free(struct kref *ref)
 					atomic_read(&user->max_fds));
 	WARN_ON(atomic_read(&user->n_handles) !=
 					atomic_read(&user->max_handles));
-	WARN_ON(atomic_read(&user->n_messages) !=
-					atomic_read(&user->max_messages));
+	WARN_ON(atomic_read(&user->n_slices) !=
+					atomic_read(&user->max_slices));
 
 	/* if already dropped, it's set to invalid */
 	if (uid_valid(user->uid)) {
@@ -332,7 +332,7 @@ int bus1_user_quota_charge(struct bus1_peer_info *peer_info,
 	 * not used by any other user.
 	 */
 
-	BUILD_BUG_ON(BUS1_MESSAGES_MAX > U16_MAX);
+	BUILD_BUG_ON(BUS1_SLICES_MAX > U16_MAX);
 	BUILD_BUG_ON(BUS1_HANDLES_MAX > U16_MAX);
 	BUILD_BUG_ON(BUS1_FDS_MAX > U16_MAX);
 
@@ -343,9 +343,9 @@ int bus1_user_quota_charge(struct bus1_peer_info *peer_info,
 	if (r < 0)
 		return r;
 
-	r = bus1_user_quota_charge_one(&peer_info->user->n_messages,
-				       peer_info->n_messages,
-				       stats->n_messages,
+	r = bus1_user_quota_charge_one(&peer_info->user->n_slices,
+				       peer_info->n_slices,
+				       stats->n_slices,
 				       1);
 	if (r < 0)
 		goto error_allocated;
@@ -366,11 +366,11 @@ int bus1_user_quota_charge(struct bus1_peer_info *peer_info,
 
 	/* charge the local quotas */
 	peer_info->n_bytes -= size;
-	peer_info->n_messages -= 1;
+	peer_info->n_slices -= 1;
 	peer_info->n_handles -= n_handles;
 	peer_info->n_fds -= n_fds;
 	stats->n_bytes += size;
-	stats->n_messages += 1;
+	stats->n_slices += 1;
 	stats->n_handles += n_handles;
 	stats->n_fds += n_fds;
 
@@ -379,7 +379,7 @@ int bus1_user_quota_charge(struct bus1_peer_info *peer_info,
 error_handles:
 	atomic_add(n_handles, &peer_info->user->n_handles);
 error_messages:
-	atomic_inc(&peer_info->user->n_messages);
+	atomic_inc(&peer_info->user->n_slices);
 error_allocated:
 	/* memory has no per-user global limit; use memcgs */
 	return r;
@@ -410,14 +410,14 @@ void bus1_user_quota_discharge(struct bus1_peer_info *peer_info,
 		return;
 
 	peer_info->n_bytes += size;
-	peer_info->n_messages += 1;
+	peer_info->n_slices += 1;
 	peer_info->n_handles += n_handles;
 	peer_info->n_fds += n_fds;
 	stats->n_bytes -= size;
-	stats->n_messages -= 1;
+	stats->n_slices -= 1;
 	stats->n_handles -= n_handles;
 	stats->n_fds -= n_fds;
-	atomic_inc(&peer_info->user->n_messages);
+	atomic_inc(&peer_info->user->n_slices);
 	atomic_add(n_handles, &peer_info->user->n_handles);
 	atomic_add(n_fds, &peer_info->user->n_fds);
 }
@@ -447,7 +447,7 @@ void bus1_user_quota_commit(struct bus1_peer_info *peer_info,
 		return;
 
 	stats->n_bytes -= size;
-	stats->n_messages -= 1;
+	stats->n_slices -= 1;
 	stats->n_handles -= n_handles;
 	stats->n_fds -= n_fds;
 
@@ -472,7 +472,7 @@ void bus1_user_quota_release_slices(struct bus1_peer_info *peer_info,
 				    size_t n_slices, size_t size)
 {
 	peer_info->n_bytes += size;
-	peer_info->n_messages += n_slices;
-	atomic_add(n_slices, &peer_info->user->n_messages);
+	peer_info->n_slices += n_slices;
+	atomic_add(n_slices, &peer_info->user->n_slices);
 
 }

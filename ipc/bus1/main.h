@@ -69,18 +69,17 @@
 #include <linux/kernel.h>
 
 /**
- * BUS1_MESSAGES_MAX - per-user limit for maximum number of messages
+ * BUS1_SLICES_MAX - per-user limit for maximum number of slices
  *
- * This defines the limit on how many messages each user can have pinned. This
+ * This defines the limit on how many slices each user can have pinned. This
  * is just the global limit, a per-peer limit can be set at runtime as well, if
  * required.
  *
- * The message-limit controls the number of message a user can have assigned.
- * They are accounted, on the receiving user, on SEND and deaccounted on final
- * release. Queuing messages on a remote peer is subject to a per-sending-user
- * quota.
+ * The slice-limit controls the number of slices a user can have assigned. They
+ * are accounted, on the receiving user, on SEND and deaccounted on RELEASE.
+ * Queuing messages on a remote peer is subject to a per-sending-user quota.
  */
-#define BUS1_MESSAGES_MAX (16383)
+#define BUS1_SLICES_MAX (16383)
 
 /**
  * BUS1_HANDLES_MAX - per-user limit for maximum number of handles

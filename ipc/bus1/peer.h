@@ -51,7 +51,7 @@ struct bus1_message;
  * @seqcount:			sequence counter
  * @handle_ids:			handle ID allocator
  * @n_allocated:		remaining quota for allocated pool memory
- * @n_messages:			remaining quota for owned messages
+ * @n_slices:			remaining quota for owned slices
  * @n_handles:			remaining quota for owned handles
  * @n_fds:			remaining quota for inflight FDs
  */
@@ -72,7 +72,7 @@ struct bus1_peer_info {
 	u64 handle_ids;
 
 	size_t n_bytes;
-	size_t n_messages;
+	size_t n_slices;
 	size_t n_handles;
 	size_t n_fds;
 };

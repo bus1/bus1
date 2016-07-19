@@ -145,7 +145,7 @@ static struct bus1_peer_info *bus1_peer_info_new(wait_queue_head_t *waitq,
 	}
 
 	peer_info->n_bytes = n_bytes;
-	peer_info->n_messages = atomic_read(&peer_info->user->max_messages);
+	peer_info->n_slices = atomic_read(&peer_info->user->max_slices);
 	peer_info->n_handles = atomic_read(&peer_info->user->max_handles);
 	peer_info->n_fds = rlimit(RLIMIT_NOFILE);
 

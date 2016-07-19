@@ -75,10 +75,10 @@ struct bus1_user {
 	union {
 		struct rcu_head rcu;
 		struct {
-			atomic_t n_messages;
+			atomic_t n_slices;
 			atomic_t n_handles;
 			atomic_t n_fds;
-			atomic_t max_messages;
+			atomic_t max_slices;
 			atomic_t max_handles;
 			atomic_t max_fds;
 		};
@@ -88,13 +88,13 @@ struct bus1_user {
 /**
  * struct bus1_user_stats - quota statistics between a user and a peer
  * @n_bytes:		memory in bytes used by queued messages
- * @n_messages:		number of queued messages
+ * @n_slices:		number of queued slices
  * @n_handles:		number of queued handles
  * @n_fds:		number of queued fds
  */
 struct bus1_user_stats {
 	u32 n_bytes;
-	u16 n_messages;
+	u16 n_slices;
 	u16 n_handles;
 	u16 n_fds;
 };
