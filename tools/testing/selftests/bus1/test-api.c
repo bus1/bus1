@@ -88,7 +88,7 @@ static void test_api_connect(void)
 	memset(&query, 0, sizeof(query));
 	r = bus1_client_ioctl(c1, BUS1_CMD_PEER_QUERY, &query);
 	assert(r >= 0);
-	assert(query.pool_size == BUS1_CLIENT_POOL_SIZE);
+	assert(query.n_bytes == BUS1_CLIENT_POOL_SIZE);
 
 	/* disconnect and reconnect @c1 */
 
@@ -115,7 +115,7 @@ static void test_api_connect(void)
 	memset(&query, 0, sizeof(query));
 	r = bus1_client_ioctl(c2, BUS1_CMD_PEER_QUERY, &query);
 	assert(r >= 0);
-	assert(query.pool_size == BUS1_CLIENT_POOL_SIZE);
+	assert(query.n_bytes == BUS1_CLIENT_POOL_SIZE);
 
 	c2 = bus1_client_free(c2);
 	assert(!c2);

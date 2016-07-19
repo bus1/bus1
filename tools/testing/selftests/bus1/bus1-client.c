@@ -120,7 +120,7 @@ _public_ int bus1_client_query(struct bus1_client *client, size_t *pool_sizep)
 	}
 
 	peer_init.flags = 0;
-	peer_init.pool_size = 0;
+	peer_init.n_bytes = 0;
 
 	static_assert(_IOC_SIZE(BUS1_CMD_PEER_QUERY) == sizeof(peer_init),
 		      "ioctl is called with invalid argument size");
@@ -129,14 +129,14 @@ _public_ int bus1_client_query(struct bus1_client *client, size_t *pool_sizep)
 	if (r < 0)
 		return r;
 
-	assert(peer_init.pool_size != 0);
+	assert(peer_init.n_bytes != 0);
 
 	/* no reason to be atomic, but lets verify the semantics nonetheless */
-	old_size = __atomic_exchange_n(&client->pool_size, peer_init.pool_size,
+	old_size = __atomic_exchange_n(&client->pool_size, peer_init.n_bytes,
 				       __ATOMIC_RELEASE);
-	assert(old_size == 0 || old_size == peer_init.pool_size);
+	assert(old_size == 0 || old_size == peer_init.n_bytes);
 
-	*pool_sizep = peer_init.pool_size;
+	*pool_sizep = peer_init.n_bytes;
 	return 0;
 }
 
@@ -204,7 +204,7 @@ _public_ int bus1_client_init(struct bus1_client *client, size_t pool_size)
 	int r;
 
 	peer_init.flags = 0;
-	peer_init.pool_size = pool_size;
+	peer_init.n_bytes = pool_size;
 
 	static_assert(_IOC_SIZE(BUS1_CMD_PEER_INIT) == sizeof(peer_init),
 		      "ioctl is called with invalid argument size");
@@ -243,7 +243,7 @@ _public_ int bus1_client_clone(struct bus1_client *client,
 	int r;
 
 	peer_clone.flags = 0;
-	peer_clone.pool_size = pool_size;
+	peer_clone.n_bytes = pool_size;
 	peer_clone.parent_handle = *parent_handlep;
 	peer_clone.child_handle = *child_handlep;
 	peer_clone.fd = (uint64_t)*fdp;

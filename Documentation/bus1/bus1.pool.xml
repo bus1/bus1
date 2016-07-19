@@ -40,7 +40,7 @@
     <para>
       A peer's pool must be initialized before it can receive any messages. The
       pool is initialized by passing the desired size as the
-      <varname>pool_size</varname> member of
+      <varname>n_bytes</varname> member of
       <type>struct bus_cmd_peer_init</type> or
       <type>struct bus1_cmd_peer_clone</type> when calling
       <constant>BUS1_CMD_PEER_INIT</constant> or
@@ -107,7 +107,7 @@ uint8_t *buf = mmap(NULL, size, PROT_READ, MAP_SHARED, peer_fd, 0);
     <para>
       In order to map the entire pool, the <varname>size</varname> parameter in
       the example above should be set to the value of the
-      <varname>pool_size</varname> member of
+      <varname>n_bytes</varname> member of
       <type>struct bus1_cmd_peer_init</type> or
       <type>struct bus1_cmd_peer_clone</type> when
       <constant>BUS1_CMD_PEER_INIT</constant> or

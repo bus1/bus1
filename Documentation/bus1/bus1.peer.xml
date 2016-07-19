@@ -37,7 +37,7 @@
     <programlisting>
 struct bus1_cmd_peer_init {
   __u64 flags;
-  __u64 pool_size;
+  __u64 n_bytes;
 };
     </programlisting>
 
@@ -53,7 +53,7 @@ struct bus1_cmd_peer_init {
       </varlistentry>
 
       <varlistentry>
-        <term><varname>pool_size</varname></term>
+        <term><varname>n_bytes</varname></term>
         <listitem><para>
           The size of the pool in bytes to create for this peer.
         </para></listitem>
@@ -73,7 +73,7 @@ struct bus1_cmd_peer_init {
     <programlisting>
 struct bus1_cmd_peer_init {
   __u64 flags;
-  __u64 pool_size;
+  __u64 n_bytes;
 };
     </programlisting>
 
@@ -89,7 +89,7 @@ struct bus1_cmd_peer_init {
       </varlistentry>
 
       <varlistentry>
-        <term><varname>pool_size</varname></term>
+        <term><varname>n_bytes</varname></term>
         <listitem><para>
           The size of the pool in bytes to create for this peer. This must be
           set to <constant>0</constant> and is set to the existing pool size on
@@ -145,7 +145,7 @@ struct bus1_cmd_peer_reset {
     <programlisting>
 struct bus1_cmd_peer_clone {
   __u64 flags;
-  __u64 pool_size;
+  __u64 n_bytes;
   __u64 node;
   __u64 handle;
   __u64 fd;
@@ -164,7 +164,7 @@ struct bus1_cmd_peer_clone {
       </varlistentry>
 
       <varlistentry>
-        <term><varname>pool_size</varname></term>
+        <term><varname>n_bytes</varname></term>
         <listitem><para>
           The size of the pool in bytes to create for the new peer.
         </para></listitem>
