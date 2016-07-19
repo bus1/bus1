@@ -39,15 +39,15 @@ static void bus1_peer_info_reset(struct bus1_peer_info *peer_info, bool final)
 {
 	struct bus1_queue_node *node;
 	struct bus1_message *message;
-	size_t n_slices, size;
+	size_t n_slices;
 	LIST_HEAD(list);
 
 	bus1_handle_flush_all(peer_info, final);
 	bus1_queue_flush(&peer_info->queue, &list, final);
 
 	mutex_lock(&peer_info->lock);
-	bus1_pool_flush(&peer_info->pool, &n_slices, &size);
-	bus1_user_quota_release_slices(peer_info, n_slices, size);
+	bus1_pool_flush(&peer_info->pool, &n_slices);
+	bus1_user_quota_release_slices(peer_info, n_slices);
 	mutex_unlock(&peer_info->lock);
 
 	while ((node = list_first_entry_or_null(&list, struct bus1_queue_node,
@@ -515,7 +515,6 @@ static int bus1_peer_ioctl_slice_release(struct bus1_peer *peer,
 {
 	struct bus1_peer_info *peer_info = bus1_peer_dereference(peer);
 	u64 offset;
-	size_t size;
 	int r;
 
 	lockdep_assert_held(&peer->active);
@@ -526,12 +525,12 @@ static int bus1_peer_ioctl_slice_release(struct bus1_peer *peer,
 		return -EFAULT;
 
 	mutex_lock(&peer_info->lock);
-	r = bus1_pool_release_user(&peer_info->pool, offset, &size);
+	r = bus1_pool_release_user(&peer_info->pool, offset);
 	mutex_unlock(&peer_info->lock);
 	if (r < 0)
 		return r;
 
-	bus1_user_quota_release_slices(peer_info, 1, size);
+	bus1_user_quota_release_slices(peer_info, 1);
 
 	return 0;
 }

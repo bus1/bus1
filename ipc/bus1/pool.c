@@ -427,7 +427,6 @@ void bus1_pool_publish(struct bus1_pool *pool, struct bus1_pool_slice *slice)
  * bus1_pool_release_user() - release a public slice
  * @pool:	pool to operate on
  * @offset:	offset of slice to release
- * @sizep:	pointer to size of released slice
  *
  * Release the user-space reference to a pool-slice, specified via the offset
  * of the slice. If both, the user-space reference *and* the kernel-space
@@ -438,7 +437,7 @@ void bus1_pool_publish(struct bus1_pool *pool, struct bus1_pool_slice *slice)
  *
  * Return: 0 on success, negative error code on failure.
  */
-int bus1_pool_release_user(struct bus1_pool *pool, size_t offset, size_t *sizep)
+int bus1_pool_release_user(struct bus1_pool *pool, size_t offset)
 {
 	struct bus1_pool_slice *slice;
 
@@ -447,9 +446,6 @@ int bus1_pool_release_user(struct bus1_pool *pool, size_t offset, size_t *sizep)
 	slice = bus1_pool_slice_find_by_offset(pool, offset);
 	if (!slice || !slice->ref_user)
 		return -ENXIO;
-
-	if (sizep)
-		*sizep = slice->size;
 
 	slice->ref_user = false;
 	bus1_pool_free(pool, slice);
@@ -460,11 +456,12 @@ int bus1_pool_release_user(struct bus1_pool *pool, size_t offset, size_t *sizep)
 /**
  * bus1_pool_flush() - flush all user references
  * @pool:	pool to flush
+ * @n_slicesp:	pointer to number of flushed slices
  *
  * This flushes all user-references to any slice in @pool. Kernel references
  * are left untouched.
  */
-void bus1_pool_flush(struct bus1_pool *pool, size_t *n_slicesp, size_t *sizep)
+void bus1_pool_flush(struct bus1_pool *pool, size_t *n_slicesp)
 {
 	struct bus1_pool_slice *slice;
 	struct rb_node *node, *t;
@@ -473,8 +470,6 @@ void bus1_pool_flush(struct bus1_pool *pool, size_t *n_slicesp, size_t *sizep)
 
 	if (n_slicesp)
 		*n_slicesp = 0;
-	if (sizep)
-		*sizep = 0;
 
 	for (node = rb_first(&pool->slices_busy);
 	     node && ((t = rb_next(node)), true);
@@ -491,8 +486,6 @@ void bus1_pool_flush(struct bus1_pool *pool, size_t *n_slicesp, size_t *sizep)
 		 */
 		if (n_slicesp)
 			++ *n_slicesp;
-		if (sizep)
-			*sizep += slice->size;
 		slice->ref_user = false;
 		bus1_pool_free(pool, slice);
 	}

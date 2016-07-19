@@ -451,6 +451,9 @@ void bus1_user_quota_commit(struct bus1_peer_info *peer_info,
 	stats->n_handles -= n_handles;
 	stats->n_fds -= n_fds;
 
+	/* Non-inflight memory is accounted externally; we can ignore it */
+	peer_info->n_bytes += n_bytes;
+
 	/* FDs are externally accounted if non-inflight; we can ignore them */
 	peer_info->n_fds += n_fds;
 	atomic_add(n_fds, &peer_info->user->n_fds);
@@ -463,16 +466,17 @@ void bus1_user_quota_commit(struct bus1_peer_info *peer_info,
 /**
  * bus1_user_quota_release_slice() - deaccount the resources used by a slice
  * @peer_info:		peer with quota to operate on
- * @size:		size to commit
+ * @n_slices:		number of slices to release
  *
  * De-account the resources used by a slice, must be called after the slice is
  * released by the local peer.
  */
 void bus1_user_quota_release_slices(struct bus1_peer_info *peer_info,
-				    size_t n_slices, size_t size)
+				    size_t n_slices)
 {
-	peer_info->n_bytes += size;
-	peer_info->n_slices += n_slices;
+	WARN_ON(peer_info->n_slices < n_slices);
+
+	peer_info->n_slices -= n_slices;
 	atomic_add(n_slices, &peer_info->user->n_slices);
 
 }
