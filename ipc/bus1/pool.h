@@ -52,7 +52,7 @@ struct kvec;
 
 /* internal: number of bits available to slice size */
 #define BUS1_POOL_SLICE_SIZE_BITS (28)
-#define BUS1_POOL_SLICE_SIZE_MAX ((1 << BUS1_POOL_SLICE_SIZE_BITS) - 1)
+#define BUS1_POOL_SLICE_SIZE_MAX ((1 << BUS1_POOL_SLICE_SIZE_BITS) - 8)
 
 /**
  * struct bus1_pool_slice - pool slice
