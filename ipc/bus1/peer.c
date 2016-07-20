@@ -274,6 +274,32 @@ int bus1_peer_disconnect(struct bus1_peer *peer)
 }
 
 /**
+ * bus1_peer_connect() - connect peer
+ * @peer:		peer to operate on
+ *
+ * This connects a peer. It first creates the linked peer_info object and then
+ * markes the peer as active.
+ *
+ * The caller must make sure this function is called only once.
+ *
+ * Return: 0 on success, negative error code if already torn down.
+ */
+int bus1_peer_connect(struct bus1_peer *peer)
+{
+	struct bus1_peer_info *peer_info;
+
+	peer_info = bus1_peer_info_new(&peer->waitq);
+	if (IS_ERR(peer_info))
+		return PTR_ERR(peer_info);
+
+	rcu_assign_pointer(peer->info, peer_info);
+
+	bus1_active_activate(&peer->active);
+
+	return 0;
+}
+
+/**
  * bus1_peer_ioctl_init() - initialize peer
  * @peer:		peer to operate on
  * @arg:		ioctl argument
@@ -392,7 +418,7 @@ static int bus1_peer_ioctl_clone(struct bus1_peer *peer,
 {
 	struct bus1_cmd_peer_clone __user *uparam = (void __user *) arg;
 	struct bus1_cmd_peer_clone param;
-	struct bus1_peer_info *peer_info, *clone_info = NULL;
+	struct bus1_peer_info *peer_info;
 	struct bus1_peer *clone = NULL;
 	struct file *clone_file = NULL;
 	int r, fd;
@@ -431,22 +457,19 @@ static int bus1_peer_ioctl_clone(struct bus1_peer *peer,
 	}
 	clone_file->private_data = clone; /* released via f_op->release() */
 
-	clone_info = bus1_peer_info_new(&clone->waitq);
-	if (IS_ERR(clone_info)) {
-		r = PTR_ERR(clone_info);
-		clone_info = NULL;
+	r = bus1_peer_connect(clone);
+	if (r < 0)
 		goto error;
-	}
-	rcu_assign_pointer(clone->info, clone_info);
-	bus1_active_activate(&clone->active);
 
 	WARN_ON(!bus1_peer_acquire(clone));
 
 	/* pass handle from parent to child, allocating node if necessary */
 	r = bus1_handle_pair(peer, clone, &param.parent_handle,
 			     &param.child_handle);
-	if (r < 0)
+	if (r < 0) {
+		bus1_peer_release(clone);
 		goto error;
+	}
 
 	fd_install(fd, clone_file); /* consumes file reference */
 	bus1_peer_release(clone);
@@ -459,8 +482,6 @@ static int bus1_peer_ioctl_clone(struct bus1_peer *peer,
 	return 0;
 
 error:
-	if (clone_info)
-		bus1_peer_release(clone);
 	if (clone_file)
 		fput(clone_file);
 	else
