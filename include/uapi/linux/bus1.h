@@ -32,7 +32,6 @@
  *   EINVAL:            invalid ioctl parameters
  *   EMSGSIZE:          ioctl parameters are too small/large
  *   ENOMEM:            out of kernel memory
- *   ENOTCONN:          local peer is not initialized, yet
  *   ENOTTY:            unknown ioctl
  *   ENXIO:             invalid handle or slice
  *   EOPNOTSUPP:        could not pass file-descriptor of unsupported type

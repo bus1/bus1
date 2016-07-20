@@ -71,13 +71,6 @@ static unsigned int bus1_fop_poll(struct file *file,
 	poll_wait(file, &peer->waitq, wait);
 
 	/*
-	 * If the peer is still in state NEW, then CONNECT hasn't been called
-	 * and the peer is unused. Return no event at all.
-	 */
-	if (bus1_active_is_new(&peer->active))
-		return 0;
-
-	/*
 	 * We now dereference the peer object (which is rcu-protected). It
 	 * might be NULL during a racing DISCONNECT. If it is non-NULL *and*
 	 * the peer has not been deactivated, then the peer is live and thus
@@ -144,8 +137,6 @@ static long bus1_fop_ioctl(struct file *file,
 	case BUS1_CMD_SLICE_RELEASE:
 	case BUS1_CMD_SEND:
 	case BUS1_CMD_RECV:
-		if (bus1_active_is_new(&peer->active))
-			return -ENOTCONN;
 		if (!bus1_peer_acquire(peer))
 			return -ESHUTDOWN;
 		r = bus1_peer_ioctl(peer, file, cmd, arg);
