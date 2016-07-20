@@ -116,17 +116,10 @@ bus1_peer_info_free(struct bus1_peer_info *peer_info)
 	return NULL;
 }
 
-static struct bus1_peer_info *bus1_peer_info_new(wait_queue_head_t *waitq,
-						 size_t max_bytes,
-						 size_t max_slices,
-						 size_t max_handles,
-						 size_t max_fds)
+static struct bus1_peer_info *bus1_peer_info_new(wait_queue_head_t *waitq)
 {
 	struct bus1_peer_info *peer_info;
 	int r;
-
-	if (unlikely(max_bytes == 0 || !IS_ALIGNED(max_bytes, PAGE_SIZE)))
-		return ERR_PTR(-EINVAL);
 
 	peer_info = kmalloc(sizeof(*peer_info), GFP_KERNEL);
 	if (!peer_info)
@@ -147,11 +140,10 @@ static struct bus1_peer_info *bus1_peer_info_new(wait_queue_head_t *waitq,
 	peer_info->n_slices = 0;
 	peer_info->n_handles = 0;
 	peer_info->n_fds = 0;
-	peer_info->max_bytes = max_bytes;
-	peer_info->max_slices = max_slices;
-	peer_info->max_handles = max_handles;
-	peer_info->max_fds = max_fds;
-
+	peer_info->max_bytes = -1;
+	peer_info->max_slices = -1;
+	peer_info->max_handles = -1;
+	peer_info->max_fds = -1;
 
 	peer_info->user = bus1_user_ref_by_uid(peer_info->cred->uid);
 	if (IS_ERR(peer_info->user)) {
@@ -317,11 +309,14 @@ int bus1_peer_ioctl_init(struct bus1_peer *peer, unsigned long arg)
 	 * bus1_active_activate() for details). Hence, borrowing the waitq-lock
 	 * is perfectly fine.
 	 */
-	peer_info = bus1_peer_info_new(&peer->waitq, param.max_bytes,
-				       param.max_slices, param.max_handles,
-				       param.max_fds);
+	peer_info = bus1_peer_info_new(&peer->waitq);
 	if (IS_ERR(peer_info))
 		return PTR_ERR(peer_info);
+
+	peer_info->max_bytes = param.max_bytes;
+	peer_info->max_slices = param.max_slices;
+	peer_info->max_handles = param.max_handles;
+	peer_info->max_fds = param.max_fds;
 
 	spin_lock_irqsave(&peer->waitq.lock, flags);
 	if (bus1_active_is_deactivated(&peer->active)) {
@@ -438,9 +433,7 @@ static int bus1_peer_ioctl_clone(struct bus1_peer *peer,
 	}
 	clone_file->private_data = clone; /* released via f_op->release() */
 
-	clone_info = bus1_peer_info_new(&clone->waitq, param.max_bytes,
-					param.max_slices, param.max_handles,
-					param.max_fds);
+	clone_info = bus1_peer_info_new(&clone->waitq);
 	if (IS_ERR(clone_info)) {
 		r = PTR_ERR(clone_info);
 		clone_info = NULL;
@@ -448,6 +441,12 @@ static int bus1_peer_ioctl_clone(struct bus1_peer *peer,
 	}
 	rcu_assign_pointer(clone->info, clone_info);
 	bus1_active_activate(&clone->active);
+
+	clone_info->max_bytes = param.max_bytes;
+	clone_info->max_slices = param.max_slices;
+	clone_info->max_handles = param.max_handles;
+	clone_info->max_fds = param.max_fds;
+
 	WARN_ON(!bus1_peer_acquire(clone));
 
 	/* pass handle from parent to child, allocating node if necessary */
