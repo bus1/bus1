@@ -70,7 +70,7 @@ static void test_api_connect(void)
 	node = BUS1_NODE_FLAG_MANAGED | BUS1_NODE_FLAG_ALLOCATE;
 	handle = BUS1_HANDLE_INVALID;
 	fd = -1;
-	r = bus1_client_clone(c1, &node, &handle, &fd, BUS1_CLIENT_POOL_SIZE);
+	r = bus1_client_clone(c1, &node, &handle, &fd);
 	assert(r < 0);
 	assert(node == (BUS1_NODE_FLAG_MANAGED | BUS1_NODE_FLAG_ALLOCATE));
 	assert(handle == BUS1_HANDLE_INVALID);
@@ -103,7 +103,7 @@ static void test_api_connect(void)
 
 	/* clone new peer from @c1 and create @c2 from it */
 
-	r = bus1_client_clone(c1, &node, &handle, &fd, BUS1_CLIENT_POOL_SIZE);
+	r = bus1_client_clone(c1, &node, &handle, &fd);
 	assert(r >= 0);
 	assert(node != BUS1_HANDLE_INVALID);
 	assert(handle != BUS1_HANDLE_INVALID);
@@ -115,7 +115,10 @@ static void test_api_connect(void)
 	memset(&query, 0, sizeof(query));
 	r = bus1_client_ioctl(c2, BUS1_CMD_PEER_QUERY, &query);
 	assert(r >= 0);
-	assert(query.max_bytes == BUS1_CLIENT_POOL_SIZE);
+	assert(query.max_bytes == -1);
+	assert(query.max_slices == -1);
+	assert(query.max_handles == -1);
+	assert(query.max_fds == -1);
 
 	c2 = bus1_client_free(c2);
 	assert(!c2);
@@ -144,7 +147,7 @@ static void test_api_handle(void)
 	node = BUS1_NODE_FLAG_MANAGED | BUS1_NODE_FLAG_ALLOCATE;
 	handle = BUS1_HANDLE_INVALID;
 	fd = -1;
-	r = bus1_client_clone(c1, &node, &handle, &fd, BUS1_CLIENT_POOL_SIZE);
+	r = bus1_client_clone(c1, &node, &handle, &fd);
 	assert(r >= 0);
 	assert(node != (BUS1_NODE_FLAG_MANAGED | BUS1_NODE_FLAG_ALLOCATE));
 	assert(handle != BUS1_HANDLE_INVALID);

@@ -43,7 +43,8 @@ _public_ int bus1_client_new_from_fd(struct bus1_client **clientp, int fd)
 
 	client->fd = fd;
 	client->pool = NULL;
-	client->pool_size = 0;
+	/* XXX: remap the pool dynamically */
+	client->pool_size = 1024 * 1024 * 32;
 
 	*clientp = client;
 	client = NULL;
@@ -108,16 +109,14 @@ _public_ int bus1_client_ioctl(struct bus1_client *client,
 	return r >= 0 ? r : -errno;
 }
 
-_public_ int bus1_client_query(struct bus1_client *client, size_t *pool_sizep)
+_public_ int bus1_client_query(struct bus1_client *client,
+			       size_t *max_bytes,
+			       size_t *max_slices,
+			       size_t *max_handles,
+			       size_t *max_fds)
 {
 	struct bus1_cmd_peer_init peer_init;
-	size_t old_size;
 	int r;
-
-	if (_likely_(client->pool_size > 0)) {
-		*pool_sizep = client->pool_size;
-		return 0;
-	}
 
 	peer_init.flags = 0;
 	peer_init.max_bytes = 0;
@@ -132,31 +131,23 @@ _public_ int bus1_client_query(struct bus1_client *client, size_t *pool_sizep)
 	if (r < 0)
 		return r;
 
-	assert(peer_init.max_bytes != 0);
+	*max_bytes = peer_init.max_bytes;
+	*max_slices = peer_init.max_slices;
+	*max_handles = peer_init.max_handles;
+	*max_fds = peer_init.max_fds;
 
-	/* no reason to be atomic, but lets verify the semantics nonetheless */
-	old_size = __atomic_exchange_n(&client->pool_size, peer_init.max_bytes,
-				       __ATOMIC_RELEASE);
-	assert(old_size == 0 || old_size == peer_init.max_bytes);
-
-	*pool_sizep = peer_init.max_bytes;
 	return 0;
 }
 
 _public_ int bus1_client_mmap(struct bus1_client *client)
 {
 	const void *pool, *old_pool;
-	size_t pool_size, old_size;
-	int r;
-
-	r = bus1_client_query(client, &pool_size);
-	if (r < 0)
-		return r;
+	size_t pool_size;
 
 	/*
 	 * MMap the pool of @client with size @pool_size. Note that this might
-	 * be called in parallel on multiple threads. However, we got
-	 * @pool_size from the kernel, so it is guaranteed to never change.
+	 * be called in parallel on multiple threads. However, @pool_size is
+	 * static so that is fine.
 	 *
 	 * We first acquire @pool and see whether it is set. If it is, we know
 	 * we are already done so we simply bail out. If it is not set (i.e.,
@@ -172,30 +163,24 @@ _public_ int bus1_client_mmap(struct bus1_client *client)
 	 * fast-path).
 	 */
 
-	assert(pool_size > 0);
-
 	/* fastpath: sync'ed with atomic exchange (__ATOMIC_RELEASE) */
 	if (__atomic_load_n(&client->pool, __ATOMIC_ACQUIRE)) {
 		assert(pool_size == client->pool_size);
 		return 0;
 	}
 
-	pool = mmap(NULL, pool_size, PROT_READ, MAP_SHARED, client->fd, 0);
+	pool = mmap(NULL, client->pool_size, PROT_READ, MAP_SHARED,
+		    client->fd, 0);
 	if (pool == MAP_FAILED)
 		return -errno;
 
 	/* NULL is never mapped if we let the kernel choose; we rely on this */
 	assert(pool != NULL);
 
-	/* no reason to be atomic, but lets verify the semantics nonetheless */
-	old_size = __atomic_exchange_n(&client->pool_size, pool_size,
-				       __ATOMIC_RELEASE);
-	assert(old_size == 0 || old_size == pool_size);
-
 	old_pool = NULL;
 	if (!__atomic_compare_exchange_n(&client->pool, &old_pool, pool, false,
 					 __ATOMIC_RELEASE, __ATOMIC_ACQUIRE))
-		munmap((void *)pool, pool_size);
+		munmap((void *)pool, client->pool_size);
 
 	return 0;
 }
@@ -242,17 +227,12 @@ _public_ int bus1_client_reset(struct bus1_client *client)
 _public_ int bus1_client_clone(struct bus1_client *client,
 			       uint64_t *parent_handlep,
 			       uint64_t *child_handlep,
-			       int *fdp,
-			       size_t pool_size)
+			       int *fdp)
 {
 	struct bus1_cmd_peer_clone peer_clone;
 	int r;
 
 	peer_clone.flags = 0;
-	peer_clone.max_bytes = pool_size;
-	peer_clone.max_slices = -1;
-	peer_clone.max_handles = -1;
-	peer_clone.max_fds = -1;
 	peer_clone.parent_handle = *parent_handlep;
 	peer_clone.child_handle = *child_handlep;
 	peer_clone.fd = (uint64_t)*fdp;

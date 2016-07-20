@@ -84,8 +84,7 @@ static void test_basic(void)
 	node = BUS1_NODE_FLAG_MANAGED | BUS1_NODE_FLAG_ALLOCATE;
 	parent_handle = BUS1_HANDLE_INVALID;
 	fd = -1;
-	r = bus1_client_clone(parent, &node, &parent_handle, &fd,
-			      BUS1_CLIENT_POOL_SIZE);
+	r = bus1_client_clone(parent, &node, &parent_handle, &fd);
 	assert(r >= 0);
 
 	r = bus1_client_new_from_fd(&child1, fd);
@@ -126,8 +125,7 @@ static void test_basic(void)
 	node = BUS1_NODE_FLAG_MANAGED | BUS1_NODE_FLAG_ALLOCATE;
 	parent_handle = BUS1_HANDLE_INVALID;
 	fd = -1;
-	r = bus1_client_clone(parent, &node, &parent_handle, &fd,
-			      BUS1_CLIENT_POOL_SIZE);
+	r = bus1_client_clone(parent, &node, &parent_handle, &fd);
 	assert(r >= 0);
 
 	r = bus1_client_new_from_fd(&child2, fd);
@@ -234,8 +232,7 @@ static uint64_t test_iterate(unsigned int iterations,
 		node = BUS1_NODE_FLAG_MANAGED | BUS1_NODE_FLAG_ALLOCATE;
 		parent_handle = BUS1_HANDLE_INVALID;
 		fd = -1;
-		r = bus1_client_clone(parent, &node, &parent_handle,
-				      &fd, BUS1_CLIENT_POOL_SIZE);
+		r = bus1_client_clone(parent, &node, &parent_handle, &fd);
 		assert(r >= 0);
 
 		r = bus1_client_new_from_fd(children + i, fd);

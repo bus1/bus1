@@ -48,15 +48,18 @@ size_t bus1_client_get_pool_size(struct bus1_client *client);
 const void *bus1_client_get_pool(struct bus1_client *client);
 
 int bus1_client_ioctl(struct bus1_client *client, unsigned int cmd, void *arg);
-int bus1_client_query(struct bus1_client *client, size_t *pool_sizep);
+int bus1_client_query(struct bus1_client *client,
+		      size_t *n_bytes,
+		      size_t *n_slices,
+		      size_t *n_handles,
+		      size_t *n_fds);
 int bus1_client_mmap(struct bus1_client *client);
 int bus1_client_init(struct bus1_client *client, size_t pool_size);
 int bus1_client_reset(struct bus1_client *client);
 int bus1_client_clone(struct bus1_client *client,
 		      uint64_t *parent_handlep,
 		      uint64_t *child_handlep,
-		      int *fdp,
-		      size_t pool_size);
+		      int *fdp);
 
 int bus1_client_node_destroy(struct bus1_client *client, uint64_t handle);
 int bus1_client_handle_release(struct bus1_client *client, uint64_t handle);
