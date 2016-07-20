@@ -299,24 +299,12 @@ int bus1_peer_connect(struct bus1_peer *peer)
 	return 0;
 }
 
-/**
- * bus1_peer_ioctl_init() - initialize peer
- * @peer:		peer to operate on
- * @arg:		ioctl argument
- *
- * This initializes a peer that was created by an open() call, by creating a
- * peer_info object and linking it into the peer.
- *
- * The caller must not hold any active reference to the peer.
- *
- * Return: 0 on success, negative error code on failure.
- */
-int bus1_peer_ioctl_init(struct bus1_peer *peer, unsigned long arg)
+static int bus1_peer_ioctl_init(struct bus1_peer *peer, unsigned long arg)
 {
 	struct bus1_cmd_peer_init param;
 	struct bus1_peer_info *peer_info;
-	unsigned long flags;
-	int r;
+
+	lockdep_assert_held(&peer->active);
 
 	BUILD_BUG_ON(_IOC_SIZE(BUS1_CMD_PEER_INIT) != sizeof(param));
 
@@ -326,40 +314,16 @@ int bus1_peer_ioctl_init(struct bus1_peer *peer, unsigned long arg)
 	    unlikely(param.max_slices == 0))
 		return -EINVAL;
 
-	/*
-	 * To initialize the peer, we have to set @peer_info on @peer->info
-	 * *and* mark the active counter as active. Since this call is fully
-	 * unlocked we borrow @peer->waitq.lock to synchronize against parallel
-	 * connects *and* disconnects. The critical section just swaps the
-	 * pointer and performs a *single* attempt of an atomic cmpxchg (see
-	 * bus1_active_activate() for details). Hence, borrowing the waitq-lock
-	 * is perfectly fine.
-	 */
-	peer_info = bus1_peer_info_new(&peer->waitq);
-	if (IS_ERR(peer_info))
-		return PTR_ERR(peer_info);
+	peer_info = bus1_peer_dereference(peer);
 
+	mutex_lock(&peer_info->lock);
 	peer_info->max_bytes = param.max_bytes;
 	peer_info->max_slices = param.max_slices;
 	peer_info->max_handles = param.max_handles;
 	peer_info->max_fds = param.max_fds;
+	mutex_unlock(&peer_info->lock);
 
-	spin_lock_irqsave(&peer->waitq.lock, flags);
-	if (bus1_active_is_deactivated(&peer->active)) {
-		r = -ESHUTDOWN;
-	} else if (!rcu_access_pointer(peer->info)) {
-		rcu_assign_pointer(peer->info, peer_info);
-		bus1_active_activate(&peer->active);
-		peer_info = NULL; /* mark as consumed */
-		r = 0;
-	} else {
-		r = -EISCONN;
-	}
-	spin_unlock_irqrestore(&peer->waitq.lock, flags);
-
-	bus1_peer_info_free(peer_info);
-
-	return r;
+	return 0;
 }
 
 static int bus1_peer_ioctl_query(struct bus1_peer *peer, unsigned long arg)
@@ -367,6 +331,7 @@ static int bus1_peer_ioctl_query(struct bus1_peer *peer, unsigned long arg)
 	struct bus1_cmd_peer_init __user *uparam = (void __user  *) arg;
 	struct bus1_cmd_peer_init param;
 	struct bus1_peer_info *peer_info;
+	u64 max_bytes, max_slices, max_handles, max_fds;
 
 	lockdep_assert_held(&peer->active);
 
@@ -381,10 +346,17 @@ static int bus1_peer_ioctl_query(struct bus1_peer *peer, unsigned long arg)
 
 	peer_info = bus1_peer_dereference(peer);
 
-	if (put_user(peer_info->max_bytes, &uparam->max_bytes) ||
-	    put_user(peer_info->max_slices, &uparam->max_slices) ||
-	    put_user(peer_info->max_handles, &uparam->max_handles) ||
-	    put_user(peer_info->max_fds, &uparam->max_fds))
+	mutex_lock(&peer_info->lock);
+	max_bytes = peer_info->max_bytes;
+	max_slices = peer_info->max_slices;
+	max_handles = peer_info->max_handles;
+	max_fds = peer_info->max_fds;
+	mutex_unlock(&peer_info->lock);
+
+	if (put_user(max_bytes, &uparam->max_bytes) ||
+	    put_user(max_slices, &uparam->max_slices) ||
+	    put_user(max_handles, &uparam->max_handles) ||
+	    put_user(max_fds, &uparam->max_fds))
 		return -EFAULT;
 
 	return 0;
@@ -840,6 +812,8 @@ int bus1_peer_ioctl(struct bus1_peer *peer,
 	lockdep_assert_held(&peer->active);
 
 	switch (cmd) {
+	case BUS1_CMD_PEER_INIT:
+		return bus1_peer_ioctl_init(peer, arg);
 	case BUS1_CMD_PEER_QUERY:
 		return bus1_peer_ioctl_query(peer, arg);
 	case BUS1_CMD_PEER_RESET:

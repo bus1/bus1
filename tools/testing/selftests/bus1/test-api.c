@@ -65,17 +65,12 @@ static void test_api_connect(void)
 	r = bus1_client_new_from_path(&c1, test_path);
 	assert(r >= 0);
 
-	/* verify clone fails if origin is unconnected */
-
-	node = BUS1_NODE_FLAG_MANAGED | BUS1_NODE_FLAG_ALLOCATE;
-	r = bus1_client_clone(c1, &node, &handle, &fd);
-	assert(r < 0);
-
+	/* verify that query succeeds even before the first init */
 	memset(&query, 0, sizeof(query));
 	r = bus1_client_ioctl(c1, BUS1_CMD_PEER_QUERY, &query);
-	assert(r == -ENOTCONN);
+	assert(r >= 0);
 
-	/* connect @c1 properly */
+	/* initialize @c1 properly */
 
 	r = bus1_client_init(c1, BUS1_CLIENT_POOL_SIZE);
 	assert(r >= 0);

@@ -35,10 +35,17 @@
 static int bus1_fop_open(struct inode *inode, struct file *file)
 {
 	struct bus1_peer *peer;
+	int r;
 
 	peer = bus1_peer_new();
 	if (IS_ERR(peer))
 		return PTR_ERR(peer);
+
+	r = bus1_peer_connect(peer);
+	if (r < 0) {
+		bus1_peer_free(peer);
+		return r;
+	}
 
 	file->private_data = peer;
 	return 0;
@@ -129,7 +136,6 @@ static long bus1_fop_ioctl(struct file *file,
 
 	switch (cmd) {
 	case BUS1_CMD_PEER_INIT:
-		return bus1_peer_ioctl_init(peer, arg);
 	case BUS1_CMD_PEER_QUERY:
 	case BUS1_CMD_PEER_RESET:
 	case BUS1_CMD_PEER_CLONE:
