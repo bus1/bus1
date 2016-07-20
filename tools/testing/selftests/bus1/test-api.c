@@ -68,13 +68,8 @@ static void test_api_connect(void)
 	/* verify clone fails if origin is unconnected */
 
 	node = BUS1_NODE_FLAG_MANAGED | BUS1_NODE_FLAG_ALLOCATE;
-	handle = BUS1_HANDLE_INVALID;
-	fd = -1;
 	r = bus1_client_clone(c1, &node, &handle, &fd);
 	assert(r < 0);
-	assert(node == (BUS1_NODE_FLAG_MANAGED | BUS1_NODE_FLAG_ALLOCATE));
-	assert(handle == BUS1_HANDLE_INVALID);
-	assert(fd == -1);
 
 	memset(&query, 0, sizeof(query));
 	r = bus1_client_ioctl(c1, BUS1_CMD_PEER_QUERY, &query);
@@ -103,6 +98,7 @@ static void test_api_connect(void)
 
 	/* clone new peer from @c1 and create @c2 from it */
 
+	node = BUS1_NODE_FLAG_MANAGED | BUS1_NODE_FLAG_ALLOCATE;
 	r = bus1_client_clone(c1, &node, &handle, &fd);
 	assert(r >= 0);
 	assert(node != BUS1_HANDLE_INVALID);
@@ -145,8 +141,6 @@ static void test_api_handle(void)
 	assert(r >= 0);
 
 	node = BUS1_NODE_FLAG_MANAGED | BUS1_NODE_FLAG_ALLOCATE;
-	handle = BUS1_HANDLE_INVALID;
-	fd = -1;
 	r = bus1_client_clone(c1, &node, &handle, &fd);
 	assert(r >= 0);
 	assert(node != (BUS1_NODE_FLAG_MANAGED | BUS1_NODE_FLAG_ALLOCATE));

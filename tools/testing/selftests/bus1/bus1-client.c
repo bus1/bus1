@@ -234,8 +234,8 @@ _public_ int bus1_client_clone(struct bus1_client *client,
 
 	peer_clone.flags = 0;
 	peer_clone.parent_handle = *parent_handlep;
-	peer_clone.child_handle = *child_handlep;
-	peer_clone.fd = (uint64_t)*fdp;
+	peer_clone.child_handle = BUS1_HANDLE_INVALID;
+	peer_clone.fd = (uint64_t)-1;
 
 	static_assert(_IOC_SIZE(BUS1_CMD_PEER_CLONE) == sizeof(peer_clone),
 		      "ioctl is called with invalid argument size");

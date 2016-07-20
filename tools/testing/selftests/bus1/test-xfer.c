@@ -59,8 +59,6 @@ static void test_xfer_multicast(void)
 	assert(r >= 0);
 
 	node2 = BUS1_NODE_FLAG_MANAGED | BUS1_NODE_FLAG_ALLOCATE;
-	handle2 = BUS1_HANDLE_INVALID;
-	fd = -1;
 	r = bus1_client_clone(c1, &node2, &handle2, &fd);
 	assert(r >= 0);
 	r = bus1_client_new_from_fd(&c2, fd);
@@ -69,8 +67,6 @@ static void test_xfer_multicast(void)
 	assert(r >= 0);
 
 	node3 = BUS1_NODE_FLAG_MANAGED | BUS1_NODE_FLAG_ALLOCATE;
-	handle3 = BUS1_HANDLE_INVALID;
-	fd = -1;
 	r = bus1_client_clone(c1, &node3, &handle3, &fd);
 	assert(r >= 0);
 	r = bus1_client_new_from_fd(&c3, fd);
