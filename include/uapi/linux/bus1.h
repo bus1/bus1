@@ -30,7 +30,6 @@
  *   EFAULT:            cannot access ioctl parameters
  *   EHOSTUNREACH:      destination node has been destroyed
  *   EINVAL:            invalid ioctl parameters
- *   EISCONN:           local peer is already initialized
  *   EMSGSIZE:          ioctl parameters are too small/large
  *   ENOMEM:            out of kernel memory
  *   ENOTCONN:          local peer is not initialized, yet

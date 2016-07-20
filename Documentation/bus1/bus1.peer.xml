@@ -26,12 +26,82 @@
   </refsect1>
 
   <refsect1>
+    <title>Creating a new peer</title>
+    <para>
+      A new peer can be created by calling
+      <citerefentry>
+        <refentrytitle>open</refentrytitle>
+        <manvolnum>2</manvolnum>
+      </citerefentry>
+      on <filename>/dev/bus1</filename>. The returned file-descriptor represents
+      a new peer disconnected from all existing peers.
+    </para>
+  </refsect1>
+
+  <refsect1>
+    <title>Cloning an existing peer</title>
+    <para>
+      A new peer can be created from an existing one by calling the
+      <constant>BUS1_CMD_PEER_CLONE</constant> ioctl on a file-descriptor
+      representing the existing peer. A handle from the parent is passed in and
+      installed in the child. The ioctl takes a
+      <type>struct bus1_cmd_peer_clone</type> struct as argument.
+    </para>
+
+    <programlisting>
+struct bus1_cmd_peer_clone {
+  __u64 flags;
+  __u64 parent_handle;
+  __u64 child_handle;
+  __u64 fd;
+};
+    </programlisting>
+
+    <para>The fields in this structure are described below</para>
+
+    <variablelist>
+      <varlistentry>
+        <term><varname>flags</varname></term>
+        <listitem><para>
+          Flags to apply to the new peer. This must be set to
+          <constant>0</constant>.
+        </para></listitem>
+      </varlistentry>
+
+      <varlistentry>
+        <term><varname>parent_handle</varname></term>
+        <listitem><para>
+          A handle from the parent peer to be passed to the child.
+        </para></listitem>
+      </varlistentry>
+
+      <varlistentry>
+        <term><varname>child_handle</varname></term>
+        <listitem><para>
+          The handle installed in the new peer. This must be set to
+          <constant>BUS1_HANDLE_INVALID</constant> and is set to the new handle
+          on return.
+        </para></listitem>
+      </varlistentry>
+
+      <varlistentry>
+        <term><varname>fd</varname></term>
+        <listitem><para>
+          The file-descriptor representing the new peer. This must be set to
+          <constant>-1</constant> and is set to the new file-descriptor on
+          return.
+        </para></listitem>
+      </varlistentry>
+
+    </variablelist>
+  </refsect1>
+  <refsect1>
     <title>Initializing a peer</title>
     <para>
-      A peer created by calling <function>open()</function> on
-      <filename>/dev/bus1</filename> needs to be initialized using the
+      A peer can be initialized and reinitalized at any time by using the
       <constant>BUS1_CMD_PEER_INIT</constant> ioctl. The ioctl takes a
-      <type>struct bus1_cmd_peer_init</type> struct as argument.
+      <type>struct bus1_cmd_peer_init</type> struct as argument. If the ioctl is
+      never called, the values are left at their defaults indicated below.
     </para>
 
     <programlisting>
@@ -58,7 +128,8 @@ struct bus1_cmd_peer_init {
       <varlistentry>
         <term><varname>max_bytes</varname></term>
         <listitem><para>
-          The size of the pool in bytes to create for this peer.
+          The size of the pool in bytes to create for this peer. This defaults
+          to <constant>-1</constant>.
         </para></listitem>
       </varlistentry>
 
@@ -66,6 +137,7 @@ struct bus1_cmd_peer_init {
         <term><varname>max_slices</varname></term>
         <listitem><para>
           The maximum number of slices in the pool to create for the new peer.
+          This defaults to <constant>-1</constant>.
         </para></listitem>
       </varlistentry>
 
@@ -73,14 +145,15 @@ struct bus1_cmd_peer_init {
         <term><varname>max_handles</varname></term>
         <listitem><para>
           The maximum number of handles the new peer can hold, in-flight or
-          received.
+          received. This defaults to <constant>-1</constant>.
         </para></listitem>
       </varlistentry>
 
       <varlistentry>
         <term><varname>max_fds</varname></term>
         <listitem><para>
-          The maximum number of in-flight fds destined for this peer.
+          The maximum number of in-flight file-descriptors destined for this
+          peer. This defaults to <constant>-1</constant>.
         </para></listitem>
       </varlistentry>
 
@@ -119,36 +192,38 @@ struct bus1_cmd_peer_init {
       <varlistentry>
         <term><varname>max_bytes</varname></term>
         <listitem><para>
-          The size of the pool in bytes to create for this peer. This must be
-          set to <constant>0</constant> and is set to the existing pool size on
-          return.
+          The maximum number of in-flight bytes that can be destined for this
+          peer. This must be set to <constant>0</constant> and is set to the
+          existing limit on return.
         </para></listitem>
       </varlistentry>
 
       <varlistentry>
         <term><varname>max_slices</varname></term>
         <listitem><para>
-          Unused. This must be set to <constant>0</constant> and is set to
-          <constant>0</constant> on return.
+          The maximum number of slices that can be accounted on this peer. Both
+          in-flight and dequeued. This must be set to <constant>0</constant> and
+          is set to the existing limit on return.
         </para></listitem>
       </varlistentry>
 
       <varlistentry>
         <term><varname>max_handles</varname></term>
         <listitem><para>
-          Unused. This must be set to <constant>0</constant> and is set to
-          <constant>0</constant> on return.
+          The maximum number of handles that can be accounted on this peer. Both
+          in-flight and dequeued. This must be set to <constant>0</constant> and
+          is set to the existing limit on return.
         </para></listitem>
       </varlistentry>
 
       <varlistentry>
         <term><varname>max_fds</varname></term>
         <listitem><para>
-          Unused. This must be set to <constant>0</constant> and is set to
-          <constant>0</constant> on return.
+          The maximum number of in-flight file-descriptors that can be destined
+          for this peer. This must be set to <constant>0</constant> and is set
+          to the existing limit on return.
         </para></listitem>
       </varlistentry>
-
     </variablelist>
   </refsect1>
 
@@ -182,102 +257,6 @@ struct bus1_cmd_peer_reset {
     </variablelist>
   </refsect1>
 
-
-  <refsect1>
-    <title>Cloning a peer</title>
-    <para>
-      A new peer can be created from an existing one by calling the
-      <constant>BUS1_CMD_PEER_CLONE</constant> ioctl on a file-descriptor
-      representing the existing peer. A root node is created for the new peer
-      and a handle to this node is installed in both the new and the existing
-      peer. The ioctl takes a <type>struct bus1_cmd_peer_clone</type> struct as
-      argument.
-    </para>
-
-    <programlisting>
-struct bus1_cmd_peer_clone {
-  __u64 flags;
-  __u64 max_bytes;
-  __u64 max_slices;
-  __u64 max_handles;
-  __u64 max_fds;
-  __u64 node;
-  __u64 handle;
-  __u64 fd;
-};
-    </programlisting>
-
-    <para>The fields in this structure are described below</para>
-
-    <variablelist>
-      <varlistentry>
-        <term><varname>flags</varname></term>
-        <listitem><para>
-          Flags to apply to the new peer. This must be set to
-          <constant>0</constant>.
-        </para></listitem>
-      </varlistentry>
-
-      <varlistentry>
-        <term><varname>max_bytes</varname></term>
-        <listitem><para>
-          The size of the pool in bytes to create for the new peer.
-        </para></listitem>
-      </varlistentry>
-
-      <varlistentry>
-        <term><varname>max_slices</varname></term>
-        <listitem><para>
-          The maximum number of slices in the pool to create for the new peer.
-        </para></listitem>
-      </varlistentry>
-
-      <varlistentry>
-        <term><varname>max_handles</varname></term>
-        <listitem><para>
-          The maximum number of handles the new peer can hold, in-flight or
-          received.
-        </para></listitem>
-      </varlistentry>
-
-      <varlistentry>
-        <term><varname>max_fds</varname></term>
-        <listitem><para>
-          The maximum number of in-flight fds destined for this peer.
-        </para></listitem>
-      </varlistentry>
-
-      <varlistentry>
-        <term><varname>node</varname></term>
-        <listitem><para>
-          The handle installed in the new peer, pointing to a newly allocated
-          node there. This must be set to
-          <constant>BUS1_HANDLE_INVALID</constant> and is set to the new handle
-          on return.
-        </para></listitem>
-      </varlistentry>
-
-      <varlistentry>
-        <term><varname>handle</varname></term>
-        <listitem><para>
-          The handle installed in the existing peer for the root node in the new
-          peer. This must be set to <constant>BUS1_HANDLE_INVALID</constant> and
-          is set to the new handle on return.
-        </para></listitem>
-      </varlistentry>
-
-      <varlistentry>
-        <term><varname>fd</varname></term>
-        <listitem><para>
-          The file-descriptor representing the new peer. This must be set to
-          <constant>-1</constant> and is set to the new file-descriptor on
-          return.
-        </para></listitem>
-      </varlistentry>
-
-    </variablelist>
-  </refsect1>
-
   <refsect1>
     <title>Return value</title>
     <para>
@@ -288,24 +267,8 @@ struct bus1_cmd_peer_clone {
         <refentrytitle>bus1</refentrytitle>
         <manvolnum>7</manvolnum>
       </citerefentry>
-      for a list of possible error codes, in addition to the ones listed below.
+      for a list of possible error codes.
     </para>
-
-    <refsect2>
-      <title>
-        <constant>BUS1_CMD_PEER_INIT</constant> may fail with the following
-        errors
-      </title>
-
-      <variablelist>
-        <varlistentry>
-          <term><constant>EISCONN</constant></term>
-          <listitem><para>
-            Local peer is already initialized.
-          </para></listitem>
-        </varlistentry>
-      </variablelist>
-    </refsect2>
   </refsect1>
 
   <refsect1>
