@@ -404,8 +404,6 @@ static int bus1_peer_ioctl_clone(struct bus1_peer *peer,
 	if (copy_from_user(&param, (void __user *)arg, sizeof(param)))
 		return -EFAULT;
 	if (unlikely(param.flags) ||
-	    unlikely(param.max_bytes == 0) ||
-	    unlikely(param.max_slices == 0) ||
 	    unlikely(param.child_handle != BUS1_HANDLE_INVALID) ||
 	    unlikely(param.fd != (u64)-1))
 		return -EINVAL;
@@ -441,11 +439,6 @@ static int bus1_peer_ioctl_clone(struct bus1_peer *peer,
 	}
 	rcu_assign_pointer(clone->info, clone_info);
 	bus1_active_activate(&clone->active);
-
-	clone_info->max_bytes = param.max_bytes;
-	clone_info->max_slices = param.max_slices;
-	clone_info->max_handles = param.max_handles;
-	clone_info->max_fds = param.max_fds;
 
 	WARN_ON(!bus1_peer_acquire(clone));
 

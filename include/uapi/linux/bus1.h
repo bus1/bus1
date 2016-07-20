@@ -72,10 +72,6 @@ struct bus1_cmd_peer_reset {
 
 struct bus1_cmd_peer_clone {
 	__u64 flags;
-	__u64 max_bytes;
-	__u64 max_slices;
-	__u64 max_handles;
-	__u64 max_fds;
 	__u64 parent_handle;
 	__u64 child_handle;
 	__u64 fd;
