@@ -94,6 +94,8 @@ static void test_api_connect(void)
 	/* clone new peer from @c1 and create @c2 from it */
 
 	node = BUS1_NODE_FLAG_MANAGED | BUS1_NODE_FLAG_ALLOCATE;
+	handle = BUS1_HANDLE_INVALID;
+	fd = -1;
 	r = bus1_client_clone(c1, &node, &handle, &fd);
 	assert(r >= 0);
 	assert(node != BUS1_HANDLE_INVALID);
@@ -136,6 +138,8 @@ static void test_api_handle(void)
 	assert(r >= 0);
 
 	node = BUS1_NODE_FLAG_MANAGED | BUS1_NODE_FLAG_ALLOCATE;
+	handle = BUS1_HANDLE_INVALID;
+	fd = -1;
 	r = bus1_client_clone(c1, &node, &handle, &fd);
 	assert(r >= 0);
 	assert(node != (BUS1_NODE_FLAG_MANAGED | BUS1_NODE_FLAG_ALLOCATE));
