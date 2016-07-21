@@ -413,6 +413,8 @@ void bus1_user_quota_discharge(struct bus1_peer_info *peer_info,
 {
 	struct bus1_user_stats *stats;
 
+	lockdep_assert_held(&peer_info->lock);
+
 	stats = bus1_user_quota_query(&peer_info->quota, user);
 	if (WARN_ON(IS_ERR_OR_NULL(stats)))
 		return;
@@ -459,6 +461,8 @@ void bus1_user_quota_commit(struct bus1_peer_info *peer_info,
 {
 	struct bus1_user_stats *stats;
 
+	lockdep_assert_held(&peer_info->lock);
+
 	stats = bus1_user_quota_query(&peer_info->quota, user);
 	if (WARN_ON(IS_ERR_OR_NULL(stats)))
 		return;
@@ -499,6 +503,9 @@ void bus1_user_quota_commit(struct bus1_peer_info *peer_info,
 void bus1_user_quota_release_slices(struct bus1_peer_info *peer_info,
 				    size_t n_slices)
 {
+
+	lockdep_assert_held(&peer_info->lock);
+
 	WARN_ON(peer_info->n_slices < n_slices);
 
 	peer_info->n_slices -= n_slices;

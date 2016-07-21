@@ -526,13 +526,14 @@ static int bus1_peer_ioctl_slice_release(struct bus1_peer *peer,
 
 	mutex_lock(&peer_info->lock);
 	r = bus1_pool_release_user(&peer_info->pool, offset);
-	mutex_unlock(&peer_info->lock);
 	if (r < 0)
-		return r;
+		goto exit;
 
 	bus1_user_quota_release_slices(peer_info, 1);
 
-	return 0;
+exit:
+	mutex_unlock(&peer_info->lock);
+	return r;
 }
 
 static int bus1_peer_ioctl_send(struct bus1_peer *peer, unsigned long arg)
