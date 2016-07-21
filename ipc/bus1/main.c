@@ -127,24 +127,12 @@ static long bus1_fop_ioctl(struct file *file,
 	struct bus1_peer *peer = file->private_data;
 	int r;
 
-	switch (cmd) {
-	case BUS1_CMD_PEER_INIT:
-	case BUS1_CMD_PEER_QUERY:
-	case BUS1_CMD_PEER_RESET:
-	case BUS1_CMD_PEER_CLONE:
-	case BUS1_CMD_NODE_DESTROY:
-	case BUS1_CMD_HANDLE_RELEASE:
-	case BUS1_CMD_SLICE_RELEASE:
-	case BUS1_CMD_SEND:
-	case BUS1_CMD_RECV:
-		if (!bus1_peer_acquire(peer))
-			return -ESHUTDOWN;
-		r = bus1_peer_ioctl(peer, file, cmd, arg);
-		bus1_peer_release(peer);
-		return r;
-	}
+	if (!bus1_peer_acquire(peer))
+		return -ESHUTDOWN;
+	r = bus1_peer_ioctl(peer, file, cmd, arg);
+	bus1_peer_release(peer);
 
-	return -ENOTTY;
+	return r;
 }
 
 static void bus1_fop_show_fdinfo(struct seq_file *m, struct file *file)
