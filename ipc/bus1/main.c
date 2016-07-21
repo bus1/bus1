@@ -126,9 +126,10 @@ static long bus1_fop_ioctl(struct file *file,
 
 	if (!bus1_peer_acquire(peer))
 		return -ESHUTDOWN;
-	r = bus1_peer_ioctl(peer, file, cmd, arg);
-	bus1_peer_release(peer);
 
+	r = bus1_peer_ioctl(peer, file, cmd, arg);
+
+	bus1_peer_release(peer);
 	return r;
 }
 
