@@ -230,6 +230,35 @@ struct bus1_peer *bus1_peer_free(struct bus1_peer *peer)
 	return NULL;
 }
 
+/**
+ * bus1_peer_connect() - connect peer
+ * @peer:		peer to operate on
+ *
+ * This connects a peer. It first creates the linked peer_info object and then
+ * markes the peer as active.
+ *
+ * The caller must make sure this function is called only once.
+ *
+ * Return: 0 on success, negative error code if already torn down.
+ */
+int bus1_peer_connect(struct bus1_peer *peer)
+{
+	struct bus1_peer_info *peer_info;
+
+	if (WARN_ON(!bus1_active_is_new(&peer->active)))
+		return -ENOTRECOVERABLE;
+
+	peer_info = bus1_peer_info_new(&peer->waitq);
+	if (IS_ERR(peer_info))
+		return PTR_ERR(peer_info);
+
+	rcu_assign_pointer(peer->info, peer_info);
+
+	bus1_active_activate(&peer->active);
+
+	return 0;
+}
+
 static void bus1_peer_cleanup(struct bus1_active *active, void *userdata)
 {
 	struct bus1_peer *peer = container_of(active, struct bus1_peer, active);
@@ -269,35 +298,6 @@ int bus1_peer_disconnect(struct bus1_peer *peer)
 	if (!bus1_active_cleanup(&peer->active, &peer->waitq,
 				 bus1_peer_cleanup, NULL))
 		return -ESHUTDOWN;
-
-	return 0;
-}
-
-/**
- * bus1_peer_connect() - connect peer
- * @peer:		peer to operate on
- *
- * This connects a peer. It first creates the linked peer_info object and then
- * markes the peer as active.
- *
- * The caller must make sure this function is called only once.
- *
- * Return: 0 on success, negative error code if already torn down.
- */
-int bus1_peer_connect(struct bus1_peer *peer)
-{
-	struct bus1_peer_info *peer_info;
-
-	if (WARN_ON(!bus1_active_is_new(&peer->active)))
-		return -ENOTRECOVERABLE;
-
-	peer_info = bus1_peer_info_new(&peer->waitq);
-	if (IS_ERR(peer_info))
-		return PTR_ERR(peer_info);
-
-	rcu_assign_pointer(peer->info, peer_info);
-
-	bus1_active_activate(&peer->active);
 
 	return 0;
 }
