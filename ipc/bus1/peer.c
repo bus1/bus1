@@ -234,14 +234,14 @@ static void bus1_peer_cleanup(struct bus1_active *active, void *userdata)
 {
 	struct bus1_peer *peer = container_of(active, struct bus1_peer, active);
 	struct bus1_peer_info *peer_info;
-	unsigned long flags;
 
-	/* see bus1_peer_connect_new(); we borrow the waitq-lock here */
-	spin_lock_irqsave(&peer->waitq.lock, flags);
-	peer_info = rcu_dereference_protected(peer->info,
-					lockdep_is_held(&peer->waitq.lock));
+	/*
+	 * bus1_active guarantees that this function is called exactly once,
+	 * and that it cannot race bus1_peer_connect(). It is therefore safe
+	 * to access the info obect without any locking.
+	 */
+	peer_info = rcu_dereference_raw(peer->info);
 	rcu_assign_pointer(peer->info, NULL);
-	spin_unlock_irqrestore(&peer->waitq.lock, flags);
 
 	bus1_peer_info_free(peer_info);
 }
@@ -287,6 +287,9 @@ int bus1_peer_disconnect(struct bus1_peer *peer)
 int bus1_peer_connect(struct bus1_peer *peer)
 {
 	struct bus1_peer_info *peer_info;
+
+	if (WARN_ON(!bus1_active_is_new(&peer->active)))
+		return -ENOTRECOVERABLE;
 
 	peer_info = bus1_peer_info_new(&peer->waitq);
 	if (IS_ERR(peer_info))
