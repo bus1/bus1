@@ -511,7 +511,7 @@ static int bus1_peer_ioctl_handle_release(struct bus1_peer *peer,
 static int bus1_peer_ioctl_slice_release(struct bus1_peer *peer,
 					 unsigned long arg)
 {
-	struct bus1_peer_info *peer_info = bus1_peer_dereference(peer);
+	struct bus1_peer_info *peer_info;
 	u64 offset;
 	int r;
 
@@ -521,6 +521,8 @@ static int bus1_peer_ioctl_slice_release(struct bus1_peer *peer,
 
 	if (get_user(offset, (const u64 __user *)arg))
 		return -EFAULT;
+
+	peer_info = bus1_peer_dereference(peer);
 
 	mutex_lock(&peer_info->lock);
 	r = bus1_pool_release_user(&peer_info->pool, offset);
@@ -680,8 +682,7 @@ static int bus1_peer_dequeue(struct bus1_peer_info *peer_info,
 		bus1_pool_publish(&peer_info->pool, message->slice);
 		bus1_message_dequeue(message, peer_info);
 		param->type = BUS1_MSG_DATA;
-		memcpy(&param->data, &message->data,
-		       sizeof(param->data));
+		memcpy(&param->data, &message->data, sizeof(param->data));
 		break;
 
 	case BUS1_QUEUE_NODE_HANDLE_DESTRUCTION:
@@ -731,8 +732,7 @@ static int bus1_peer_peek(struct bus1_peer_info *peer_info,
 		message = bus1_message_from_node(node);
 		bus1_pool_publish(&peer_info->pool, message->slice);
 		param->type = BUS1_MSG_DATA;
-		memcpy(&param->data, &message->data,
-		       sizeof(param->data));
+		memcpy(&param->data, &message->data, sizeof(param->data));
 		bus1_message_unref(message);
 		break;
 
@@ -760,7 +760,7 @@ exit:
 
 static int bus1_peer_ioctl_recv(struct bus1_peer *peer, unsigned long arg)
 {
-	struct bus1_peer_info *peer_info = bus1_peer_dereference(peer);
+	struct bus1_peer_info *peer_info;
 	struct bus1_cmd_recv param;
 	int r;
 
@@ -775,6 +775,8 @@ static int bus1_peer_ioctl_recv(struct bus1_peer *peer, unsigned long arg)
 		     param.type != BUS1_MSG_NONE ||
 		     param.n_dropped != 0))
 		return -EINVAL;
+
+	peer_info = bus1_peer_dereference(peer);
 
 	if (param.flags & BUS1_RECV_FLAG_PEEK)
 		r = bus1_peer_peek(peer_info, &param);
