@@ -153,10 +153,14 @@ static int bus1_transaction_import_files(struct bus1_transaction *transaction)
 	const int __user *ptr_fds;
 	struct file *f;
 	size_t i;
+	int fd;
 
 	ptr_fds = (const int __user *)(unsigned long)param->ptr_fds;
 	for (i = 0; i < param->n_fds; ++i) {
-		f = bus1_import_fd(ptr_fds + i);
+		if (unlikely(get_user(fd, ptr_fds + i)))
+			return -EFAULT;
+
+		f = bus1_import_fd(fd);
 		if (IS_ERR(f))
 			return PTR_ERR(f);
 

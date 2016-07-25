@@ -147,15 +147,12 @@ int bus1_import_vecs(struct iovec *out_vecs,
  *
  * Return: Pointer to pinned file, ERR_PTR on failure.
  */
-struct file *bus1_import_fd(const u32 __user *user_fd)
+struct file *bus1_import_fd(int fd)
 {
 	struct file *f, *ret;
 	struct socket *sock;
 	struct inode *inode;
-	int fd;
 
-	if (unlikely(get_user(fd, user_fd)))
-		return ERR_PTR(-EFAULT);
 	if (unlikely(fd < 0))
 		return ERR_PTR(-EBADF);
 
