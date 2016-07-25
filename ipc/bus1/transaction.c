@@ -160,7 +160,7 @@ static int bus1_transaction_import_files(struct bus1_transaction *transaction)
 		if (unlikely(get_user(fd, ptr_fds + i)))
 			return -EFAULT;
 
-		f = bus1_import_fd(fd);
+		f = bus1_import_fd(fd, false);
 		if (IS_ERR(f))
 			return PTR_ERR(f);
 
