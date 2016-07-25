@@ -132,8 +132,8 @@ static inline struct bus1_peer *bus1_peer_acquire(struct bus1_peer *peer)
  * bus1_peer_release() - release an active reference
  * @peer:	handle to release, or NULL
  *
- * This releases an active reference to a peer, acquired previously via one
- * of the lookup functions.
+ * This releases an active reference to a peer, acquired previously via
+ * bus1_peer_acquire().
  *
  * If NULL is passed, this is a no-op.
  *
