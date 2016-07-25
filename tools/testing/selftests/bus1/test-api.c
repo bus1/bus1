@@ -57,7 +57,6 @@ static void test_api_client(void)
 /* make sure basic connect + clone works */
 static void test_api_connect(void)
 {
-	struct bus1_cmd_peer_init query;
 	struct bus1_client *c1, *c2;
 	uint64_t node, handle;
 	int r, fd;
@@ -65,30 +64,12 @@ static void test_api_connect(void)
 	r = bus1_client_new_from_path(&c1, test_path);
 	assert(r >= 0);
 
-	/* verify that query succeeds even before the first init */
-	memset(&query, 0, sizeof(query));
-	r = bus1_client_ioctl(c1, BUS1_CMD_PEER_QUERY, &query);
-	assert(r >= 0);
-
-	/* initialize @c1 properly */
-
-	r = bus1_client_init(c1, BUS1_CLIENT_POOL_SIZE);
-	assert(r >= 0);
-
-	memset(&query, 0, sizeof(query));
-	r = bus1_client_ioctl(c1, BUS1_CMD_PEER_QUERY, &query);
-	assert(r >= 0);
-	assert(query.max_bytes == BUS1_CLIENT_POOL_SIZE);
-
 	/* disconnect and reconnect @c1 */
 
 	c1 = bus1_client_free(c1);
 	assert(!c1);
 
 	r = bus1_client_new_from_path(&c1, test_path);
-	assert(r >= 0);
-
-	r = bus1_client_init(c1, BUS1_CLIENT_POOL_SIZE);
 	assert(r >= 0);
 
 	/* clone new peer from @c1 and create @c2 from it */
@@ -104,14 +85,6 @@ static void test_api_connect(void)
 
 	r = bus1_client_new_from_fd(&c2, fd);
 	assert(r >= 0);
-
-	memset(&query, 0, sizeof(query));
-	r = bus1_client_ioctl(c2, BUS1_CMD_PEER_QUERY, &query);
-	assert(r >= 0);
-	assert(query.max_bytes == -1);
-	assert(query.max_slices == -1);
-	assert(query.max_handles == -1);
-	assert(query.max_fds == -1);
 
 	c2 = bus1_client_free(c2);
 	assert(!c2);
@@ -133,8 +106,6 @@ static void test_api_handle(void)
 	/* create new peer and one clone */
 
 	r = bus1_client_new_from_path(&c1, test_path);
-	assert(r >= 0);
-	r = bus1_client_init(c1, BUS1_CLIENT_POOL_SIZE);
 	assert(r >= 0);
 
 	node = BUS1_NODE_FLAG_MANAGED | BUS1_NODE_FLAG_ALLOCATE;
@@ -249,8 +220,6 @@ static void test_api_seed(void)
 	/* setup default client */
 
 	r = bus1_client_new_from_path(&client, test_path);
-	assert(r >= 0);
-	r = bus1_client_init(client, BUS1_CLIENT_POOL_SIZE);
 	assert(r >= 0);
 	r = bus1_client_mmap(client);
 	assert(r >= 0);

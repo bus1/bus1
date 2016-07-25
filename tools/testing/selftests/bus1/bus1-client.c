@@ -109,36 +109,6 @@ _public_ int bus1_client_ioctl(struct bus1_client *client,
 	return r >= 0 ? r : -errno;
 }
 
-_public_ int bus1_client_query(struct bus1_client *client,
-			       size_t *max_bytes,
-			       size_t *max_slices,
-			       size_t *max_handles,
-			       size_t *max_fds)
-{
-	struct bus1_cmd_peer_init peer_init;
-	int r;
-
-	peer_init.flags = 0;
-	peer_init.max_bytes = 0;
-	peer_init.max_slices = 0;
-	peer_init.max_handles = 0;
-	peer_init.max_fds = 0;
-
-	static_assert(_IOC_SIZE(BUS1_CMD_PEER_QUERY) == sizeof(peer_init),
-		      "ioctl is called with invalid argument size");
-
-	r = bus1_client_ioctl(client, BUS1_CMD_PEER_QUERY, &peer_init);
-	if (r < 0)
-		return r;
-
-	*max_bytes = peer_init.max_bytes;
-	*max_slices = peer_init.max_slices;
-	*max_handles = peer_init.max_handles;
-	*max_fds = peer_init.max_fds;
-
-	return 0;
-}
-
 _public_ int bus1_client_mmap(struct bus1_client *client)
 {
 	const void *pool, *old_pool;
@@ -181,33 +151,6 @@ _public_ int bus1_client_mmap(struct bus1_client *client)
 	if (!__atomic_compare_exchange_n(&client->pool, &old_pool, pool, false,
 					 __ATOMIC_RELEASE, __ATOMIC_ACQUIRE))
 		munmap((void *)pool, client->pool_size);
-
-	return 0;
-}
-
-_public_ int bus1_client_init(struct bus1_client *client, size_t pool_size)
-{
-	struct bus1_cmd_peer_init peer_init;
-	size_t old_size;
-	int r;
-
-	peer_init.flags = 0;
-	peer_init.max_bytes = pool_size;
-	peer_init.max_slices = -1;
-	peer_init.max_handles = -1;
-	peer_init.max_fds = -1;
-
-	static_assert(_IOC_SIZE(BUS1_CMD_PEER_INIT) == sizeof(peer_init),
-		      "ioctl is called with invalid argument size");
-
-	r = bus1_client_ioctl(client, BUS1_CMD_PEER_INIT, &peer_init);
-	if (r < 0)
-		return r;
-
-	/* no reason to be atomic, but lets verify the semantics nonetheless */
-	old_size = __atomic_exchange_n(&client->pool_size, pool_size,
-				       __ATOMIC_RELEASE);
-	assert(old_size == 0 || old_size == pool_size);
 
 	return 0;
 }

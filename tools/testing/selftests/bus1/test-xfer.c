@@ -53,8 +53,6 @@ static void test_xfer_multicast(void)
 
 	r = bus1_client_new_from_path(&c1, test_path);
 	assert(r >= 0);
-	r = bus1_client_init(c1, BUS1_CLIENT_POOL_SIZE);
-	assert(r >= 0);
 	r = bus1_client_mmap(c1);
 	assert(r >= 0);
 

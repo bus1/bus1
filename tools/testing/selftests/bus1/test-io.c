@@ -74,9 +74,6 @@ static void test_basic(void)
 	r = bus1_client_new_from_path(&parent, test_path);
 	assert(r >= 0);
 
-	r = bus1_client_init(parent, BUS1_CLIENT_POOL_SIZE);
-	assert(r >= 0);
-
 	r = bus1_client_mmap(parent);
 	assert(r >= 0);
 
@@ -215,9 +212,6 @@ static uint64_t test_iterate(unsigned int iterations,
 
 	/* create parent */
 	r = bus1_client_new_from_path(&parent, test_path);
-	assert(r >= 0);
-
-	r = bus1_client_init(parent, BUS1_CLIENT_POOL_SIZE);
 	assert(r >= 0);
 
 	r = bus1_client_mmap(parent);

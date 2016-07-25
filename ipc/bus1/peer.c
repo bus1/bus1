@@ -302,69 +302,6 @@ int bus1_peer_disconnect(struct bus1_peer *peer)
 	return 0;
 }
 
-static int bus1_peer_ioctl_init(struct bus1_peer *peer, unsigned long arg)
-{
-	struct bus1_cmd_peer_init param;
-	struct bus1_peer_info *peer_info;
-
-	lockdep_assert_held(&peer->active);
-
-	BUILD_BUG_ON(_IOC_SIZE(BUS1_CMD_PEER_INIT) != sizeof(param));
-
-	if (copy_from_user(&param, (void __user *)arg, sizeof(param)))
-		return -EFAULT;
-	if (unlikely(param.flags) || unlikely(param.max_bytes == 0) ||
-	    unlikely(param.max_slices == 0))
-		return -EINVAL;
-
-	peer_info = bus1_peer_dereference(peer);
-
-	mutex_lock(&peer_info->lock);
-	peer_info->max_bytes = param.max_bytes;
-	peer_info->max_slices = param.max_slices;
-	peer_info->max_handles = param.max_handles;
-	peer_info->max_fds = param.max_fds;
-	mutex_unlock(&peer_info->lock);
-
-	return 0;
-}
-
-static int bus1_peer_ioctl_query(struct bus1_peer *peer, unsigned long arg)
-{
-	struct bus1_cmd_peer_init __user *uparam = (void __user  *) arg;
-	struct bus1_cmd_peer_init param;
-	struct bus1_peer_info *peer_info;
-	u64 max_bytes, max_slices, max_handles, max_fds;
-
-	lockdep_assert_held(&peer->active);
-
-	BUILD_BUG_ON(_IOC_SIZE(BUS1_CMD_PEER_QUERY) != sizeof(param));
-
-	if (copy_from_user(&param, (void __user *)arg, sizeof(param)))
-		return -EFAULT;
-	if (unlikely(param.flags) || unlikely(param.max_bytes) ||
-	    unlikely(param.max_slices) || unlikely(param.max_handles) ||
-	    unlikely(param.max_fds))
-		return -EINVAL;
-
-	peer_info = bus1_peer_dereference(peer);
-
-	mutex_lock(&peer_info->lock);
-	max_bytes = peer_info->max_bytes;
-	max_slices = peer_info->max_slices;
-	max_handles = peer_info->max_handles;
-	max_fds = peer_info->max_fds;
-	mutex_unlock(&peer_info->lock);
-
-	if (put_user(max_bytes, &uparam->max_bytes) ||
-	    put_user(max_slices, &uparam->max_slices) ||
-	    put_user(max_handles, &uparam->max_handles) ||
-	    put_user(max_fds, &uparam->max_fds))
-		return -EFAULT;
-
-	return 0;
-}
-
 static int bus1_peer_ioctl_reset(struct bus1_peer *peer, unsigned long arg)
 {
 	struct bus1_cmd_peer_reset param;
@@ -818,10 +755,6 @@ int bus1_peer_ioctl(struct bus1_peer *peer,
 	lockdep_assert_held(&peer->active);
 
 	switch (cmd) {
-	case BUS1_CMD_PEER_INIT:
-		return bus1_peer_ioctl_init(peer, arg);
-	case BUS1_CMD_PEER_QUERY:
-		return bus1_peer_ioctl_query(peer, arg);
 	case BUS1_CMD_PEER_RESET:
 		return bus1_peer_ioctl_reset(peer, arg);
 	case BUS1_CMD_PEER_CLONE:
