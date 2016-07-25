@@ -68,7 +68,7 @@ static void test_basic(void)
 	char *payload = "WOOFWOOF";
 	char *reply_payload;
 	size_t reply_len;
-	int r, fd;
+	int r;
 
 	/* create parent */
 	r = bus1_client_new_from_path(&parent, test_path);
@@ -78,13 +78,12 @@ static void test_basic(void)
 	assert(r >= 0);
 
 	/* create first child */
-	node = BUS1_NODE_FLAG_MANAGED | BUS1_NODE_FLAG_ALLOCATE;
-	parent_handle = BUS1_HANDLE_INVALID;
-	fd = -1;
-	r = bus1_client_clone(parent, &node, &parent_handle, &fd);
+	r = bus1_client_new_from_path(&child1, test_path);
 	assert(r >= 0);
 
-	r = bus1_client_new_from_fd(&child1, fd);
+	node = BUS1_NODE_FLAG_MANAGED | BUS1_NODE_FLAG_ALLOCATE;
+	parent_handle = BUS1_HANDLE_INVALID;
+	r = bus1_client_handle_transfer(parent, child1, &node, &parent_handle);
 	assert(r >= 0);
 
 	r = bus1_client_mmap(child1);
@@ -119,13 +118,12 @@ static void test_basic(void)
 	assert(r >= 0);
 
 	/* create second child */
-	node = BUS1_NODE_FLAG_MANAGED | BUS1_NODE_FLAG_ALLOCATE;
-	parent_handle = BUS1_HANDLE_INVALID;
-	fd = -1;
-	r = bus1_client_clone(parent, &node, &parent_handle, &fd);
+	r = bus1_client_new_from_path(&child2, test_path);
 	assert(r >= 0);
 
-	r = bus1_client_new_from_fd(&child2, fd);
+	node = BUS1_NODE_FLAG_MANAGED | BUS1_NODE_FLAG_ALLOCATE;
+	parent_handle = BUS1_HANDLE_INVALID;
+	r = bus1_client_handle_transfer(parent, child2, &node, &parent_handle);
 	assert(r >= 0);
 
 	r = bus1_client_mmap(child2);
@@ -208,7 +206,7 @@ static uint64_t test_iterate(unsigned int iterations,
 	size_t reply_len;
 	unsigned int j, i;
 	uint64_t node, time_start, time_end;
-	int r, fd;
+	int r;
 
 	/* create parent */
 	r = bus1_client_new_from_path(&parent, test_path);
@@ -225,11 +223,11 @@ static uint64_t test_iterate(unsigned int iterations,
 
 		node = BUS1_NODE_FLAG_MANAGED | BUS1_NODE_FLAG_ALLOCATE;
 		parent_handle = BUS1_HANDLE_INVALID;
-		fd = -1;
-		r = bus1_client_clone(parent, &node, &parent_handle, &fd);
+		r = bus1_client_new_from_path(children + i, test_path);
 		assert(r >= 0);
 
-		r = bus1_client_new_from_fd(children + i, fd);
+		r = bus1_client_handle_transfer(parent, children[i],
+					      &node, &parent_handle);
 		assert(r >= 0);
 
 		r = bus1_client_mmap(children[i]);

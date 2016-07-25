@@ -324,82 +324,52 @@ static int bus1_peer_ioctl_reset(struct bus1_peer *peer, unsigned long arg)
 	return 0;
 }
 
-static int bus1_peer_ioctl_clone(struct bus1_peer *peer,
-			  struct file *peer_file,
-			  unsigned long arg)
+static int bus1_peer_ioctl_handle_transfer(struct bus1_peer *src,
+					   struct file *src_file,
+					   unsigned long arg)
 {
-	struct bus1_cmd_peer_clone __user *uparam = (void __user *) arg;
-	struct bus1_cmd_peer_clone param;
-	struct bus1_peer_info *peer_info;
-	struct bus1_peer *clone = NULL;
-	struct file *clone_file = NULL;
-	int r, fd;
+	struct bus1_cmd_handle_transfer __user *uparam = (void __user *) arg;
+	struct bus1_cmd_handle_transfer param;
+	struct bus1_peer *dst = NULL;
+	struct file *dst_file = NULL;
+	int r = 0;
 
-	lockdep_assert_held(&peer->active);
+	lockdep_assert_held(&src->active);
 
-	BUILD_BUG_ON(_IOC_SIZE(BUS1_CMD_PEER_CLONE) != sizeof(param));
+	BUILD_BUG_ON(_IOC_SIZE(BUS1_CMD_HANDLE_TRANSFER) != sizeof(param));
 
 	if (copy_from_user(&param, (void __user *)arg, sizeof(param)))
 		return -EFAULT;
+
 	if (unlikely(param.flags) ||
-	    unlikely(param.child_handle != BUS1_HANDLE_INVALID) ||
-	    unlikely(param.fd != (u64)-1))
+	    unlikely(param.dst_handle != BUS1_HANDLE_INVALID))
 		return -EINVAL;
 
-	peer_info = bus1_peer_dereference(peer);
+	dst_file = bus1_import_fd(param.dst_fd, true);
+	if (WARN_ON(IS_ERR(dst_file)))
+		return PTR_ERR(dst_file);
 
-	fd = get_unused_fd_flags(O_CLOEXEC);
-	if (fd < 0) {
-		r = fd;
-		goto error;
+	dst = dst_file->private_data;
+	if (!bus1_peer_acquire(dst)) {
+		dst = NULL;
+		r = -ESHUTDOWN;
+		goto out;
 	}
 
-	clone = bus1_peer_new();
-	if (IS_ERR(clone)) {
-		r = PTR_ERR(clone);
-		clone = NULL;
-		goto error;
-	}
-
-	clone_file = bus1_clone_file(peer_file);
-	if (IS_ERR(clone_file)) {
-		r = PTR_ERR(clone_file);
-		clone_file = NULL;
-		goto error;
-	}
-	clone_file->private_data = clone; /* released via f_op->release() */
-
-	r = bus1_peer_connect(clone);
+	/* pass handle from src to dst, allocating node if necessary */
+	r = bus1_handle_pair(src, dst, &param.src_handle, &param.dst_handle);
 	if (r < 0)
-		goto error;
+		goto out;
 
-	WARN_ON(!bus1_peer_acquire(clone));
+	if (put_user(param.src_handle, &uparam->src_handle) ||
+	    put_user(param.dst_handle, &uparam->dst_handle))
+		r = -EFAULT; /* We don't care, keep what we did */
 
-	/* pass handle from parent to child, allocating node if necessary */
-	r = bus1_handle_pair(peer, clone, &param.parent_handle,
-			     &param.child_handle);
-	if (r < 0) {
-		bus1_peer_release(clone);
-		goto error;
-	}
-
-	fd_install(fd, clone_file); /* consumes file reference */
-	bus1_peer_release(clone);
-
-	if (put_user(param.parent_handle, &uparam->parent_handle) ||
-	    put_user(param.child_handle, &uparam->child_handle) ||
-	    put_user(fd, &uparam->fd))
-		return -EFAULT; /* We don't care, keep what we did */
-
-	return 0;
-
-error:
-	if (clone_file)
-		fput(clone_file);
-	else
-		bus1_peer_free(clone);
-	if (fd >= 0)
-		put_unused_fd(fd);
+out:
+	if (dst)
+		bus1_peer_release(dst);
+	if (dst_file)
+		fput(dst_file);
 	return r;
 }
 
@@ -757,8 +727,8 @@ int bus1_peer_ioctl(struct bus1_peer *peer,
 	switch (cmd) {
 	case BUS1_CMD_PEER_RESET:
 		return bus1_peer_ioctl_reset(peer, arg);
-	case BUS1_CMD_PEER_CLONE:
-		return bus1_peer_ioctl_clone(peer, peer_file, arg);
+	case BUS1_CMD_HANDLE_TRANSFER:
+		return bus1_peer_ioctl_handle_transfer(peer, peer_file, arg);
 	case BUS1_CMD_NODE_DESTROY:
 		return bus1_peer_ioctl_node_destroy(peer, arg);
 	case BUS1_CMD_HANDLE_RELEASE:

@@ -37,7 +37,7 @@ static void test_xfer_multicast(void)
 	uint64_t array_dest[2], array_handles[6];
 	const uint64_t *p;
 	const uint8_t *slice;
-	int r, fd;
+	int r;
 
 	/*
 	 * We create a root peer @c1 with 2 nodes, each of which is imported
@@ -49,31 +49,30 @@ static void test_xfer_multicast(void)
 	 * each client got what we expected.
 	 */
 
-	/* create new peer and two clones */
+	/* create three peers and pass a handle from the second and third
+	 * to the first */
 
 	r = bus1_client_new_from_path(&c1, test_path);
 	assert(r >= 0);
 	r = bus1_client_mmap(c1);
 	assert(r >= 0);
+	r = bus1_client_new_from_path(&c2, test_path);
+	assert(r >= 0);
+	r = bus1_client_mmap(c2);
+	assert(r >= 0);
+	r = bus1_client_new_from_path(&c3, test_path);
+	assert(r >= 0);
+	r = bus1_client_mmap(c3);
+	assert(r >= 0);
 
 	node2 = BUS1_NODE_FLAG_MANAGED | BUS1_NODE_FLAG_ALLOCATE;
 	handle2 = BUS1_HANDLE_INVALID;
-	fd = -1;
-	r = bus1_client_clone(c1, &node2, &handle2, &fd);
-	assert(r >= 0);
-	r = bus1_client_new_from_fd(&c2, fd);
-	assert(r >= 0);
-	r = bus1_client_mmap(c2);
+	r = bus1_client_handle_transfer(c1, c2, &node2, &handle2);
 	assert(r >= 0);
 
 	node3 = BUS1_NODE_FLAG_MANAGED | BUS1_NODE_FLAG_ALLOCATE;
 	handle3 = BUS1_HANDLE_INVALID;
-	fd = -1;
-	r = bus1_client_clone(c1, &node3, &handle3, &fd);
-	assert(r >= 0);
-	r = bus1_client_new_from_fd(&c3, fd);
-	assert(r >= 0);
-	r = bus1_client_mmap(c3);
+	r = bus1_client_handle_transfer(c1, c3, &node3, &handle3);
 	assert(r >= 0);
 
 	/* create node20 by sending back to c1 */

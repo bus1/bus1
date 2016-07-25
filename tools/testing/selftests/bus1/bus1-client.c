@@ -167,33 +167,32 @@ _public_ int bus1_client_reset(struct bus1_client *client)
 	return bus1_client_ioctl(client, BUS1_CMD_PEER_RESET, &peer_reset);
 }
 
-_public_ int bus1_client_clone(struct bus1_client *client,
-			       uint64_t *parent_handlep,
-			       uint64_t *child_handlep,
-			       int *fdp)
+_public_ int bus1_client_handle_transfer(struct bus1_client *src,
+					 struct bus1_client *dst,
+					 uint64_t *src_handlep,
+					 uint64_t *dst_handlep)
 {
-	struct bus1_cmd_peer_clone peer_clone;
+	struct bus1_cmd_handle_transfer handle_transfer;
 	int r;
 
-	peer_clone.flags = 0;
-	peer_clone.parent_handle = *parent_handlep;
-	peer_clone.child_handle = *child_handlep;
-	peer_clone.fd = (uint64_t)*fdp;
+	handle_transfer.flags = 0;
+	handle_transfer.src_handle = *src_handlep;
+	handle_transfer.dst_fd = dst->fd;
+	handle_transfer.dst_handle = *dst_handlep;
 
-	static_assert(_IOC_SIZE(BUS1_CMD_PEER_CLONE) == sizeof(peer_clone),
+	static_assert(_IOC_SIZE(BUS1_CMD_HANDLE_TRANSFER) ==
+		      sizeof(handle_transfer),
 		      "ioctl is called with invalid argument size");
 
-	r = bus1_client_ioctl(client, BUS1_CMD_PEER_CLONE, &peer_clone);
+	r = bus1_client_ioctl(src, BUS1_CMD_HANDLE_TRANSFER, &handle_transfer);
 	if (r < 0)
 		return r;
 
-	assert(peer_clone.parent_handle != BUS1_HANDLE_INVALID);
-	assert(peer_clone.child_handle != BUS1_HANDLE_INVALID);
-	assert(peer_clone.fd != (uint64_t)-1);
+	assert(handle_transfer.src_handle != BUS1_HANDLE_INVALID);
+	assert(handle_transfer.dst_handle != BUS1_HANDLE_INVALID);
 
-	*parent_handlep = peer_clone.parent_handle;
-	*child_handlep = peer_clone.child_handle;
-	*fdp = peer_clone.fd;
+	*src_handlep = handle_transfer.src_handle;
+	*dst_handlep = handle_transfer.dst_handle;
 	return 0;
 }
 

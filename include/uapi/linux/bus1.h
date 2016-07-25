@@ -60,11 +60,11 @@ struct bus1_cmd_peer_reset {
 	__u64 flags;
 } __attribute__((__aligned__(8)));
 
-struct bus1_cmd_peer_clone {
+struct bus1_cmd_handle_transfer {
 	__u64 flags;
-	__u64 parent_handle;
-	__u64 child_handle;
-	__u64 fd;
+	__u64 src_handle;
+	__u64 dst_fd;
+	__u64 dst_handle;
 } __attribute__((__aligned__(8)));
 
 enum {
@@ -129,19 +129,19 @@ struct bus1_cmd_recv {
 
 enum {
 	BUS1_CMD_PEER_RESET		= _IOWR(BUS1_IOCTL_MAGIC, 0x00,
-						struct bus1_cmd_peer_reset),
-	BUS1_CMD_PEER_CLONE		= _IOWR(BUS1_IOCTL_MAGIC, 0x01,
-						struct bus1_cmd_peer_clone),
+					struct bus1_cmd_peer_reset),
+	BUS1_CMD_HANDLE_TRANSFER	= _IOWR(BUS1_IOCTL_MAGIC, 0x01,
+					struct bus1_cmd_handle_transfer),
 	BUS1_CMD_NODE_DESTROY		= _IOWR(BUS1_IOCTL_MAGIC, 0x02,
-						__u64),
+					__u64),
 	BUS1_CMD_HANDLE_RELEASE		= _IOWR(BUS1_IOCTL_MAGIC, 0x03,
-						__u64),
+					__u64),
 	BUS1_CMD_SLICE_RELEASE		= _IOWR(BUS1_IOCTL_MAGIC, 0x04,
-						__u64),
+					__u64),
 	BUS1_CMD_SEND			= _IOWR(BUS1_IOCTL_MAGIC, 0x05,
-						struct bus1_cmd_send),
+					struct bus1_cmd_send),
 	BUS1_CMD_RECV			= _IOWR(BUS1_IOCTL_MAGIC, 0x06,
-						struct bus1_cmd_recv),
+					struct bus1_cmd_recv),
 };
 
 #endif /* _UAPI_LINUX_BUS1_H */
