@@ -75,9 +75,11 @@ struct bus1_user {
 	union {
 		struct rcu_head rcu;
 		struct {
+			atomic_t n_bytes;
 			atomic_t n_slices;
 			atomic_t n_handles;
 			atomic_t n_fds;
+			atomic_t max_bytes;
 			atomic_t max_slices;
 			atomic_t max_handles;
 			atomic_t max_fds;

@@ -39,9 +39,11 @@ static struct bus1_user *bus1_user_new(void)
 	kref_init(&u->ref);
 	u->id = BUS1_INTERNAL_UID_INVALID;
 	u->uid = INVALID_UID;
+	atomic_set(&u->n_bytes, BUS1_BYTES_MAX);
 	atomic_set(&u->n_slices, BUS1_SLICES_MAX);
 	atomic_set(&u->n_handles, BUS1_HANDLES_MAX);
 	atomic_set(&u->n_fds, BUS1_FDS_MAX);
+	atomic_set(&u->max_bytes, BUS1_BYTES_MAX);
 	atomic_set(&u->max_slices, BUS1_SLICES_MAX);
 	atomic_set(&u->max_handles, BUS1_HANDLES_MAX);
 	atomic_set(&u->max_fds, BUS1_FDS_MAX);
@@ -59,6 +61,8 @@ static void bus1_user_free(struct kref *ref)
 					atomic_read(&user->max_handles));
 	WARN_ON(atomic_read(&user->n_slices) !=
 					atomic_read(&user->max_slices));
+	WARN_ON(atomic_read(&user->n_bytes) !=
+					atomic_read(&user->max_bytes));
 
 	/* if already dropped, it's set to invalid */
 	if (uid_valid(user->uid)) {
@@ -286,8 +290,7 @@ static int bus1_user_quota_charge_one(atomic_t *global,
 	if (local < charge || local - charge < share + charge)
 		return -EDQUOT;
 
-	if (global &&
-	    !bus1_atomic_sub_if_ge(global, charge, share + charge * 2))
+	if (!bus1_atomic_sub_if_ge(global, charge, share + charge * 2))
 		return -EDQUOT;
 
 	return 0;
@@ -332,11 +335,12 @@ int bus1_user_quota_charge(struct bus1_peer_info *peer_info,
 	 * not used by any other user.
 	 */
 
+	BUILD_BUG_ON(BUS1_BYTES_MAX > U32_MAX);
 	BUILD_BUG_ON(BUS1_SLICES_MAX > U16_MAX);
 	BUILD_BUG_ON(BUS1_HANDLES_MAX > U16_MAX);
 	BUILD_BUG_ON(BUS1_FDS_MAX > U16_MAX);
 
-	r = bus1_user_quota_charge_one(NULL,
+	r = bus1_user_quota_charge_one(&peer_info->user->n_bytes,
 				peer_info->n_bytes < peer_info->max_bytes ?
 				peer_info->max_bytes - peer_info->n_bytes :
 				0,
@@ -389,7 +393,7 @@ error_handles:
 error_messages:
 	atomic_inc(&peer_info->user->n_slices);
 error_allocated:
-	/* memory has no per-user global limit; use memcgs */
+	atomic_add(n_bytes, &peer_info->user->n_bytes);
 	return r;
 }
 
@@ -436,6 +440,7 @@ void bus1_user_quota_discharge(struct bus1_peer_info *peer_info,
 	stats->n_slices -= 1;
 	stats->n_handles -= n_handles;
 	stats->n_fds -= n_fds;
+	atomic_add(n_bytes, &peer_info->user->n_bytes);
 	atomic_inc(&peer_info->user->n_slices);
 	atomic_add(n_handles, &peer_info->user->n_handles);
 	atomic_add(n_fds, &peer_info->user->n_fds);
@@ -482,6 +487,7 @@ void bus1_user_quota_commit(struct bus1_peer_info *peer_info,
 
 	/* Non-inflight memory is accounted externally; we can ignore it */
 	peer_info->n_bytes -= n_bytes;
+	atomic_add(n_bytes, &peer_info->user->n_bytes);
 
 	/* FDs are externally accounted if non-inflight; we can ignore them */
 	peer_info->n_fds -= n_fds;
