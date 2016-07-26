@@ -50,10 +50,6 @@ struct bus1_message;
  * @map_handles_by_node:	map of owned handles, by node pointer
  * @seqcount:			sequence counter
  * @handle_ids:			handle ID allocator
- * @n_allocated:		remaining quota for allocated pool memory
- * @n_slices:			remaining quota for owned slices
- * @n_handles:			remaining quota for owned handles
- * @n_fds:			remaining quota for inflight FDs
  */
 struct bus1_peer_info {
 	union {
@@ -70,15 +66,6 @@ struct bus1_peer_info {
 	struct rb_root map_handles_by_node;
 	struct seqcount seqcount;
 	u64 handle_ids;
-
-	size_t n_bytes;
-	size_t n_slices;
-	size_t n_handles;
-	size_t n_fds;
-	size_t max_bytes;
-	size_t max_slices;
-	size_t max_handles;
-	size_t max_fds;
 };
 
 /**

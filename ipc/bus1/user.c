@@ -252,45 +252,41 @@ bus1_user_quota_query(struct bus1_user_quota *quota,
 	return quota->stats + user->id;
 }
 
-static int bus1_user_quota_charge_one(atomic_t *global,
-				      size_t local,
+static int bus1_user_quota_charge_one(atomic_t *remaining,
 				      size_t share,
 				      size_t charge)
 {
+	size_t reserved;
+
 	/*
 	 * Try charging a single resource type. If limits are exceeded, return
-	 * an error-code, otherwise apply charges globally but not locally
-	 * (because global charges are atomic, local charges are locked and
-	 * can be applied by the caller).
+	 * an error-code, otherwise apply charges.
 	 *
-	 * @global: per-user atomic that counts all instances of this resource
-	 *          for this single user. It is initially set to the limit for
-	 *          this user. For each accounted resource, we decrement it.
-	 *          Thus, if must not drop below 0, or you exceeded your quota.
-	 * @local: per-peer variable that counts all instances of this resource
-	 *         for this single user. Same semantics as @global, i.e., it
-	 *         counts number of remaining units, rather than accounted
-	 *         units.
-	 *         This function does not touch the counter, since the caller
-	 *         can do that themself on success.
-	 * @share: current amount of resources that the acting task has in
-	 *         @local. That is, this share describes how many of the
-	 *         resources in @local were added there by the current context.
-	 * @charge: number of resources to charge with this operation
+	 * @remaining: per-user atomic that counts all instances of this
+	 *             resource for this single user. It is initially set to the
+	 *             limit for this user. For each accounted resource, we
+	 *             decrement it. Thus, it must not drop below 0, or you
+	 *             exceeded your quota.
+	 * @share:     current amount of resources that the acting task has in
+	 *             the local peer.
+	 * @charge:    number of resources to charge with this operation
 	 *
-	 * We try charging @charge on both @local and @global. The applied
-	 * logic is the same for both: The caller is not allowed to account for
-	 * more than the half of the remaining space (including what its
-	 * current share). That is, if 'n' free resources are remaining, then
-	 * after charging @charge, it must not drop below @share+@charge. That
-	 * is, the remaining resources after the charge are still at least as
-	 * big as what the caller has charged in total.
+	 * We try charging @charge on @remaining. The applied logic is: The
+	 * caller is not allowed to account for more than the half of the
+	 * remaining space (including what its current share). That is, if 'n'
+	 * free resources are remaining, then after charging @charge, it must
+	 * not drop below @share+@charge. That is, the remaining resources after
+	 * the charge are still at least as big as what the caller has charged
+	 * in total.
 	 */
 
-	if (local < charge || local - charge < share + charge)
+	reserved = share + charge * 2;
+
+	/* check for overflow */
+	if (charge > charge * 2 || share > reserved || charge * 2 > reserved)
 		return -EDQUOT;
 
-	if (!bus1_atomic_sub_if_ge(global, charge, share + charge * 2))
+	if (!bus1_atomic_sub_if_ge(remaining, charge, reserved))
 		return -EDQUOT;
 
 	return 0;
@@ -341,46 +337,26 @@ int bus1_user_quota_charge(struct bus1_peer_info *peer_info,
 	BUILD_BUG_ON(BUS1_FDS_MAX > U16_MAX);
 
 	r = bus1_user_quota_charge_one(&peer_info->user->n_bytes,
-				peer_info->n_bytes < peer_info->max_bytes ?
-				peer_info->max_bytes - peer_info->n_bytes :
-				0,
-				stats->n_bytes,
-				n_bytes);
+				       stats->n_bytes, n_bytes);
 	if (r < 0)
 		return r;
 
 	r = bus1_user_quota_charge_one(&peer_info->user->n_slices,
-				peer_info->n_slices < peer_info->max_slices ?
-				peer_info->max_slices - peer_info->n_slices :
-				0,
-				stats->n_slices,
-				1);
+				       stats->n_slices, 1);
 	if (r < 0)
 		goto error_allocated;
 
 	r = bus1_user_quota_charge_one(&peer_info->user->n_handles,
-				peer_info->n_handles < peer_info->max_handles ?
-				peer_info->max_handles - peer_info->n_handles :
-				0,
-				stats->n_handles,
-				n_handles);
+				       stats->n_handles, n_handles);
 	if (r < 0)
 		goto error_messages;
 
 	r = bus1_user_quota_charge_one(&peer_info->user->n_fds,
-				       peer_info->n_fds < peer_info->max_fds ?
-				       peer_info->max_fds - peer_info->n_fds :
-				       0,
-				       stats->n_fds,
-				       n_fds);
+				       stats->n_fds, n_fds);
 	if (r < 0)
 		goto error_handles;
 
 	/* charge the local quotas */
-	peer_info->n_bytes += n_bytes;
-	peer_info->n_slices += 1;
-	peer_info->n_handles += n_handles;
-	peer_info->n_fds += n_fds;
 	stats->n_bytes += n_bytes;
 	stats->n_slices += 1;
 	stats->n_handles += n_handles;
@@ -423,19 +399,11 @@ void bus1_user_quota_discharge(struct bus1_peer_info *peer_info,
 	if (WARN_ON(IS_ERR_OR_NULL(stats)))
 		return;
 
-	WARN_ON(peer_info->n_bytes < n_bytes);
-	WARN_ON(peer_info->n_slices < 1);
-	WARN_ON(peer_info->n_handles < n_handles);
-	WARN_ON(peer_info->n_fds < n_fds);
 	WARN_ON(stats->n_bytes < n_bytes);
 	WARN_ON(stats->n_slices < 1);
 	WARN_ON(stats->n_handles < n_handles);
 	WARN_ON(stats->n_fds < n_fds);
 
-	peer_info->n_bytes -= n_bytes;
-	peer_info->n_slices -= 1;
-	peer_info->n_handles -= n_handles;
-	peer_info->n_fds -= n_fds;
 	stats->n_bytes -= n_bytes;
 	stats->n_slices -= 1;
 	stats->n_handles -= n_handles;
@@ -472,9 +440,6 @@ void bus1_user_quota_commit(struct bus1_peer_info *peer_info,
 	if (WARN_ON(IS_ERR_OR_NULL(stats)))
 		return;
 
-	WARN_ON(peer_info->n_bytes < n_bytes);
-	WARN_ON(peer_info->n_handles < n_handles);
-	WARN_ON(peer_info->n_fds < n_fds);
 	WARN_ON(stats->n_bytes < n_bytes);
 	WARN_ON(stats->n_slices < 1);
 	WARN_ON(stats->n_handles < n_handles);
@@ -486,15 +451,12 @@ void bus1_user_quota_commit(struct bus1_peer_info *peer_info,
 	stats->n_fds -= n_fds;
 
 	/* Non-inflight memory is accounted externally; we can ignore it */
-	peer_info->n_bytes -= n_bytes;
 	atomic_add(n_bytes, &peer_info->user->n_bytes);
 
 	/* FDs are externally accounted if non-inflight; we can ignore them */
-	peer_info->n_fds -= n_fds;
 	atomic_add(n_fds, &peer_info->user->n_fds);
 
 	/* XXX: properly track count of non-inflight handles */
-	peer_info->n_handles -= n_handles;
 	atomic_add(n_handles, &peer_info->user->n_handles);
 }
 
@@ -512,9 +474,6 @@ void bus1_user_quota_release_slices(struct bus1_peer_info *peer_info,
 
 	lockdep_assert_held(&peer_info->lock);
 
-	WARN_ON(peer_info->n_slices < n_slices);
-
-	peer_info->n_slices -= n_slices;
 	atomic_add(n_slices, &peer_info->user->n_slices);
 
 }
