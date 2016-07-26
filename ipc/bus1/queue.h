@@ -112,7 +112,7 @@ enum {
  * @waitq:		pointer to wait-queue to use for wake-ups
  * @seed:		seed message
  * @messages:		queued messages
- * @qlock:		data lock
+ * @lock:		data lock
  * @n_dropped:		number of dropped messages since last report
  */
 struct bus1_queue {
@@ -121,7 +121,7 @@ struct bus1_queue {
 	wait_queue_head_t *waitq;
 	struct bus1_queue_node *seed;
 	struct rb_root messages;
-	struct mutex qlock;
+	struct mutex lock;
 	atomic_t n_dropped;
 };
 
@@ -182,7 +182,7 @@ u64 bus1_queue_node_get_timestamp(struct bus1_queue_node *node);
  * and its predecessor (odd numbered). Both are uniquely allocated to the
  * caller.
  *
- * The caller must hold the peer qlock.
+ * The caller must hold the queue lock.
  *
  * Return: New clock value is returned.
  */
@@ -203,7 +203,7 @@ static inline u64 bus1_queue_tick(struct bus1_queue *queue)
  *
  * The passed in timestamp must be even.
  *
- * The caller must hold the peer qlock.
+ * The caller must hold the queue lock.
  *
  * Return: New clock value is returned.
  */
@@ -263,9 +263,9 @@ static inline bool bus1_queue_is_readable(struct bus1_queue *queue)
 static inline struct bus1_queue_node *
 bus1_queue_xchg_seed(struct bus1_queue *queue, struct bus1_queue_node *node)
 {
-	mutex_lock(&queue->qlock);
+	mutex_lock(&queue->lock);
 	swap(node, queue->seed);
-	mutex_unlock(&queue->qlock);
+	mutex_unlock(&queue->lock);
 	return node;
 }
 

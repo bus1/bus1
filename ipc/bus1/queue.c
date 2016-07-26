@@ -28,7 +28,7 @@
  *
  * This queries the node type that was provided via the node constructor. A
  * node never changes its type during its entire lifetime.
- * The caller must hold the peer qlock or own the queue-node.
+ * The caller must hold the queue lock or own the queue-node.
  *
  * Return: Type of @node is returned.
  */
@@ -43,7 +43,7 @@ unsigned int bus1_queue_node_get_type(struct bus1_queue_node *node)
  * @node:		node to query
  *
  * This queries the node timestamp that is currently set on this node. The
- * caller must hold the peer qlock or own the queue-node.
+ * caller must hold the queue lock or own the queue-node.
  *
  * Return: Timestamp of @node is returned.
  */
@@ -90,7 +90,7 @@ void bus1_queue_init(struct bus1_queue *queue, wait_queue_head_t *waitq)
 	queue->waitq = waitq;
 	queue->seed = NULL;
 	queue->messages = RB_ROOT;
-	mutex_init(&queue->qlock);
+	mutex_init(&queue->lock);
 	atomic_set(&queue->n_dropped, 0);
 }
 
@@ -112,7 +112,7 @@ void bus1_queue_destroy(struct bus1_queue *queue)
 	if (!queue)
 		return;
 
-	mutex_destroy(&queue->qlock);
+	mutex_destroy(&queue->lock);
 	WARN_ON(!RB_EMPTY_ROOT(&queue->messages));
 	WARN_ON(queue->seed);
 	WARN_ON(rcu_access_pointer(queue->front));
@@ -136,7 +136,7 @@ void bus1_queue_flush(struct bus1_queue *queue,
 {
 	struct bus1_queue_node *node, *t;
 
-	mutex_lock(&queue->qlock);
+	mutex_lock(&queue->lock);
 
 	/* transfer all nodes (including their ref) onto @list, then clear */
 	rbtree_postorder_for_each_entry_safe(node, t, &queue->messages, rb)
@@ -150,7 +150,7 @@ void bus1_queue_flush(struct bus1_queue *queue,
 		queue->seed = NULL;
 	}
 
-	mutex_unlock(&queue->qlock);
+	mutex_unlock(&queue->lock);
 }
 
 static int bus1_queue_node_compare(struct bus1_queue_node *a,
@@ -212,7 +212,7 @@ static void bus1_queue_add(struct bus1_queue *queue,
 	u64 ts;
 	int r;
 
-	lockdep_assert_held(&queue->qlock);
+	lockdep_assert_held(&queue->lock);
 	ts = bus1_queue_node_get_timestamp(node);
 	readable = bus1_queue_is_readable(queue);
 
@@ -237,7 +237,7 @@ static void bus1_queue_add(struct bus1_queue *queue,
 	 * set as front, yet. If there is a front, it is some other node.
 	 */
 	front = rcu_dereference_protected(queue->front,
-					  lockdep_is_held(&queue->qlock));
+					  lockdep_is_held(&queue->lock));
 	if (front) {
 		/*
 		 * If there already is a front entry, just verify that we will
@@ -358,13 +358,13 @@ bool bus1_queue_commit_staged(struct bus1_queue *queue,
 {
 	WARN_ON(timestamp & 1);
 
-	mutex_lock(&queue->qlock);
+	mutex_lock(&queue->lock);
 	if (bus1_queue_node_is_queued(node)) {
 		bus1_queue_add(queue, node, timestamp);
-		mutex_unlock(&queue->qlock);
+		mutex_unlock(&queue->lock);
 		return true;
 	} else {
-		mutex_unlock(&queue->qlock);
+		mutex_unlock(&queue->lock);
 		return false;
 	}
 }
@@ -386,11 +386,11 @@ bool bus1_queue_commit_staged(struct bus1_queue *queue,
 void bus1_queue_commit_unstaged(struct bus1_queue *queue,
 				struct bus1_queue_node *node)
 {
-	mutex_lock(&queue->qlock);
+	mutex_lock(&queue->lock);
 	if (!bus1_queue_node_is_queued(node)) {
 		bus1_queue_add(queue, node, bus1_queue_tick(queue));
 	}
-	mutex_unlock(&queue->qlock);
+	mutex_unlock(&queue->lock);
 }
 
 /**
@@ -419,7 +419,7 @@ void bus1_queue_remove(struct bus1_queue *queue, struct bus1_queue_node *node)
 	if (!node)
 		return;
 
-	mutex_lock(&queue->qlock);
+	mutex_lock(&queue->lock);
 
 	/* A) if it occupies the seed slot, clear it */
 	if (node == queue->seed) {
@@ -433,7 +433,7 @@ void bus1_queue_remove(struct bus1_queue *queue, struct bus1_queue_node *node)
 
 	readable = bus1_queue_is_readable(queue);
 	front = rcu_dereference_protected(queue->front,
-					  lockdep_is_held(&queue->qlock));
+					  lockdep_is_held(&queue->lock));
 
 	if (!rb_prev(&node->rb)) {
 		/*
@@ -460,7 +460,7 @@ void bus1_queue_remove(struct bus1_queue *queue, struct bus1_queue_node *node)
 		wake_up_interruptible(queue->waitq);
 
 exit:
-	mutex_unlock(&queue->qlock);
+	mutex_unlock(&queue->lock);
 }
 
 void bus1_queue_drop(struct bus1_queue *queue, struct bus1_queue_node *node)
@@ -492,7 +492,7 @@ struct bus1_queue_node *bus1_queue_peek(struct bus1_queue *queue, bool seed)
 	struct bus1_queue_node *node = NULL;
 	struct rb_node *n;
 
-	mutex_lock(&queue->qlock);
+	mutex_lock(&queue->lock);
 
 	if (seed) {
 		if (queue->seed) {
@@ -501,14 +501,14 @@ struct bus1_queue_node *bus1_queue_peek(struct bus1_queue *queue, bool seed)
 		}
 	} else {
 		n = rcu_dereference_protected(queue->front,
-					      lockdep_is_held(&queue->qlock));
+					      lockdep_is_held(&queue->lock));
 		if (n) {
 			node = container_of(n, struct bus1_queue_node, rb);
 			kref_get(&node->ref);
 		}
 	}
 
-	mutex_unlock(&queue->qlock);
+	mutex_unlock(&queue->lock);
 
 	return node;
 }
