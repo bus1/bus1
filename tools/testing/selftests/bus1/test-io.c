@@ -195,6 +195,34 @@ static inline uint64_t nsec_from_clock(clockid_t clock)
 	return ts.tv_sec * UINT64_C(1000000000) + ts.tv_nsec;
 }
 
+static void test_one(struct bus1_client *parent,
+		     struct bus1_client **children,
+		     uint64_t *child_handles,
+		     unsigned int n_destinations,
+		     char *payload,
+		     size_t n_bytes)
+{
+	char *reply_payload;
+	size_t reply_len;
+	unsigned int i;
+	int r;
+
+	/* send */
+	r = client_send(parent, child_handles, n_destinations, payload, n_bytes);
+	assert(r >= 0);
+
+	/* receive */
+	for (i = 0; i < n_destinations; i++) {
+		r = client_recv(children[i],
+				(const void**)&reply_payload,
+				&reply_len);
+		assert(r >= 0);
+
+		r = client_slice_release(children[i], reply_payload);
+		assert(r >= 0);
+	}
+}
+
 static uint64_t test_iterate(unsigned int iterations,
 			     unsigned int n_destinations,
 			     size_t n_bytes)
@@ -202,9 +230,7 @@ static uint64_t test_iterate(unsigned int iterations,
 	struct bus1_client *parent, *children[n_destinations];
 	uint64_t child_handles[n_destinations];
 	char payload[n_bytes];
-	char *reply_payload;
-	size_t reply_len;
-	unsigned int j, i;
+	unsigned int i;
 	uint64_t node, time_start, time_end;
 	int r;
 
@@ -262,23 +288,12 @@ static uint64_t test_iterate(unsigned int iterations,
 		assert(r >= 0);
 	}
 
+	/* caches */
+	test_one(parent, children, child_handles, n_destinations, payload, n_bytes);
+
 	time_start = nsec_from_clock(CLOCK_THREAD_CPUTIME_ID);
-	for (j = 0; j < iterations; j++) {
-		/* send */
-		r = client_send(parent, child_handles, n_destinations, payload, n_bytes);
-		assert(r >= 0);
-
-		/* receive */
-		for (i = 0; i < n_destinations; i++) {
-			r = client_recv(children[i],
-					(const void**)&reply_payload,
-					&reply_len);
-			assert(r >= 0);
-
-			r = client_slice_release(children[i], reply_payload);
-			assert(r >= 0);
-		}
-	}
+	for (i = 0; i < iterations; i++)
+		test_one(parent, children, child_handles, n_destinations, payload, n_bytes);
 	time_end = nsec_from_clock(CLOCK_THREAD_CPUTIME_ID);
 
 	/* cleanup */
@@ -296,17 +311,17 @@ int test_io(void)
 
 	test_basic();
 
-	base = test_iterate(10000, 0, 1024);
+	base = test_iterate(1000000, 0, 1024);
 
 	fprintf(stderr, "it took %lu ns for no destinations\n", base);
 	fprintf(stderr, "it took %lu ns + %lu ns for one destination\n", base,
-		test_iterate(10000, 1, 1024) - base);
+		test_iterate(100000, 1, 1024) - base);
 
-	for (unsigned int i = 1; i < 6; ++i) {
+	for (unsigned int i = 1; i < 9; ++i) {
 		unsigned int dests = 1UL << i;
 
 		fprintf(stderr, "it took %lu ns + %lu ns per destination for %u destinations\n",
-			base, (test_iterate(10000, dests, 1024) - base) / dests, dests);
+			base, (test_iterate(100000 >> i, dests, 1024) - base) / dests, dests);
 	}
 
 	fprintf(stderr, "\n\n");
