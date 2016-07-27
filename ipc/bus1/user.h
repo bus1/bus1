@@ -51,10 +51,11 @@ struct bus1_peer_info;
 
 /**
  * struct bus1_user - resource accounting for users
+ * @rcu:		rcu
+ * @lock:		data lock
  * @ref:		reference counter
  * @id:			internal index of this user
  * @uid:		UID of the user
- * @rcu:		rcu
  * @n_bytes:		number of remaining quota for owned bytes
  * @n_slices:		number of remaining quota for owned slices
  * @n_handles:		number of remaining quota for owned handles
@@ -65,23 +66,22 @@ struct bus1_peer_info;
  * @max_fds:		maximum number of inflight FDs
  */
 struct bus1_user {
+	union {
+		struct rcu_head rcu;
+		struct mutex lock;
+	};
 	struct kref ref;
 	unsigned int id;
 	kuid_t uid;
 
-	union {
-		struct rcu_head rcu;
-		struct {
-			atomic_t n_bytes;
-			atomic_t n_slices;
-			atomic_t n_handles;
-			atomic_t n_fds;
-			atomic_t max_bytes;
-			atomic_t max_slices;
-			atomic_t max_handles;
-			atomic_t max_fds;
-		};
-	};
+	atomic_t n_bytes;
+	atomic_t n_slices;
+	atomic_t n_handles;
+	atomic_t n_fds;
+	atomic_t max_bytes;
+	atomic_t max_slices;
+	atomic_t max_handles;
+	atomic_t max_fds;
 };
 
 /**

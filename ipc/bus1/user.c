@@ -56,6 +56,7 @@ static struct bus1_user *bus1_user_new(void)
 	if (!u)
 		return ERR_PTR(-ENOMEM);
 
+	mutex_init(&u->lock);
 	kref_init(&u->ref);
 	u->id = BUS1_INTERNAL_UID_INVALID;
 	u->uid = INVALID_UID;
@@ -96,6 +97,7 @@ static void bus1_user_free(struct kref *ref)
 	if (user->id != BUS1_INTERNAL_UID_INVALID)
 		ida_simple_remove(&bus1_user_ida, user->id);
 
+	mutex_destroy(&user->lock);
 	kfree_rcu(user, rcu);
 }
 
