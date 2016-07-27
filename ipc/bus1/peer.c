@@ -47,8 +47,9 @@ static void bus1_peer_info_reset(struct bus1_peer_info *peer_info, bool final)
 
 	mutex_lock(&peer_info->lock);
 	bus1_pool_flush(&peer_info->pool, &n_slices);
-	bus1_user_quota_release_slices(peer_info, n_slices);
 	mutex_unlock(&peer_info->lock);
+
+	atomic_add(n_slices, &peer_info->user->n_slices);
 
 	while ((node = list_first_entry_or_null(&list, struct bus1_queue_node,
 						link))) {
@@ -413,14 +414,12 @@ static int bus1_peer_ioctl_slice_release(struct bus1_peer *peer,
 
 	mutex_lock(&peer_info->lock);
 	r = bus1_pool_release_user(&peer_info->pool, offset);
-	if (r < 0)
-		goto exit;
-
-	bus1_user_quota_release_slices(peer_info, 1);
-
-exit:
 	mutex_unlock(&peer_info->lock);
-	return r;
+	if (r < 0)
+		return r;
+
+	atomic_add(1, &peer_info->user->n_slices);
+	return 0;
 }
 
 static int bus1_peer_ioctl_send(struct bus1_peer *peer, unsigned long arg)
