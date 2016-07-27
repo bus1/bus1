@@ -56,13 +56,13 @@ struct bus1_peer_info;
  * @ref:		reference counter
  * @id:			internal index of this user
  * @uid:		UID of the user
- * @n_bytes:		number of remaining quota for owned bytes
  * @n_slices:		number of remaining quota for owned slices
  * @n_handles:		number of remaining quota for owned handles
- * @n_fds:		number of remaining quota for inflight FDs
- * @max_bytes:		maximum number of owned bytes
+ * @n_inflight_bytes:	number of remaining quota for inflight bytes
+ * @n_inflight_fds:	number of remaining quota for inflight FDs
  * @max_slices:		maximum number of owned slices
  * @max_handles:	maximum number of owned handles
+ * @max_bytes:		maximum number of inflight bytes
  * @max_fds:		maximum number of inflight FDs
  */
 struct bus1_user {
@@ -74,27 +74,27 @@ struct bus1_user {
 	unsigned int id;
 	kuid_t uid;
 
-	atomic_t n_bytes;
 	atomic_t n_slices;
 	atomic_t n_handles;
-	atomic_t n_fds;
-	atomic_t max_bytes;
+	atomic_t n_inflight_bytes;
+	atomic_t n_inflight_fds;
 	atomic_t max_slices;
 	atomic_t max_handles;
+	atomic_t max_bytes;
 	atomic_t max_fds;
 };
 
 /**
  * struct bus1_user_stats - quota statistics between a user and a peer
- * @n_bytes:		memory in bytes used by queued messages
  * @n_slices:		number of queued slices
  * @n_handles:		number of queued handles
+ * @n_bytes:		memory in bytes used by queued messages
  * @n_fds:		number of queued fds
  */
 struct bus1_user_stats {
-	u32 n_bytes;
 	u16 n_slices;
 	u16 n_handles;
+	u32 n_bytes;
 	u16 n_fds;
 };
 

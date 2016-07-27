@@ -60,13 +60,13 @@ static struct bus1_user *bus1_user_new(void)
 	kref_init(&u->ref);
 	u->id = BUS1_INTERNAL_UID_INVALID;
 	u->uid = INVALID_UID;
-	atomic_set(&u->n_bytes, BUS1_BYTES_MAX);
 	atomic_set(&u->n_slices, BUS1_SLICES_MAX);
 	atomic_set(&u->n_handles, BUS1_HANDLES_MAX);
-	atomic_set(&u->n_fds, BUS1_FDS_MAX);
-	atomic_set(&u->max_bytes, BUS1_BYTES_MAX);
+	atomic_set(&u->n_inflight_bytes, BUS1_BYTES_MAX);
+	atomic_set(&u->n_inflight_fds, BUS1_FDS_MAX);
 	atomic_set(&u->max_slices, BUS1_SLICES_MAX);
 	atomic_set(&u->max_handles, BUS1_HANDLES_MAX);
+	atomic_set(&u->max_bytes, BUS1_BYTES_MAX);
 	atomic_set(&u->max_fds, BUS1_FDS_MAX);
 
 	return u;
@@ -76,14 +76,14 @@ static void bus1_user_free(struct kref *ref)
 {
 	struct bus1_user *user = container_of(ref, struct bus1_user, ref);
 
-	WARN_ON(atomic_read(&user->n_fds) !=
+	WARN_ON(atomic_read(&user->n_inflight_fds) !=
 					atomic_read(&user->max_fds));
+	WARN_ON(atomic_read(&user->n_inflight_bytes) !=
+					atomic_read(&user->max_bytes));
 	WARN_ON(atomic_read(&user->n_handles) !=
 					atomic_read(&user->max_handles));
 	WARN_ON(atomic_read(&user->n_slices) !=
 					atomic_read(&user->max_slices));
-	WARN_ON(atomic_read(&user->n_bytes) !=
-					atomic_read(&user->max_bytes));
 
 	/* if already dropped, it's set to invalid */
 	if (uid_valid(user->uid)) {
@@ -353,45 +353,45 @@ int bus1_user_quota_charge(struct bus1_peer_info *peer_info,
 	 * not used by any other user.
 	 */
 
-	BUILD_BUG_ON(BUS1_BYTES_MAX > U32_MAX);
 	BUILD_BUG_ON(BUS1_SLICES_MAX > U16_MAX);
 	BUILD_BUG_ON(BUS1_HANDLES_MAX > U16_MAX);
+	BUILD_BUG_ON(BUS1_BYTES_MAX > U32_MAX);
 	BUILD_BUG_ON(BUS1_FDS_MAX > U16_MAX);
-
-	r = bus1_user_quota_charge_one(&peer_info->user->n_bytes,
-				       stats->n_bytes, n_bytes);
-	if (r < 0)
-		return r;
 
 	r = bus1_user_quota_charge_one(&peer_info->user->n_slices,
 				       stats->n_slices, 1);
 	if (r < 0)
-		goto error_allocated;
+		return r;
 
 	r = bus1_user_quota_charge_one(&peer_info->user->n_handles,
 				       stats->n_handles, n_handles);
 	if (r < 0)
-		goto error_messages;
+		goto error_slices;
 
-	r = bus1_user_quota_charge_one(&peer_info->user->n_fds,
-				       stats->n_fds, n_fds);
+	r = bus1_user_quota_charge_one(&peer_info->user->n_inflight_bytes,
+				       stats->n_bytes, n_bytes);
 	if (r < 0)
 		goto error_handles;
 
+	r = bus1_user_quota_charge_one(&peer_info->user->n_inflight_fds,
+				       stats->n_fds, n_fds);
+	if (r < 0)
+		goto error_bytes;
+
 	/* charge the local quotas */
-	stats->n_bytes += n_bytes;
 	stats->n_slices += 1;
 	stats->n_handles += n_handles;
+	stats->n_bytes += n_bytes;
 	stats->n_fds += n_fds;
 
 	return 0;
 
+error_bytes:
+	atomic_add(n_bytes, &peer_info->user->n_inflight_bytes);
 error_handles:
 	atomic_add(n_handles, &peer_info->user->n_handles);
-error_messages:
+error_slices:
 	atomic_inc(&peer_info->user->n_slices);
-error_allocated:
-	atomic_add(n_bytes, &peer_info->user->n_bytes);
 	return r;
 }
 
@@ -421,19 +421,19 @@ void bus1_user_quota_discharge(struct bus1_peer_info *peer_info,
 	if (WARN_ON(IS_ERR_OR_NULL(stats)))
 		return;
 
-	WARN_ON(stats->n_bytes < n_bytes);
 	WARN_ON(stats->n_slices < 1);
 	WARN_ON(stats->n_handles < n_handles);
+	WARN_ON(stats->n_bytes < n_bytes);
 	WARN_ON(stats->n_fds < n_fds);
 
-	stats->n_bytes -= n_bytes;
 	stats->n_slices -= 1;
 	stats->n_handles -= n_handles;
+	stats->n_bytes -= n_bytes;
 	stats->n_fds -= n_fds;
-	atomic_add(n_bytes, &peer_info->user->n_bytes);
 	atomic_inc(&peer_info->user->n_slices);
 	atomic_add(n_handles, &peer_info->user->n_handles);
-	atomic_add(n_fds, &peer_info->user->n_fds);
+	atomic_add(n_bytes, &peer_info->user->n_inflight_bytes);
+	atomic_add(n_fds, &peer_info->user->n_inflight_fds);
 }
 
 /**
@@ -462,21 +462,19 @@ void bus1_user_quota_commit(struct bus1_peer_info *peer_info,
 	if (WARN_ON(IS_ERR_OR_NULL(stats)))
 		return;
 
-	WARN_ON(stats->n_bytes < n_bytes);
 	WARN_ON(stats->n_slices < 1);
 	WARN_ON(stats->n_handles < n_handles);
+	WARN_ON(stats->n_bytes < n_bytes);
 	WARN_ON(stats->n_fds < n_fds);
 
-	stats->n_bytes -= n_bytes;
 	stats->n_slices -= 1;
 	stats->n_handles -= n_handles;
+	stats->n_bytes -= n_bytes;
 	stats->n_fds -= n_fds;
 
-	/* Non-inflight memory is accounted externally; we can ignore it */
-	atomic_add(n_bytes, &peer_info->user->n_bytes);
-
-	/* FDs are externally accounted if non-inflight; we can ignore them */
-	atomic_add(n_fds, &peer_info->user->n_fds);
+	/* discharge any inflight-only resources */
+	atomic_add(n_bytes, &peer_info->user->n_inflight_bytes);
+	atomic_add(n_fds, &peer_info->user->n_inflight_fds);
 
 	/* XXX: properly track count of non-inflight handles */
 	atomic_add(n_handles, &peer_info->user->n_handles);
