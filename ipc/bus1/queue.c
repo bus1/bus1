@@ -583,3 +583,21 @@ bool bus1_queue_node_is_committed(struct bus1_queue_node *node)
 	ts = node ? bus1_queue_node_get_timestamp(node) : 0;
 	return ts != 0 && !(ts & 1);
 }
+
+/**
+ * bus1_queue_node_is_staging() - check whether a node is marked staging
+ * @node:		node to query, or NULL
+ *
+ * This checks whether a given node is queued, but still marked staging. That
+ * means, the node has been put on the queue but there is still a transaction
+ * that pins it to commit it later.
+ *
+ * Return: True if @node is queued as staging entry.
+ */
+bool bus1_queue_node_is_staging(struct bus1_queue_node *node)
+{
+	u64 ts;
+
+	ts = node ? bus1_queue_node_get_timestamp(node) : 0;
+	return ts & 1;
+}
