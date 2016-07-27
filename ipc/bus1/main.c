@@ -180,6 +180,7 @@ static int __init bus1_init(void)
 
 error:
 	debugfs_remove(bus1_debugdir);
+	bus1_user_exit();
 	return r;
 }
 
