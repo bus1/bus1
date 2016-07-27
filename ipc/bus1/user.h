@@ -48,11 +48,6 @@
 #include <linux/uidgid.h>
 
 struct bus1_peer_info;
-struct idr;
-struct ida;
-
-extern struct idr bus1_user_idr;
-extern struct ida bus1_user_ida;
 
 /**
  * struct bus1_user - resource accounting for users
@@ -112,6 +107,7 @@ struct bus1_user_quota {
 };
 
 /* users */
+void bus1_user_exit(void);
 struct bus1_user *bus1_user_ref_by_uid(kuid_t uid);
 struct bus1_user *bus1_user_ref(struct bus1_user *user);
 struct bus1_user *bus1_user_unref(struct bus1_user *user);

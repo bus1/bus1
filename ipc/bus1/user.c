@@ -25,8 +25,28 @@
 #define BUS1_INTERNAL_UID_INVALID ((unsigned int) -1)
 
 static DEFINE_MUTEX(bus1_user_lock);
-DEFINE_IDR(bus1_user_idr);
-DEFINE_IDA(bus1_user_ida);
+static DEFINE_IDR(bus1_user_idr);
+static DEFINE_IDA(bus1_user_ida);
+
+/**
+ * bus1_user_exit() - clean up global resources of user accounting
+ *
+ * This function cleans up any remaining global resources that were allocated
+ * by the user accounting helpers. The caller must make sure that no user
+ * object is referenced anymore, before calling this. This function just clears
+ * caches and verifies nothing is leaked.
+ *
+ * This is meant to be called on module-exit.
+ */
+void bus1_user_exit(void)
+{
+	WARN_ON(!idr_is_empty(&bus1_user_ida.idr));
+	WARN_ON(!idr_is_empty(&bus1_user_idr));
+	ida_destroy(&bus1_user_ida);
+	idr_destroy(&bus1_user_idr);
+	idr_init(&bus1_user_idr);
+	ida_init(&bus1_user_ida);
+}
 
 static struct bus1_user *bus1_user_new(void)
 {
