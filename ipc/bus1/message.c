@@ -161,24 +161,22 @@ int bus1_message_allocate(struct bus1_message *message,
 	if (WARN_ON(message->slice))
 		return -ENOTRECOVERABLE;
 
-	mutex_lock(&peer_info->lock);
-
-	r = bus1_user_quota_charge(peer_info, message->user,
-				   message->data.n_bytes,
-				   message->data.n_handles,
-				   message->data.n_fds);
-	if (r < 0)
-		goto exit;
-
 	/* cannot overflow as all of those are limited */
 	slice_size = ALIGN(message->data.n_bytes, 8) +
 		     ALIGN(message->data.n_handles * sizeof(u64), 8) +
 		     ALIGN(message->data.n_fds + sizeof(int), 8);
 
+	mutex_lock(&peer_info->lock);
+
+	r = bus1_user_quota_charge(peer_info, message->user, slice_size,
+				   message->data.n_handles,
+				   message->data.n_fds);
+	if (r < 0)
+		goto exit;
+
 	slice = bus1_pool_alloc(&peer_info->pool, slice_size);
 	if (IS_ERR(slice)) {
-		bus1_user_quota_discharge(peer_info, message->user,
-					  message->data.n_bytes,
+		bus1_user_quota_discharge(peer_info, message->user, slice_size,
 					  message->data.n_handles,
 					  message->data.n_fds);
 		r = PTR_ERR(slice);
@@ -207,12 +205,12 @@ void bus1_message_deallocate(struct bus1_message *message,
 {
 	mutex_lock(&peer_info->lock);
 	if (message->slice) {
-		message->slice = bus1_pool_release_kernel(&peer_info->pool,
-							  message->slice);
 		bus1_user_quota_discharge(peer_info, message->user,
-					  message->data.n_bytes,
+					  message->slice->size,
 					  message->data.n_handles,
 					  message->data.n_fds);
+		message->slice = bus1_pool_release_kernel(&peer_info->pool,
+							  message->slice);
 	}
 	mutex_unlock(&peer_info->lock);
 }
@@ -232,12 +230,12 @@ void bus1_message_dequeue(struct bus1_message *message,
 	lockdep_assert_held(&peer_info->lock);
 
 	if (!WARN_ON(!message->slice)) {
-		message->slice = bus1_pool_release_kernel(&peer_info->pool,
-							  message->slice);
 		bus1_user_quota_commit(peer_info, message->user,
-				       message->data.n_bytes,
+				       message->slice->size,
 				       message->data.n_handles,
 				       message->data.n_fds);
+		message->slice = bus1_pool_release_kernel(&peer_info->pool,
+							  message->slice);
 	}
 }
 
