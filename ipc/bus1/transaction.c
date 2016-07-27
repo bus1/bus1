@@ -480,9 +480,6 @@ int bus1_transaction_commit(struct bus1_transaction *transaction)
 	u64 __user *idp;
 	int r;
 
-	if (!transaction->entries)
-		return 0;
-
 	list = transaction->entries;
 	timestamp = 0;
 
