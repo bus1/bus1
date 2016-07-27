@@ -309,17 +309,17 @@ static void bus1_test_pool(void)
 
 	/* test publish and release */
 	/* can't release a non-existet slice */
-	WARN_ON(bus1_pool_release_user(pool, 1) != -ENXIO);
+	WARN_ON(bus1_pool_release_user(pool, 1, NULL) != -ENXIO);
 	/* can't user-release an unpublished slice */
-	WARN_ON(bus1_pool_release_user(pool, PAGE_SIZE / 4) != -ENXIO);
+	WARN_ON(bus1_pool_release_user(pool, PAGE_SIZE / 4, NULL) != -ENXIO);
 	/* verify that publish does the righ thing */
 	bus1_pool_publish(pool, slice2);
 	WARN_ON(slice2->offset != PAGE_SIZE / 4);
 	WARN_ON(slice2->size != PAGE_SIZE / 4);
 	/* release the slice again */
-	WARN_ON(bus1_pool_release_user(pool, slice2->offset) < 0);
+	WARN_ON(bus1_pool_release_user(pool, slice2->offset, NULL) < 0);
 	/* can't release a slice that has already been released */
-	WARN_ON(bus1_pool_release_user(pool, slice2->offset) != -ENXIO);
+	WARN_ON(bus1_pool_release_user(pool, slice2->offset, NULL) != -ENXIO);
 	/* publish again */
 	bus1_pool_publish(pool, slice2);
 	offset = slice2->offset;
@@ -328,7 +328,7 @@ static void bus1_test_pool(void)
 	/* verify that the slice is still busy by trying to reuse the space */
 	WARN_ON(bus1_pool_alloc(pool, PAGE_SIZE / 4) != ERR_PTR(-EXFULL));
 	/* now also release the user ref */
-	WARN_ON(bus1_pool_release_user(pool, offset) < 0);
+	WARN_ON(bus1_pool_release_user(pool, offset, NULL) < 0);
 	/* verify that the slice was now released and the space can be reused */
 	slice2 = bus1_pool_alloc(pool, PAGE_SIZE / 4);
 	WARN_ON(IS_ERR(slice2));

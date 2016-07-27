@@ -404,6 +404,7 @@ static int bus1_peer_ioctl_slice_release(struct bus1_peer *peer,
 					 unsigned long arg)
 {
 	struct bus1_peer_info *peer_info = bus1_peer_dereference(peer);
+	size_t n_slices = 0;
 	u64 offset;
 	int r;
 
@@ -413,13 +414,11 @@ static int bus1_peer_ioctl_slice_release(struct bus1_peer *peer,
 		return -EFAULT;
 
 	mutex_lock(&peer_info->lock);
-	r = bus1_pool_release_user(&peer_info->pool, offset);
+	r = bus1_pool_release_user(&peer_info->pool, offset, &n_slices);
 	mutex_unlock(&peer_info->lock);
-	if (r < 0)
-		return r;
 
-	atomic_add(1, &peer_info->user->n_slices);
-	return 0;
+	atomic_add(n_slices, &peer_info->user->n_slices);
+	return r;
 }
 
 static int bus1_peer_ioctl_send(struct bus1_peer *peer, unsigned long arg)
