@@ -465,11 +465,9 @@ void bus1_pool_flush(struct bus1_pool *pool, size_t *n_slicesp)
 {
 	struct bus1_pool_slice *slice;
 	struct rb_node *node, *t;
+	size_t n_slices = 0;
 
 	bus1_pool_assert_held(pool);
-
-	if (n_slicesp)
-		*n_slicesp = 0;
 
 	for (node = rb_first(&pool->slices_busy);
 	     node && ((t = rb_next(node)), true);
@@ -484,11 +482,13 @@ void bus1_pool_flush(struct bus1_pool *pool, size_t *n_slicesp)
 		 * slices, never busy slices. Hence, @t is protected from
 		 * removal.
 		 */
-		if (n_slicesp)
-			++ *n_slicesp;
 		slice->ref_user = false;
 		bus1_pool_free(pool, slice);
+		++n_slices;
 	}
+
+	if (n_slicesp)
+		*n_slicesp = n_slices;
 }
 
 /**
