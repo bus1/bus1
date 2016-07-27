@@ -450,7 +450,7 @@ int bus1_pool_release_user(struct bus1_pool *pool,
 	if (!slice || !slice->ref_user)
 		return -ENXIO;
 
-	if (n_slicesp)
+	if (n_slicesp && !slice->ref_kernel)
 		*n_slicesp = 1;
 
 	slice->ref_user = false;
@@ -482,6 +482,9 @@ void bus1_pool_flush(struct bus1_pool *pool, size_t *n_slicesp)
 		if (!slice->ref_user)
 			continue;
 
+		if (!slice->ref_kernel)
+			++n_slices;
+
 		/*
 		 * @slice (or the logically previous/next slice) might be freed
 		 * by bus1_pool_free(). However, this only ever affects 'free'
@@ -490,7 +493,6 @@ void bus1_pool_flush(struct bus1_pool *pool, size_t *n_slicesp)
 		 */
 		slice->ref_user = false;
 		bus1_pool_free(pool, slice);
-		++n_slices;
 	}
 
 	if (n_slicesp)

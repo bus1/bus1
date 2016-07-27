@@ -342,16 +342,15 @@ static void bus1_test_pool(void)
 	bus1_pool_publish(pool, slice3);
 	WARN_ON(slice3->offset != PAGE_SIZE / 2);
 	WARN_ON(slice3->size != ALIGN(PAGE_SIZE / 3, 8));
+	/* drop all kernel-references */
+	slice1 = bus1_pool_release_kernel(pool, slice1);
+	slice2 = bus1_pool_release_kernel(pool, slice2);
+	slice3 = bus1_pool_release_kernel(pool, slice3);
 	/* flush user references */
 	bus1_pool_flush(pool, &n_slices);
 	WARN_ON(n_slices != 3);
 
 	/* XXX: test writing of iovecs and kvecs */
-
-	/* drop all slices before destorying pool */
-	slice1 = bus1_pool_release_kernel(pool, slice1);
-	slice2 = bus1_pool_release_kernel(pool, slice2);
-	slice3 = bus1_pool_release_kernel(pool, slice3);
 
 	bus1_pool_destroy(pool);
 	mutex_unlock(&peer.lock);
