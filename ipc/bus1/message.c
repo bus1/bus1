@@ -166,6 +166,9 @@ int bus1_message_allocate(struct bus1_message *message,
 		     ALIGN(message->data.n_handles * sizeof(u64), 8) +
 		     ALIGN(message->data.n_fds + sizeof(int), 8);
 
+	/* empty slices are forbidden, so make sure to allocate a minimum */
+	slice_size = max_t(size_t, slice_size, 8);
+
 	mutex_lock(&peer_info->lock);
 
 	r = bus1_user_quota_charge(peer_info, message->user, slice_size,
