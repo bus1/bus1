@@ -292,10 +292,8 @@ int bus1_peer_disconnect(struct bus1_peer *peer)
 
 static int bus1_peer_ioctl_reset(struct bus1_peer *peer, unsigned long arg)
 {
+	struct bus1_peer_info *peer_info = bus1_peer_dereference(peer);
 	struct bus1_cmd_peer_reset param;
-	struct bus1_peer_info *peer_info;
-
-	lockdep_assert_held(&peer->active);
 
 	BUILD_BUG_ON(_IOC_SIZE(BUS1_CMD_PEER_RESET) != sizeof(param));
 
@@ -303,8 +301,6 @@ static int bus1_peer_ioctl_reset(struct bus1_peer *peer, unsigned long arg)
 		return -EFAULT;
 	if (unlikely(param.flags))
 		return -EINVAL;
-
-	peer_info = bus1_peer_dereference(peer);
 
 	/* flush everything, but keep persistent nodes */
 	bus1_peer_info_reset(peer_info, false);
@@ -406,18 +402,14 @@ static int bus1_peer_ioctl_handle_release(struct bus1_peer *peer,
 static int bus1_peer_ioctl_slice_release(struct bus1_peer *peer,
 					 unsigned long arg)
 {
-	struct bus1_peer_info *peer_info;
+	struct bus1_peer_info *peer_info = bus1_peer_dereference(peer);
 	u64 offset;
 	int r;
-
-	lockdep_assert_held(&peer->active);
 
 	BUILD_BUG_ON(_IOC_SIZE(BUS1_CMD_SLICE_RELEASE) != sizeof(offset));
 
 	if (get_user(offset, (const u64 __user *)arg))
 		return -EFAULT;
-
-	peer_info = bus1_peer_dereference(peer);
 
 	mutex_lock(&peer_info->lock);
 	r = bus1_pool_release_user(&peer_info->pool, offset);
@@ -440,8 +432,6 @@ static int bus1_peer_ioctl_send(struct bus1_peer *peer, unsigned long arg)
 	u64 __user *ptr_dest;
 	size_t i;
 	int r;
-
-	lockdep_assert_held(&peer->active);
 
 	BUILD_BUG_ON(_IOC_SIZE(BUS1_CMD_SEND) != sizeof(param));
 
@@ -656,11 +646,9 @@ exit:
 
 static int bus1_peer_ioctl_recv(struct bus1_peer *peer, unsigned long arg)
 {
-	struct bus1_peer_info *peer_info;
+	struct bus1_peer_info *peer_info = bus1_peer_dereference(peer);
 	struct bus1_cmd_recv param;
 	int r;
-
-	lockdep_assert_held(&peer->active);
 
 	BUILD_BUG_ON(_IOC_SIZE(BUS1_CMD_RECV) != sizeof(param));
 
@@ -671,8 +659,6 @@ static int bus1_peer_ioctl_recv(struct bus1_peer *peer, unsigned long arg)
 		     param.type != BUS1_MSG_NONE ||
 		     param.n_dropped != 0))
 		return -EINVAL;
-
-	peer_info = bus1_peer_dereference(peer);
 
 	if (param.flags & BUS1_RECV_FLAG_PEEK)
 		r = bus1_peer_peek(peer_info, &param);
