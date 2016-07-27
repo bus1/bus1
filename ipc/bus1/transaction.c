@@ -515,9 +515,11 @@ int bus1_transaction_commit(struct bus1_transaction *transaction)
 	timestamp = bus1_queue_tick(&transaction->peer_info->queue);
 	mutex_unlock(&transaction->peer_info->queue.lock);
 
-	mutex_lock(&transaction->peer_info->lock);
-	bus1_handle_transfer_install(&transaction->handles, transaction->peer);
-	mutex_unlock(&transaction->peer_info->lock);
+	if (transaction->handles.n_new) {
+		mutex_lock(&transaction->peer_info->lock);
+		bus1_handle_transfer_install(&transaction->handles, transaction->peer);
+		mutex_unlock(&transaction->peer_info->lock);
+	}
 
 	/*
 	 * Sync all the destination queues to the final timestamp. This
@@ -552,14 +554,16 @@ int bus1_transaction_commit(struct bus1_transaction *transaction)
 			return r;
 	}
 
-	idp = (u64 __user *)(unsigned long)param->ptr_handles;
-	mutex_lock(&transaction->peer_info->lock);
-	r = bus1_handle_transfer_export(&transaction->handles,
-					transaction->peer_info,
-					idp, param->n_handles);
-	mutex_unlock(&transaction->peer_info->lock);
-	if (r < 0)
-		return r;
+	if (param->n_handles) {
+		idp = (u64 __user *)(unsigned long)param->ptr_handles;
+		mutex_lock(&transaction->peer_info->lock);
+		r = bus1_handle_transfer_export(&transaction->handles,
+						transaction->peer_info,
+						idp, param->n_handles);
+		mutex_unlock(&transaction->peer_info->lock);
+		if (r < 0)
+			return r;
+	}
 
 	/*
 	 * Actually commit each message using the final timestamp. Each message
