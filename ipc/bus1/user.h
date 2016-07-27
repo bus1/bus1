@@ -55,10 +55,12 @@ struct bus1_peer_info;
  * @id:			internal index of this user
  * @uid:		UID of the user
  * @rcu:		rcu
- * @n_messages:		number of remaining quota for owned messages
+ * @n_bytes:		number of remaining quota for owned bytes
+ * @n_slices:		number of remaining quota for owned slices
  * @n_handles:		number of remaining quota for owned handles
  * @n_fds:		number of remaining quota for inflight FDs
- * @max_messages:	maximum number of owned messages
+ * @max_bytes:		maximum number of owned bytes
+ * @max_slices:		maximum number of owned slices
  * @max_handles:	maximum number of owned handles
  * @max_fds:		maximum number of inflight FDs
  */
