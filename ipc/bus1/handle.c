@@ -1480,6 +1480,7 @@ int bus1_handle_dest_import(struct bus1_handle_dest *dest,
 			    u64 __user *idp)
 {
 	struct bus1_peer_info *peer_info = bus1_peer_dereference(peer);
+	struct bus1_peer_info *dst_peer_info;
 	struct bus1_handle *handle;
 	struct bus1_peer *dst_peer;
 	u64 id;
@@ -1526,11 +1527,8 @@ int bus1_handle_dest_import(struct bus1_handle_dest *dest,
 			return -ENXIO;
 		}
 
-		rcu_read_lock();
-		dst_peer = rcu_dereference(handle->node->owner.holder);
-		dst_peer = bus1_peer_acquire(dst_peer);
-		rcu_read_unlock();
-
+		dst_peer = bus1_handle_acquire_holder(&handle->node->owner,
+						      &dst_peer_info);
 		if (!dst_peer || !bus1_handle_acquire(handle, peer_info)) {
 			bus1_peer_release(dst_peer);
 			bus1_handle_unref(handle);
