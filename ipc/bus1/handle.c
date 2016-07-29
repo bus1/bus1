@@ -894,6 +894,34 @@ static bool bus1_node_is_valid(struct bus1_node *node,
 				  node->qnode.sender) < 0;
 }
 
+static void bus1_handle_refresh_id(struct bus1_handle *handle,
+				   struct bus1_peer_info *peer_info)
+{
+	/*
+	 * This (re-)allocates an ID for @handle to be exported to user-space.
+	 * If @handle already has an ID, it is dropped and a new one is
+	 * allocated. This assumes that no userref exists to @handle, yet, so
+	 * any possible previous ID must not be re-used for re-publish. We don't
+	 * do this for owner-handles, though. Those always keep their initial ID
+	 * since we pretend they're always pinned by user-space. This also
+	 * guarantees that a possible unmanaged ID provided by user-space is not
+	 * changed (those can only exist for owner handles).
+	 *
+	 * The caller must hold the seqlock and peer-lock on @peer_info.
+	 */
+
+	if (!RB_EMPTY_NODE(&handle->rb_id) && !bus1_handle_is_owner(handle)) {
+		rb_erase(&handle->rb_id, &peer_info->map_handles_by_id);
+		RB_CLEAR_NODE(&handle->rb_id);
+		handle->id = BUS1_HANDLE_INVALID;
+	}
+	if (RB_EMPTY_NODE(&handle->rb_id)) {
+		if (handle->id == BUS1_HANDLE_INVALID)
+			handle->id = (++peer_info->handle_ids << 2) |
+							BUS1_NODE_FLAG_MANAGED;
+	}
+}
+
 static u64 bus1_handle_userref_publish(struct bus1_handle *handle,
 				       struct bus1_peer_info *peer_info,
 				       u64 timestamp,
@@ -946,33 +974,24 @@ static u64 bus1_handle_userref_publish(struct bus1_handle *handle,
 	 */
 
 	write_seqcount_begin(&peer_info->seqcount);
-	if (!RB_EMPTY_NODE(&handle->rb_id) && !bus1_handle_is_owner(handle)) {
-		rb_erase(&handle->rb_id, &peer_info->map_handles_by_id);
-		RB_CLEAR_NODE(&handle->rb_id);
-		handle->id = BUS1_HANDLE_INVALID;
-	}
-	if (RB_EMPTY_NODE(&handle->rb_id)) {
-		if (handle->id == BUS1_HANDLE_INVALID)
-			handle->id = (++peer_info->handle_ids << 2) |
-							BUS1_NODE_FLAG_MANAGED;
-		if (commit) {
-			n = NULL;
-			slot = &peer_info->map_handles_by_id.rb_node;
-			while (*slot) {
-				n = *slot;
-				iter = container_of(n, struct bus1_handle,
-						    rb_id);
-				if (handle->id < iter->id) {
-					slot = &n->rb_left;
-				} else /* if (handle->id >= iter->id) */ {
-					WARN_ON(handle->id == iter->id);
-					slot = &n->rb_right;
-				}
+	bus1_handle_refresh_id(handle, peer_info);
+	if (RB_EMPTY_NODE(&handle->rb_id) && commit) {
+		n = NULL;
+		slot = &peer_info->map_handles_by_id.rb_node;
+		while (*slot) {
+			n = *slot;
+			iter = container_of(n, struct bus1_handle,
+					    rb_id);
+			if (handle->id < iter->id) {
+				slot = &n->rb_left;
+			} else /* if (handle->id >= iter->id) */ {
+				WARN_ON(handle->id == iter->id);
+				slot = &n->rb_right;
 			}
-			rb_link_node_rcu(&handle->rb_id, n, slot);
-			rb_insert_color(&handle->rb_id,
-					&peer_info->map_handles_by_id);
 		}
+		rb_link_node_rcu(&handle->rb_id, n, slot);
+		rb_insert_color(&handle->rb_id,
+				&peer_info->map_handles_by_id);
 	}
 	write_seqcount_end(&peer_info->seqcount);
 
