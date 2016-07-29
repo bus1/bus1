@@ -314,6 +314,9 @@ int test_io(void)
 	base = test_iterate(1000000, 0, 1024);
 
 	fprintf(stderr, "it took %lu ns for no destinations\n", base);
+	fprintf(stderr,
+		"it took %lu ns + %lu ns for one destination without payload\n",
+		base, test_iterate(100000, 1, 0) - base);
 	fprintf(stderr, "it took %lu ns + %lu ns for one destination\n", base,
 		test_iterate(100000, 1, 1024) - base);
 
