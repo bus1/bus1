@@ -851,15 +851,47 @@ static bool bus1_node_is_valid(struct bus1_node *node,
 			       u64 timestamp,
 			       unsigned long sender)
 {
+	/*
+	 * Check whether a possible message with the passed timestamp and sender
+	 * tag would be ordered *before* a possible node destruction of @node.
+	 *
+	 * Two scenarios are supported:
+	 *
+	 *   1) A message is destined at @node, in which case the message must
+	 *      have been staged on the message queue of the node owner, as well
+	 *      as a commit timestamp must have been acquired on the owner's
+	 *      clock.
+	 *      We now check whether the given message should be delivered or
+	 *      not. That is, whether the destruction of @node happened before
+	 *      @timestamp or not. We do this by guaranteeing that if the node
+	 *      is not destroyed, yet, its destruction is guaranteed to get
+	 *      committed with a higher timestamp than @timestamp (see the queue
+	 *      for details why this is true). Hence, the message should be
+	 *      transmitted. However, if the destruction is already committed,
+	 *      we can easily compare its (timestamp, sender) tuple to order it.
+	 *
+	 *   2) A message carries @node as ancillary data. In that case, this
+	 *      function decides whether @node was destroyed before the message
+	 *      carrying it was committed, in which case an invalid handle must
+	 *      be put in place.
+	 *      This requires the message to be already committed *and*
+	 *      dequeuable. That is, there is *no* staging entry in front of the
+	 *      message. We now check whether @node has a destruction committed.
+	 *      If not, we know its destruction can never be queued before the
+	 *      message, hence the handle on the message receiver is valid.
+	 *
+	 * We rely on bus1_node_is_destroyed() to provide the required read-side
+	 * barrier before we fetch @node->timestamp. See bus1_node_destroy() for
+	 * the equivalent write-side barrier.
+	 */
+
 	WARN_ON(timestamp & 1);
 
 	if (!bus1_node_is_destroyed(node))
 		return true;
 
-	if (node->timestamp == timestamp)
-		return ((unsigned long) node > sender);
-	else
-		return (node->timestamp > timestamp);
+	return bus1_queue_compare(timestamp, sender, node->timestamp,
+				  node->qnode.sender) < 0;
 }
 
 static u64 bus1_handle_userref_publish(struct bus1_handle *handle,
