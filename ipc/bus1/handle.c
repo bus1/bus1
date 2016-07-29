@@ -2271,12 +2271,7 @@ void bus1_handle_inflight_commit(struct bus1_handle_inflight *inflight,
 
 	BUS1_HANDLE_BATCH_FOREACH_HANDLE(e, pos, &inflight->batch) {
 		h = e->handle;
-		if (h) {
-			bus1_handle_userref_publish(h, peer_info, timestamp,
-						    sender);
-			bus1_handle_unref(h);
-		}
+		if (h)
+			bus1_handle_publish(h, peer_info, timestamp, sender);
 	}
-
-	inflight->batch.n_handles = 0;
 }
