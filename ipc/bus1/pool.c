@@ -500,7 +500,7 @@ void bus1_pool_flush(struct bus1_pool *pool, size_t *n_slicesp)
 }
 
 /**
- * bus1_pool_slice_copy_iovec() - copy user memory to a slice
+ * bus1_pool_write_iovec() - copy user memory to a slice
  * @pool:		pool to operate on
  * @slice:		slice to write to
  * @offset:		relative offset into slice memory
@@ -538,7 +538,7 @@ ssize_t bus1_pool_write_iovec(struct bus1_pool *pool,
 }
 
 /**
- * bus1_pool_slice_copy_kvec() - copy kernel memory to a slice
+ * bus1_pool_write_kvec() - copy kernel memory to a slice
  * @pool:		pool to operate on
  * @slice:		slice to write to
  * @offset:		relative offset into slice memory
