@@ -934,7 +934,8 @@ static u64 bus1_handle_prepare_publish(struct bus1_handle *handle,
 	 *
 	 * Note that the caller must keep the peer locked between this call and
 	 * the eventual publish operation, otherwise the returned ID might have
-	 * changed.
+	 * changed. This is *not* the case for owner-handles, though. Their ID
+	 * is valid for their entire lifetime, once assigned.
 	 */
 
 	lockdep_assert_held(&peer_info->lock);
