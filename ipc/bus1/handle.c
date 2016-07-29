@@ -922,6 +922,36 @@ static void bus1_handle_refresh_id(struct bus1_handle *handle,
 	}
 }
 
+static u64 bus1_handle_prepare_publish(struct bus1_handle *handle,
+				       struct bus1_peer_info *peer_info,
+				       u64 timestamp,
+				       unsigned long sender)
+{
+	/*
+	 * This prepares @handle to be published to user-space. That is, it
+	 * makes sure @handle has a valid ID assigned and is ordered properly
+	 * against the tuple (@timestamp, @sender).
+	 *
+	 * Note that the caller must keep the peer locked between this call and
+	 * the eventual publish operation, otherwise the returned ID might have
+	 * changed.
+	 */
+
+	lockdep_assert_held(&peer_info->lock);
+	WARN_ON(!bus1_handle_is_attached(handle));
+
+	if (!bus1_node_is_valid(handle->node, timestamp, sender))
+		return BUS1_HANDLE_INVALID;
+	if (atomic_read(&handle->n_user) >= 0)
+		return handle->id;
+
+	write_seqcount_begin(&peer_info->seqcount);
+	bus1_handle_refresh_id(handle, peer_info);
+	write_seqcount_end(&peer_info->seqcount);
+
+	return handle->id;
+}
+
 static u64 bus1_handle_userref_publish(struct bus1_handle *handle,
 				       struct bus1_peer_info *peer_info,
 				       u64 timestamp,
@@ -1511,11 +1541,17 @@ u64 bus1_handle_dest_export(struct bus1_handle_dest *dest,
 
 	if (dest->idp) {
 		WARN_ON(!bus1_handle_is_owner(dest->handle));
-		/* consumes the inflight ref */
-		id = bus1_handle_userref_publish(dest->handle, peer_info,
-						 timestamp, sender, commit);
-		if (commit)
+		if (commit) {
+			/* consumes the inflight ref */
+			id = bus1_handle_userref_publish(dest->handle,
+							 peer_info, timestamp,
+							 sender, true);
 			dest->handle = bus1_handle_unref(dest->handle);
+		} else {
+			id = bus1_handle_prepare_publish(dest->handle,
+							 peer_info, timestamp,
+							 sender);
+		}
 	} else if (!bus1_node_is_valid(dest->handle->node, timestamp, sender)) {
 		id = BUS1_HANDLE_INVALID;
 	} else {
@@ -1948,9 +1984,8 @@ int bus1_handle_transfer_export(struct bus1_handle_transfer *transfer,
 			entry->handle = bus1_handle_unref(entry->handle);
 		} else {
 			WARN_ON(!bus1_handle_is_owner(entry->handle));
-			id = bus1_handle_userref_publish(entry->handle,
-							 peer_info,
-							 0, 0, false);
+			id = bus1_handle_prepare_publish(entry->handle,
+							 peer_info, 0, 0);
 			if (put_user(id, ids + pos))
 				return -EFAULT;
 		}
@@ -2202,9 +2237,8 @@ size_t bus1_handle_inflight_walk(struct bus1_handle_inflight *inflight,
 	for (i = 0; i < n; ++i) {
 		h = (*block)[i].handle;
 		if (h)
-			ids[i] = bus1_handle_userref_publish(h, peer_info,
-							     timestamp, sender,
-							     false);
+			ids[i] = bus1_handle_prepare_publish(h, peer_info,
+							     timestamp, sender);
 		else
 			ids[i] = BUS1_HANDLE_INVALID;
 	}
