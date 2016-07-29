@@ -1555,11 +1555,7 @@ int bus1_handle_dest_import(struct bus1_handle_dest *dest,
  * a single user reference to the node and provide it back to the caller. This
  * function acquires the ID and optionally publishes the user-ref for it. Either
  * way the ID is returned, and it is up to the caller to copy it back to
- * userspcae.
- *
- * When committing the handle, this call releases the handles after it has been
- * processed. Hence, committing the destination must be the last operation on a
- * destination object, before it is destroyed.
+ * userspace.
  *
  * The caller must hold the peer lock of @peer_info.
  *
@@ -1580,17 +1576,13 @@ u64 bus1_handle_dest_export(struct bus1_handle_dest *dest,
 
 	if (dest->idp) {
 		WARN_ON(!bus1_handle_is_owner(dest->handle));
-		if (commit) {
-			/* consumes the inflight ref */
-			id = bus1_handle_userref_publish(dest->handle,
-							 peer_info, timestamp,
-							 sender);
-			dest->handle = bus1_handle_unref(dest->handle);
-		} else {
+		if (commit)
+			id = bus1_handle_publish(dest->handle, peer_info,
+						 timestamp, sender);
+		else
 			id = bus1_handle_prepare_publish(dest->handle,
 							 peer_info, timestamp,
 							 sender);
-		}
 	} else if (!bus1_node_is_valid(dest->handle->node, timestamp, sender)) {
 		id = BUS1_HANDLE_INVALID;
 	} else {
