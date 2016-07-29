@@ -2175,8 +2175,7 @@ void bus1_handle_inflight_install(struct bus1_handle_inflight *inflight,
 
 			t = bus1_handle_install_holder(h);
 			if (t != h) {
-				mutex_unlock(&dst_info->lock);
-				bus1_handle_release(h, dst_info);
+				bus1_handle_release_unlock(h, dst_info);
 				bus1_handle_unref(h);
 				e->handle = t;
 				mutex_lock(&dst_info->lock);
