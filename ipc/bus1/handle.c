@@ -847,7 +847,8 @@ bus1_handle_release(struct bus1_handle *handle,
 	return NULL;
 }
 
-static bool bus1_node_is_valid(struct bus1_node *node, u64 timestamp,
+static bool bus1_node_is_valid(struct bus1_node *node,
+			       u64 timestamp,
 			       unsigned long sender)
 {
 	WARN_ON(timestamp & 1);
