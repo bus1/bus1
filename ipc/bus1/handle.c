@@ -955,8 +955,7 @@ static u64 bus1_handle_prepare_publish(struct bus1_handle *handle,
 static u64 bus1_handle_userref_publish(struct bus1_handle *handle,
 				       struct bus1_peer_info *peer_info,
 				       u64 timestamp,
-				       unsigned long sender,
-				       bool commit)
+				       unsigned long sender)
 {
 	struct rb_node *n, **slot;
 	struct bus1_handle *iter;
@@ -965,8 +964,7 @@ static u64 bus1_handle_userref_publish(struct bus1_handle *handle,
 	WARN_ON(!bus1_handle_is_attached(handle));
 
 	if (!bus1_node_is_valid(handle->node, timestamp, sender)) {
-		if (commit)
-			WARN_ON(atomic_dec_return(&handle->n_inflight) < 0);
+		WARN_ON(atomic_dec_return(&handle->n_inflight) < 0);
 		return BUS1_HANDLE_INVALID;
 	}
 
@@ -981,10 +979,8 @@ static u64 bus1_handle_userref_publish(struct bus1_handle *handle,
 	 * that it will not be the last.
 	 */
 	if (atomic_read(&handle->n_user) >= 0) {
-		if (commit) {
-			WARN_ON(atomic_inc_return(&handle->n_user) == 0);
-			WARN_ON(atomic_dec_return(&handle->n_inflight) == 0);
-		}
+		WARN_ON(atomic_inc_return(&handle->n_user) == 0);
+		WARN_ON(atomic_dec_return(&handle->n_inflight) == 0);
 		return handle->id;
 	}
 
@@ -1005,7 +1001,7 @@ static u64 bus1_handle_userref_publish(struct bus1_handle *handle,
 
 	write_seqcount_begin(&peer_info->seqcount);
 	bus1_handle_refresh_id(handle, peer_info);
-	if (RB_EMPTY_NODE(&handle->rb_id) && commit) {
+	if (RB_EMPTY_NODE(&handle->rb_id)) {
 		n = NULL;
 		slot = &peer_info->map_handles_by_id.rb_node;
 		while (*slot) {
@@ -1026,8 +1022,7 @@ static u64 bus1_handle_userref_publish(struct bus1_handle *handle,
 	write_seqcount_end(&peer_info->seqcount);
 
 	/* publish the ref to user-space; this consumes the inflight ref */
-	if (commit)
-		WARN_ON(atomic_inc_return(&handle->n_user) != 0);
+	WARN_ON(atomic_inc_return(&handle->n_user) != 0);
 
 	return handle->id;
 }
@@ -1174,7 +1169,7 @@ int bus1_handle_pair(struct bus1_peer *peer,
 
 		WARN_ON(!bus1_handle_attach_holder(clone_handle, clone));
 		*peer_idp = bus1_handle_userref_publish(peer_handle, peer_info,
-							0, 0, true);
+							0, 0);
 
 		mutex_unlock(&peer_info->lock);
 	}
@@ -1188,7 +1183,7 @@ int bus1_handle_pair(struct bus1_peer *peer,
 	t = clone_handle;
 	clone_handle = bus1_handle_install_holder(t);
 	*clone_idp = bus1_handle_userref_publish(clone_handle, clone_info,
-						 0, 0, true);
+						 0, 0);
 	mutex_unlock(&clone_info->lock);
 
 	if (clone_handle != t) {
@@ -1231,8 +1226,7 @@ int bus1_handle_release_by_id(struct bus1_peer *peer, u64 *idp)
 		mutex_lock(&peer_info->lock);
 		bus1_handle_attach_owner(handle, peer);
 		bus1_handle_install_owner(handle);
-		*idp = bus1_handle_userref_publish(handle, peer_info,
-						   0, 0, true);
+		*idp = bus1_handle_userref_publish(handle, peer_info, 0, 0);
 		WARN_ON(atomic_dec_return(&handle->n_user) != -1);
 		bus1_handle_release_unlock(handle, peer_info);
 
@@ -1296,8 +1290,7 @@ int bus1_node_destroy_by_id(struct bus1_peer *peer, u64 *idp)
 		mutex_lock(&peer_info->lock);
 		bus1_handle_attach_owner(handle, peer);
 		bus1_handle_install_owner(handle);
-		*idp = bus1_handle_userref_publish(handle, peer_info,
-						   0, 0, true);
+		*idp = bus1_handle_userref_publish(handle, peer_info, 0, 0);
 		bus1_node_destroy(handle->node, peer_info);
 		mutex_unlock(&peer_info->lock);
 
@@ -1545,7 +1538,7 @@ u64 bus1_handle_dest_export(struct bus1_handle_dest *dest,
 			/* consumes the inflight ref */
 			id = bus1_handle_userref_publish(dest->handle,
 							 peer_info, timestamp,
-							 sender, true);
+							 sender);
 			dest->handle = bus1_handle_unref(dest->handle);
 		} else {
 			id = bus1_handle_prepare_publish(dest->handle,
@@ -1994,7 +1987,7 @@ int bus1_handle_transfer_export(struct bus1_handle_transfer *transfer,
 	BUS1_HANDLE_BATCH_FOREACH_HANDLE(entry, pos, &transfer->batch) {
 		if (entry->handle) {
 			bus1_handle_userref_publish(entry->handle, peer_info,
-						    0, 0, true);
+						    0, 0);
 			entry->handle = bus1_handle_unref(entry->handle);
 		}
 	}
@@ -2275,7 +2268,7 @@ void bus1_handle_inflight_commit(struct bus1_handle_inflight *inflight,
 		h = e->handle;
 		if (h) {
 			bus1_handle_userref_publish(h, peer_info, timestamp,
-						    sender, true);
+						    sender);
 			bus1_handle_unref(h);
 		}
 	}
