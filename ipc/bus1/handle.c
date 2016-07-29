@@ -2120,8 +2120,7 @@ int bus1_handle_inflight_import(struct bus1_handle_inflight *inflight,
  * @dst:		peer @inflight is for
  *
  * After an inflight context was successfully instantiated, this will install
- * the handles into the peer @dst. The caller must provide the used transfer
- * context and the origin peer as @transfer and @src.
+ * the handles into the peer @dst.
  */
 void bus1_handle_inflight_install(struct bus1_handle_inflight *inflight,
 				  struct bus1_peer *dst)
