@@ -2094,23 +2094,16 @@ int bus1_handle_inflight_import(struct bus1_handle_inflight *inflight,
 	to = BUS1_HANDLE_BATCH_FIRST(&inflight->batch, pos_to);
 
 	BUS1_HANDLE_BATCH_FOREACH_HANDLE(from, pos_from, &transfer->batch) {
-		WARN_ON(pos_to >= inflight->batch.n_entries);
+		handle = bus1_handle_find_by_node(peer_info,
+						  from->handle->node);
+		if (handle && !bus1_handle_acquire(handle, peer_info))
+			handle = bus1_handle_unref(handle);
+		if (!handle) {
+			handle = bus1_handle_new_holder(from->handle->node);
+			if (IS_ERR(handle))
+				return PTR_ERR(handle);
 
-		if (!from->handle) {
-			handle = NULL;
-		} else {
-			handle = bus1_handle_find_by_node(peer_info,
-							  from->handle->node);
-			if (handle && !bus1_handle_acquire(handle, peer_info))
-				handle = bus1_handle_unref(handle);
-			if (!handle) {
-				handle = bus1_handle_new_holder(
-							from->handle->node);
-				if (IS_ERR(handle))
-					return PTR_ERR(handle);
-
-				++inflight->n_new;
-			}
+			++inflight->n_new;
 		}
 
 		to->handle = handle;
