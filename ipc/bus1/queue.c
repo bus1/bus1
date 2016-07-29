@@ -289,10 +289,8 @@ static void bus1_queue_add(struct bus1_queue *queue,
 	rb_link_node(&node->rb, n, slot);
 	rb_insert_color(&node->rb, &queue->messages);
 
-	if (!(timestamp & 1)) {
-		if (is_leftmost)
-			rcu_assign_pointer(queue->front, &node->rb);
-	}
+	if (!(timestamp & 1) && is_leftmost)
+		rcu_assign_pointer(queue->front, &node->rb);
 
 	if (!readable && bus1_queue_is_readable(queue))
 		wake_up_interruptible(queue->waitq);
