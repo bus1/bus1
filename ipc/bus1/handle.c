@@ -814,20 +814,6 @@ bus1_handle_release_unlock(struct bus1_handle *handle,
 }
 
 static struct bus1_handle *
-bus1_handle_release_relock(struct bus1_handle *handle,
-			   struct bus1_peer_info *peer_info)
-{
-	/*
-	 * See bus1_handle_release(). This expects the caller to have already
-	 * locked @peer_info, and it will return with the peer still (or again)
-	 * locked.
-	 */
-	if (bus1_handle_release_internal(handle, peer_info))
-		mutex_lock(&peer_info->lock);
-	return NULL;
-}
-
-static struct bus1_handle *
 bus1_handle_release(struct bus1_handle *handle,
 		    struct bus1_peer_info *peer_info)
 {
@@ -1989,9 +1975,6 @@ void bus1_handle_transfer_install(struct bus1_handle_transfer *transfer,
  * caller. This function both publishes those user-refs *and* directly copies
  * them over into the user-provided buffers.
  *
- * This calls releases all handles after they have been processes. Hence, this
- * must be the last operation on a transfer object, before it is destroyed.
- *
  * The caller must hold the peer lock of @peer_info.
  *
  * Return: 0 on success, negative error code on failure.
@@ -2010,11 +1993,7 @@ int bus1_handle_transfer_export(struct bus1_handle_transfer *transfer,
 
 	BUS1_HANDLE_BATCH_FOREACH_HANDLE(entry, pos, &transfer->batch) {
 		WARN_ON(!entry->handle);
-		if (entry->handle->id != BUS1_HANDLE_INVALID) {
-			WARN_ON(!bus1_handle_was_attached(entry->handle));
-			bus1_handle_release_relock(entry->handle, peer_info);
-			entry->handle = bus1_handle_unref(entry->handle);
-		} else {
+		if (entry->handle->id == BUS1_HANDLE_INVALID) {
 			WARN_ON(!bus1_handle_is_owner(entry->handle));
 			id = bus1_handle_prepare_publish(entry->handle,
 							 peer_info, 0, 0);
@@ -2024,14 +2003,10 @@ int bus1_handle_transfer_export(struct bus1_handle_transfer *transfer,
 	}
 
 	BUS1_HANDLE_BATCH_FOREACH_HANDLE(entry, pos, &transfer->batch) {
-		if (entry->handle) {
-			bus1_handle_userref_publish(entry->handle, peer_info,
-						    0, 0);
-			entry->handle = bus1_handle_unref(entry->handle);
-		}
+		if (bus1_handle_is_owner(entry->handle) &&
+		    RB_EMPTY_NODE(&entry->handle->rb_id))
+			bus1_handle_publish(entry->handle, peer_info, 0, 0);
 	}
-
-	transfer->batch.n_handles = 0;
 
 	return 0;
 }
