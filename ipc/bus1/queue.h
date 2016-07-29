@@ -270,4 +270,66 @@ bus1_queue_xchg_seed(struct bus1_queue *queue, struct bus1_queue_node *node)
 	return node;
 }
 
+/**
+ * bus1_queue_compare() - comparator for queue ordering
+ * @a_ts:		timestamp of first node to compare
+ * @a_sender:		sender tag of first node to compare
+ * @b_ts:		timestamp of second node to compare against
+ * @b_sender:		sender tag of second node to compare against
+ *
+ * Messages on a message queue are ordered. This function implements the
+ * comparator used for all message ordering in queues. Two tags are used for
+ * ordering, the timestamp and the sender-tag of a node. Both must be passed to
+ * this function.
+ *
+ * This compares the tuples (@a_ts, @a_sender) and (@b_ts, @b_sender).
+ *
+ * Return: <0 if (@a_ts, @a_sender) is ordered before, 0 if the same, >0 if
+ *         ordered after.
+ */
+static inline int bus1_queue_compare(u64 a_ts,
+				     unsigned long a_sender,
+				     u64 b_ts,
+				     unsigned long b_sender)
+{
+	/*
+	 * This orders two possible queue nodes. As first-level ordering we
+	 * use the timestamps, as second-level ordering we use the sender-tag.
+	 *
+	 * Timestamp-based ordering should be obvious. We simply make sure that
+	 * any message with a lower timestamp is always considered to be first.
+	 * However, due to the distributed nature of the queue-clocks, multiple
+	 * messages might end up with the same timestamp. A multicast picks the
+	 * highest of its destination clocks and bumps everyone else. As such,
+	 * the picked timestamp for a multicast might not be unique, if another
+	 * multicast with only partial destination overlap races it and happens
+	 * to get the same timestamp via a distinct destination clock. If that
+	 * happens, we guarantee a stable order by comparing the sender-tag of
+	 * the nodes. The sender-tag can never be equal, since we allocate
+	 * the unique final timestamp via the sender-clock (i.e., if the
+	 * sender-tag matches, the timestamp must be distinct).
+	 *
+	 * Note that we strictly rely on any multicast to be staged before its
+	 * final commit. This guarantees that if a node is queued with a commit
+	 * timestamp, it can never be lower than the commit timestamp of any
+	 * other committed node, except if it was already staged with a lower
+	 * staging timestamp (as such it blocks the conflicting entry). This
+	 * also implies that if two nodes share a timestamp, both will
+	 * necessarily block each other until both are committed (since shared
+	 * timestamps imply that an entry is guaranteed to be staged before a
+	 * conflicting entry is committed).
+	 */
+
+	if (a_ts < b_ts)
+		return -1;
+	else if (a_ts > b_ts)
+		return 1;
+	else if (a_sender < b_sender)
+		return -1;
+	else if (a_sender > b_sender)
+		return 1;
+
+	return 0;
+}
+
 #endif /* __BUS1_QUEUE_H */

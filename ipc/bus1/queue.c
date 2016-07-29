@@ -75,6 +75,14 @@ static void bus1_queue_node_no_free(struct kref *ref)
 	WARN(1, "Queue node freed unexpectedly");
 }
 
+static int bus1_queue_node_compare(struct bus1_queue_node *node,
+				   u64 timestamp,
+				   unsigned long sender)
+{
+	return bus1_queue_compare(bus1_queue_node_get_timestamp(node),
+				  node->sender, timestamp, sender);
+}
+
 /**
  * bus1_queue_init() - initialize queue
  * @queue:	queue to initialize
@@ -153,55 +161,6 @@ void bus1_queue_flush(struct bus1_queue *queue,
 	mutex_unlock(&queue->lock);
 }
 
-static int bus1_queue_node_compare(struct bus1_queue_node *a,
-				   struct bus1_queue_node *b)
-{
-	u64 ts_a, ts_b;
-
-	/*
-	 * This compares two nodes. As first-level ordering we use the
-	 * timestamps, as second-level ordering we use the sender-tag.
-	 *
-	 * Timestamp-based ordering should be obvious. We simply make sure that
-	 * any message with a lower timestamp is always considered to be first.
-	 * However, due to the distributed nature of the queue-clocks, multiple
-	 * messages might end up with the same timestamp. A multicast picks the
-	 * highest of its destination clocks and bumps everyone else. As such,
-	 * the picked timestamp for a multicast might not be unique, if another
-	 * multicast with only partial destination overlap races it and happens
-	 * to get the same timestamp via a distinct destination clock. If that
-	 * happens, we guarantee a stable order by comparing the sender-tag of
-	 * the nodes. The sender-tag can never be equal, since we allocate
-	 * the unique final timestamp via the sender-clock (i.e., if the
-	 * sender-tag matches, the timestamp must be distinct).
-	 *
-	 * Note that we strictly rely on any multicast to be staged before its
-	 * final commit. This guarantees that if a node is queued with a commit
-	 * timestamp, it can never be lower than the commit timestamp of any
-	 * other committed node, except if it was already staged with a lower
-	 * staging timestamp (as such it blocks the conflicting entry). This
-	 * also implies that if two nodes share a timestamp, both will
-	 * necessarily block each other until both are committed (since shared
-	 * timestamps imply that an entry is guaranteed to be staged before a
-	 * conflicting entry is committed).
-	 */
-
-	ts_a = bus1_queue_node_get_timestamp(a);
-	ts_b = bus1_queue_node_get_timestamp(b);
-
-	if (ts_a < ts_b)
-		return -1;
-	else if (ts_a > ts_b)
-		return 1;
-	else if (a->sender < b->sender)
-		return -1;
-	else if (a->sender > b->sender)
-		return 1;
-
-	WARN_ON(a != b);
-	return 0;
-}
-
 static void bus1_queue_add(struct bus1_queue *queue,
 			   struct bus1_queue_node *node,
 			   u64 timestamp)
@@ -257,7 +216,8 @@ static void bus1_queue_add(struct bus1_queue *queue,
 		if (n) {
 			iter = container_of(n, struct bus1_queue_node, rb);
 			if (bus1_queue_node_is_committed(iter) &&
-			    bus1_queue_node_compare(iter, node) < 0)
+			    bus1_queue_node_compare(iter, timestamp,
+						    node->sender) < 0)
 				rcu_assign_pointer(queue->front, n);
 		}
 	}
@@ -277,7 +237,9 @@ static void bus1_queue_add(struct bus1_queue *queue,
 	while (*slot) {
 		n = *slot;
 		iter = container_of(n, struct bus1_queue_node, rb);
-		r = bus1_queue_node_compare(node, iter);
+		r = bus1_queue_node_compare(node,
+					    bus1_queue_node_get_timestamp(iter),
+					    iter->sender);
 		if (r < 0) {
 			slot = &n->rb_left;
 		} else {
