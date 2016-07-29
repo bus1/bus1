@@ -362,32 +362,6 @@ bus1_handle_acquire_holder(struct bus1_handle *handle,
 	return peer;
 }
 
-static void bus1_node_queue_notification(struct bus1_node *node,
-					 struct bus1_peer_info *owner_info)
-{
-	/*
-	 * Queue a node-release notification on @owner_info if not already
-	 * queued. Note that the caller must make sure to never call this on
-	 * uninstalled nodes, as the peer could not make any sense of the
-	 * notification.
-	 */
-
-	WARN_ON(RB_EMPTY_NODE(&node->owner.rb_id));
-
-	bus1_queue_commit_unstaged(&owner_info->queue, &node->qnode);
-}
-
-static void bus1_node_dequeue_notification(struct bus1_node *node,
-					   struct bus1_peer_info *owner_info)
-{
-	/*
-	 * Dequeue any node-release notification on @owner_info if queued,
-	 * regardless whether it is already committed or not. It is simply
-	 * flushed from the message queue and then dropped.
-	 */
-	bus1_queue_remove(&owner_info->queue, &node->qnode);
-}
-
 static void bus1_handle_attach_internal(struct bus1_handle *handle,
 					struct bus1_peer *peer)
 {
@@ -413,7 +387,7 @@ static void bus1_handle_attach_internal(struct bus1_handle *handle,
 	lockdep_assert_held(&owner_info->lock);
 
 	/* flush any release-notification whenever a new handle is attached */
-	bus1_node_dequeue_notification(handle->node, owner_info);
+	bus1_queue_remove(&owner_info->queue, &handle->node->qnode);
 }
 
 static void bus1_handle_attach_owner(struct bus1_handle *handle,
@@ -709,7 +683,8 @@ static void bus1_handle_detach_internal(struct bus1_handle *handle,
 		if (RB_EMPTY_NODE(&handle->node->owner.rb_id))
 			bus1_node_stage(handle->node, owner_info);
 		else if (!bus1_node_is_destroyed(handle->node))
-			bus1_node_queue_notification(handle->node, owner_info);
+			bus1_queue_commit_unstaged(&owner_info->queue,
+						   &handle->node->qnode);
 	}
 }
 
@@ -767,7 +742,8 @@ bus1_handle_acquire(struct bus1_handle *handle,
 				      &handle->node->list_handles);
 
 			/* flush any release-notification */
-			bus1_node_dequeue_notification(handle->node, peer_info);
+			bus1_queue_remove(&peer_info->queue,
+					  &handle->node->qnode);
 		}
 		mutex_unlock(&peer_info->lock);
 	}
