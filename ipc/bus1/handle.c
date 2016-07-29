@@ -952,6 +952,53 @@ static u64 bus1_handle_prepare_publish(struct bus1_handle *handle,
 	return handle->id;
 }
 
+static u64 bus1_handle_publish(struct bus1_handle *handle,
+			       struct bus1_peer_info *peer_info,
+			       u64 timestamp,
+			       unsigned long sender)
+{
+	struct rb_node *n, **slot;
+	struct bus1_handle *iter;
+
+	lockdep_assert_held(&peer_info->lock);
+	WARN_ON(!bus1_handle_is_attached(handle));
+
+	if (!bus1_node_is_valid(handle->node, timestamp, sender))
+		return BUS1_HANDLE_INVALID;
+	if (atomic_read(&handle->n_user) >= 0) {
+		WARN_ON(atomic_inc_return(&handle->n_user) == 0);
+		return handle->id;
+	}
+
+	write_seqcount_begin(&peer_info->seqcount);
+	bus1_handle_refresh_id(handle, peer_info);
+	if (RB_EMPTY_NODE(&handle->rb_id)) {
+		n = NULL;
+		slot = &peer_info->map_handles_by_id.rb_node;
+		while (*slot) {
+			n = *slot;
+			iter = container_of(n, struct bus1_handle,
+					    rb_id);
+			if (handle->id < iter->id) {
+				slot = &n->rb_left;
+			} else /* if (handle->id >= iter->id) */ {
+				WARN_ON(handle->id == iter->id);
+				slot = &n->rb_right;
+			}
+		}
+		rb_link_node_rcu(&handle->rb_id, n, slot);
+		rb_insert_color(&handle->rb_id,
+				&peer_info->map_handles_by_id);
+	}
+	write_seqcount_end(&peer_info->seqcount);
+
+	/* publish the ref to user-space; this pins an inflight ref */
+	WARN_ON(atomic_inc_return(&handle->n_user) != 0);
+	WARN_ON(atomic_inc_return(&handle->n_inflight) < 2);
+
+	return handle->id;
+}
+
 static u64 bus1_handle_userref_publish(struct bus1_handle *handle,
 				       struct bus1_peer_info *peer_info,
 				       u64 timestamp,
@@ -1168,10 +1215,10 @@ int bus1_handle_pair(struct bus1_peer *peer,
 		bus1_handle_install_owner(peer_handle);
 
 		WARN_ON(!bus1_handle_attach_holder(clone_handle, clone));
-		*peer_idp = bus1_handle_userref_publish(peer_handle, peer_info,
-							0, 0);
+		*peer_idp = bus1_handle_publish(peer_handle, peer_info, 0, 0);
 
-		mutex_unlock(&peer_info->lock);
+		/* release the inflight-ref acquired via attach() and unlock */
+		bus1_handle_release_unlock(peer_handle, peer_info);
 	}
 
 	/*
@@ -1182,9 +1229,9 @@ int bus1_handle_pair(struct bus1_peer *peer,
 	mutex_lock(&clone_info->lock);
 	t = clone_handle;
 	clone_handle = bus1_handle_install_holder(t);
-	*clone_idp = bus1_handle_userref_publish(clone_handle, clone_info,
-						 0, 0);
-	mutex_unlock(&clone_info->lock);
+	*clone_idp = bus1_handle_publish(clone_handle, clone_info, 0, 0);
+	/* release the inflight-ref acquired via attach() and unlock */
+	bus1_handle_release_unlock(clone_handle, clone_info);
 
 	if (clone_handle != t) {
 		bus1_handle_release(t, clone_info);
@@ -1226,8 +1273,9 @@ int bus1_handle_release_by_id(struct bus1_peer *peer, u64 *idp)
 		mutex_lock(&peer_info->lock);
 		bus1_handle_attach_owner(handle, peer);
 		bus1_handle_install_owner(handle);
-		*idp = bus1_handle_userref_publish(handle, peer_info, 0, 0);
+		*idp = bus1_handle_publish(handle, peer_info, 0, 0);
 		WARN_ON(atomic_dec_return(&handle->n_user) != -1);
+		WARN_ON(atomic_dec_return(&handle->n_inflight) < 1);
 		bus1_handle_release_unlock(handle, peer_info);
 
 		r = 1;
@@ -1290,9 +1338,9 @@ int bus1_node_destroy_by_id(struct bus1_peer *peer, u64 *idp)
 		mutex_lock(&peer_info->lock);
 		bus1_handle_attach_owner(handle, peer);
 		bus1_handle_install_owner(handle);
-		*idp = bus1_handle_userref_publish(handle, peer_info, 0, 0);
+		*idp = bus1_handle_publish(handle, peer_info, 0, 0);
 		bus1_node_destroy(handle->node, peer_info);
-		mutex_unlock(&peer_info->lock);
+		bus1_handle_release_unlock(handle, peer_info);
 
 		r = 1;
 	} else {
