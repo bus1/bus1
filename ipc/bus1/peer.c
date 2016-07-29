@@ -460,7 +460,7 @@ static int bus1_peer_ioctl_send(struct bus1_peer *peer, unsigned long arg)
 	if (IS_ERR(transaction))
 		return PTR_ERR(transaction);
 
-	if (param.flags & BUS1_SEND_FLAG_SEED) { /* Special-case: set seed */
+	if (param.flags & BUS1_SEND_FLAG_SEED) {
 		if (unlikely((param.flags & BUS1_SEND_FLAG_CONTINUE) ||
 			     param.n_destinations)) {
 			r = -EINVAL;
@@ -470,14 +470,7 @@ static int bus1_peer_ioctl_send(struct bus1_peer *peer, unsigned long arg)
 		r = bus1_transaction_commit_seed(transaction);
 		if (r < 0)
 			goto exit;
-
-	} else if (param.n_destinations == 1) { /* Fastpath: unicast */
-		r = bus1_transaction_commit_for_id(transaction,
-						   ptr_dest);
-		if (r < 0)
-			goto exit;
-
-	} else { /* Slowpath: any message */
+	} else {
 		for (i = 0; i < param.n_destinations; ++i) {
 			r = bus1_transaction_instantiate_for_id(transaction,
 								ptr_dest + i);

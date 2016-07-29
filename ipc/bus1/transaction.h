@@ -34,8 +34,6 @@ bus1_transaction_free(struct bus1_transaction *transaction, u8 *stack_buffer);
 int bus1_transaction_instantiate_for_id(struct bus1_transaction *transaction,
 					u64 __user *idp);
 int bus1_transaction_commit(struct bus1_transaction *transaction);
-int bus1_transaction_commit_for_id(struct bus1_transaction *transaction,
-				   u64 __user *idp);
 int bus1_transaction_commit_seed(struct bus1_transaction *transaction);
 
 #endif /* __BUS1_TRANSACTION_H */

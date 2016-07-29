@@ -603,30 +603,6 @@ int bus1_transaction_commit(struct bus1_transaction *transaction)
 }
 
 /**
- * bus1_transaction_commit_for_id() - instantiate and commit unicast
- * @transaction:	transaction to use
- * @idp:		user-space pointer with destination ID
- *
- * This is a fast-path for unicast messages. It is equivalent to calling
- * bus1_transaction_instantiate_for_id(), followed by bus1_transaction_commit().
- *
- * Return: 0 on success, negative error code on failure.
- */
-int bus1_transaction_commit_for_id(struct bus1_transaction *transaction,
-				   u64 __user *idp)
-{
-	int r;
-
-	/* XXX: actually optimize this */
-
-	r = bus1_transaction_instantiate_for_id(transaction, idp);
-	if (r < 0)
-		return r;
-
-	return bus1_transaction_commit(transaction);
-}
-
-/**
  * bus1_transaction_commit_seed() - instantiate and commit seed
  * @transaction:	transaction to use
  *
