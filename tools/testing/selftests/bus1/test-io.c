@@ -9,6 +9,7 @@
 
 #define _GNU_SOURCE
 #include <stdlib.h>
+#include <sys/socket.h>
 #include <sys/types.h>
 #include <time.h>
 #include "test.h"
@@ -195,6 +196,46 @@ static inline uint64_t nsec_from_clock(clockid_t clock)
 	return ts.tv_sec * UINT64_C(1000000000) + ts.tv_nsec;
 }
 
+static void test_one_uds(int uds[2], void *payload, size_t n_bytes)
+{
+	int r;
+
+	/* send */
+	r = write(uds[0], payload, n_bytes);
+	assert(r == n_bytes);
+
+	/* receive */
+	r = recv(uds[1], payload, n_bytes, 0);
+	assert(r == n_bytes);
+}
+
+static uint64_t test_iterate_uds(unsigned int iterations, size_t n_bytes)
+{
+	int uds[2];
+	char payload[n_bytes];
+	unsigned int i;
+	uint64_t time_start, time_end;
+	int r;
+
+	/* create socket pair */
+	r = socketpair(AF_UNIX, SOCK_SEQPACKET, 0, uds);
+	assert(r >= 0);
+
+	/* caches */
+	test_one_uds(uds, payload, n_bytes);
+
+	time_start = nsec_from_clock(CLOCK_THREAD_CPUTIME_ID);
+	for (i = 0; i < iterations; i++)
+		test_one_uds(uds, payload, n_bytes);
+	time_end = nsec_from_clock(CLOCK_THREAD_CPUTIME_ID);
+
+	/* cleanup */
+	close(uds[0]);
+	close(uds[1]);
+
+	return (time_end - time_start) / iterations;
+}
+
 static void test_one(struct bus1_client *parent,
 		     struct bus1_client **children,
 		     uint64_t *child_handles,
@@ -310,6 +351,11 @@ int test_io(void)
 	unsigned long base;
 
 	test_basic();
+
+	fprintf(stderr, "UDS took %lu ns without payload\n",
+		test_iterate_uds(100000, 0));
+	fprintf(stderr, "UDS took %lu ns\n",
+		test_iterate_uds(100000, 1024));
 
 	base = test_iterate(1000000, 0, 1024);
 
