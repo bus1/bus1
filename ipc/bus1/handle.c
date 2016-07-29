@@ -549,7 +549,7 @@ static void bus1_handle_uninstall_holder(struct bus1_handle *handle,
 	bus1_queue_remove(&peer_info->queue, &handle->qnode);
 }
 
-static void bus1_node_stage_flush(struct list_head *list_notify)
+static void bus1_node_commit_notifications(struct list_head *list_notify)
 {
 	struct bus1_peer_info *peer_info;
 	struct bus1_handle *h;
@@ -587,8 +587,8 @@ static void bus1_node_stage_flush(struct list_head *list_notify)
 	}
 }
 
-static void bus1_node_stage(struct bus1_node *node,
-			    struct bus1_peer_info *peer_info)
+static void bus1_node_destroy(struct bus1_node *node,
+			      struct bus1_peer_info *peer_info)
 {
 	struct bus1_peer_info *holder_info;
 	struct bus1_peer *holder;
@@ -640,7 +640,7 @@ static void bus1_node_stage(struct bus1_node *node,
 	mutex_unlock(&peer_info->queue.lock);
 
 	list_add_tail(&node->owner.link_node, &list_notify);
-	bus1_node_stage_flush(&list_notify);
+	bus1_node_commit_notifications(&list_notify);
 
 done:
 	/*
@@ -681,7 +681,7 @@ static void bus1_handle_detach_internal(struct bus1_handle *handle,
 	 */
 	if (list_empty(&handle->node->list_handles)) {
 		if (RB_EMPTY_NODE(&handle->node->owner.rb_id))
-			bus1_node_stage(handle->node, owner_info);
+			bus1_node_destroy(handle->node, owner_info);
 		else if (!bus1_node_is_destroyed(handle->node))
 			bus1_queue_commit_unstaged(&owner_info->queue,
 						   &handle->node->qnode);
@@ -1216,7 +1216,7 @@ int bus1_node_destroy_by_id(struct bus1_peer *peer, u64 *idp)
 		bus1_handle_install_owner(handle);
 		*idp = bus1_handle_userref_publish(handle, peer_info,
 						   0, 0, true);
-		bus1_node_stage(handle->node, peer_info);
+		bus1_node_destroy(handle->node, peer_info);
 		mutex_unlock(&peer_info->lock);
 
 		r = 1;
@@ -1230,7 +1230,7 @@ int bus1_node_destroy_by_id(struct bus1_peer *peer, u64 *idp)
 		    bus1_node_is_destroyed(handle->node)) {
 			r = -ENXIO;
 		} else {
-			bus1_node_stage(handle->node, peer_info);
+			bus1_node_destroy(handle->node, peer_info);
 			r = 0;
 		}
 		mutex_unlock(&peer_info->lock);
@@ -1268,7 +1268,7 @@ void bus1_handle_flush_all(struct bus1_peer_info *peer_info, bool final)
 			if (final || !test_bit(BUS1_NODE_BIT_PERSISTENT,
 					       &h->node->flags)) {
 				bus1_handle_ref(h);
-				bus1_node_stage(h->node, peer_info);
+				bus1_node_destroy(h->node, peer_info);
 				if (atomic_xchg(&h->n_user, -1) != -1)
 					bus1_handle_release_owner(h, peer_info);
 				bus1_handle_unref(h);
