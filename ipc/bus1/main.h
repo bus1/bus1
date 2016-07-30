@@ -71,48 +71,50 @@
 /**
  * BUS1_BYTES_MAX - per-user limit for maximum number of in-flight bytes
  *
- * This defines the limit on how many bytes each user can have in-flight.
+ * This defines the default limit on how many bytes each user can have
+ * in-flight.
  *
  * The byte-limit controls the number of slices a user can have assigned. They
  * are accounted, on the receiving user, on SEND and deaccounted on RECV.
  * Queuing messages on a remote peer is subject to a per-sending-user quota.
  */
-#define BUS1_BYTES_MAX (268435456)
+#define BUS1_DEFAULT_BYTES_MAX (268435456)
 
 /**
  * BUS1_SLICES_MAX - per-user limit for maximum number of slices
  *
- * This defines the limit on how many slices each user can have pinned.
+ * This defines the default limit on how many slices each user can have pinned.
  *
  * The slice-limit controls the number of slices a user can have assigned. They
  * are accounted, on the receiving user, on SEND and deaccounted on RELEASE.
  * Queuing messages on a remote peer is subject to a per-sending-user quota.
  */
-#define BUS1_SLICES_MAX (16383)
+#define BUS1_DEFAULT_SLICES_MAX (16383)
 
 /**
  * BUS1_HANDLES_MAX - per-user limit for maximum number of handles
  *
- * This defines the limit on how many handles each user can have pinned.
+ * This defines the default limit on how many handles each user can have pinned.
  *
  * The handle-limit controls how many handles can be allocated in an ID-space.
  * They are accounted on creation (usually SEND), and deaccounted once released
  * (usually via RELEASE). Remote handle creation is subject to a
  * per-creating-user quota, local handle creation is not.
  */
-#define BUS1_HANDLES_MAX (65535)
+#define BUS1_DEFAULT_HANDLES_MAX (65535)
 
 /**
  * BUS1_FDS_MAX - per-user limit for inflight FDs
  *
- * This defines the inflight on how many FDs each user can have inflight.
+ * This defines the default inflight on how many FDs each user can have
+ * in-flight.
  *
  * The FD-limit controls how many inflight FDs are allowed to be destined for a
  * given user. It is accounted for on SEND, and de-accounted on RECV. After RECV
  * it is subject to RLIM_NOFILE and under full control of the receiver. All
  * inflight FD accounting is accounting is subject to per-sending-user quotas.
  */
-#define BUS1_FDS_MAX (4096)
+#define BUS1_DEFAULT_FDS_MAX (4096)
 
 /**
  * bus1_fops - file-operations of bus1 character devices
