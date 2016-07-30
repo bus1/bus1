@@ -292,13 +292,8 @@ int bus1_peer_disconnect(struct bus1_peer *peer)
 static int bus1_peer_ioctl_reset(struct bus1_peer *peer, unsigned long arg)
 {
 	struct bus1_peer_info *peer_info = bus1_peer_dereference(peer);
-	struct bus1_cmd_peer_reset param;
 
-	BUILD_BUG_ON(_IOC_SIZE(BUS1_CMD_PEER_RESET) != sizeof(param));
-
-	if (copy_from_user(&param, (void __user *)arg, sizeof(param)))
-		return -EFAULT;
-	if (unlikely(param.flags))
+	if (unlikely(arg))
 		return -EINVAL;
 
 	/* flush everything, but keep persistent nodes */

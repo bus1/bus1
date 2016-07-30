@@ -157,14 +157,7 @@ _public_ int bus1_client_mmap(struct bus1_client *client)
 
 _public_ int bus1_client_reset(struct bus1_client *client)
 {
-	struct bus1_cmd_peer_reset peer_reset;
-
-	peer_reset.flags = 0;
-
-	static_assert(_IOC_SIZE(BUS1_CMD_PEER_RESET) == sizeof(peer_reset),
-		      "ioctl is called with invalid argument size");
-
-	return bus1_client_ioctl(client, BUS1_CMD_PEER_RESET, &peer_reset);
+	return bus1_client_ioctl(client, BUS1_CMD_PEER_RESET, NULL);
 }
 
 _public_ int bus1_client_handle_transfer(struct bus1_client *src,

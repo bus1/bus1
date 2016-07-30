@@ -56,10 +56,6 @@ enum {
 	BUS1_NODE_FLAG_PERSISTENT	= 1ULL <<  2,
 };
 
-struct bus1_cmd_peer_reset {
-	__u64 flags;
-} __attribute__((__aligned__(8)));
-
 struct bus1_cmd_handle_transfer {
 	__u64 flags;
 	__u64 src_handle;
@@ -129,7 +125,7 @@ struct bus1_cmd_recv {
 
 enum {
 	BUS1_CMD_PEER_RESET		= _IOWR(BUS1_IOCTL_MAGIC, 0x00,
-					struct bus1_cmd_peer_reset),
+					__u64),
 	BUS1_CMD_HANDLE_TRANSFER	= _IOWR(BUS1_IOCTL_MAGIC, 0x01,
 					struct bus1_cmd_handle_transfer),
 	BUS1_CMD_NODE_DESTROY		= _IOWR(BUS1_IOCTL_MAGIC, 0x02,
