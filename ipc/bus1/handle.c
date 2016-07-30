@@ -997,7 +997,7 @@ bus1_handle_find_by_id(struct bus1_peer_info *peer_info, u64 id)
 	do {
 		res = bus1_handle_unref(res);
 		seq = read_seqcount_begin(&peer_info->seqcount);
-		n = peer_info->map_handles_by_id.rb_node;
+		n = rcu_dereference(peer_info->map_handles_by_id.rb_node);
 		while (n) {
 			handle = container_of(n, struct bus1_handle, rb_id);
 			if (id == handle->id) {
@@ -1005,9 +1005,9 @@ bus1_handle_find_by_id(struct bus1_peer_info *peer_info, u64 id)
 					res = handle;
 				break;
 			} else if (id < handle->id) {
-				n = n->rb_left;
+				n = rcu_dereference(n->rb_left);
 			} else /* if (id > handle->id) */ {
-				n = n->rb_right;
+				n = rcu_dereference(n->rb_right);
 			}
 		}
 	} while (read_seqcount_retry(&peer_info->seqcount, seq));
@@ -1028,7 +1028,7 @@ bus1_handle_find_by_node(struct bus1_peer_info *peer_info,
 	do {
 		res = bus1_handle_unref(res);
 		seq = read_seqcount_begin(&peer_info->seqcount);
-		n = peer_info->map_handles_by_node.rb_node;
+		n = rcu_dereference(peer_info->map_handles_by_node.rb_node);
 		while (n) {
 			handle = container_of(n, struct bus1_handle, rb_node);
 			if (node == handle->node) {
@@ -1036,9 +1036,9 @@ bus1_handle_find_by_node(struct bus1_peer_info *peer_info,
 					res = handle;
 				break;
 			} else if (node < handle->node) {
-				n = n->rb_left;
+				n = rcu_dereference(n->rb_left);
 			} else /* if (node > handle->node) */ {
-				n = n->rb_right;
+				n = rcu_dereference(n->rb_right);
 			}
 		}
 	} while (read_seqcount_retry(&peer_info->seqcount, seq));
