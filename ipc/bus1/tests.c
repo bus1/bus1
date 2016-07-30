@@ -29,14 +29,14 @@ static void bus1_test_user(void)
 	WARN_ON(!user1);
 	WARN_ON(__kuid_val(user1->uid) != 1);
 	WARN_ON(user1->id != 0);
-	WARN_ON(atomic_read(&user1->n_slices) != BUS1_SLICES_MAX);
-	WARN_ON(atomic_read(&user1->n_handles) != BUS1_HANDLES_MAX);
-	WARN_ON(atomic_read(&user1->n_inflight_bytes) != BUS1_BYTES_MAX);
-	WARN_ON(atomic_read(&user1->n_inflight_fds) != BUS1_FDS_MAX);
-	WARN_ON(atomic_read(&user1->max_slices) != BUS1_SLICES_MAX);
-	WARN_ON(atomic_read(&user1->max_handles) != BUS1_HANDLES_MAX);
-	WARN_ON(atomic_read(&user1->max_bytes) != BUS1_BYTES_MAX);
-	WARN_ON(atomic_read(&user1->max_fds) != BUS1_FDS_MAX);
+	WARN_ON(atomic_read(&user1->n_slices) !=
+					atomic_read(&user1->max_slices));
+	WARN_ON(atomic_read(&user1->n_handles) !=
+					atomic_read(&user1->max_handles));
+	WARN_ON(atomic_read(&user1->n_inflight_bytes) !=
+					atomic_read(&user1->max_bytes));
+	WARN_ON(atomic_read(&user1->n_inflight_fds) !=
+					atomic_read(&user1->max_fds));
 
 	/* create a different user */
 	user2 = bus1_user_ref_by_uid(uid2);
@@ -44,14 +44,14 @@ static void bus1_test_user(void)
 	WARN_ON(user1 == user2);
 	WARN_ON(__kuid_val(user2->uid) != 2);
 	WARN_ON(user2->id != 1);
-	WARN_ON(atomic_read(&user2->n_slices) != BUS1_SLICES_MAX);
-	WARN_ON(atomic_read(&user2->n_handles) != BUS1_HANDLES_MAX);
-	WARN_ON(atomic_read(&user2->n_inflight_bytes) != BUS1_BYTES_MAX);
-	WARN_ON(atomic_read(&user2->n_inflight_fds) != BUS1_FDS_MAX);
-	WARN_ON(atomic_read(&user2->max_slices) != BUS1_SLICES_MAX);
-	WARN_ON(atomic_read(&user2->max_handles) != BUS1_HANDLES_MAX);
-	WARN_ON(atomic_read(&user2->max_bytes) != BUS1_BYTES_MAX);
-	WARN_ON(atomic_read(&user2->max_fds) != BUS1_FDS_MAX);
+	WARN_ON(atomic_read(&user2->n_slices) !=
+					atomic_read(&user2->max_slices));
+	WARN_ON(atomic_read(&user2->n_handles) !=
+					atomic_read(&user2->max_handles));
+	WARN_ON(atomic_read(&user2->n_inflight_bytes) !=
+					atomic_read(&user2->max_bytes));
+	WARN_ON(atomic_read(&user2->n_inflight_fds) !=
+					atomic_read(&user2->max_fds));
 
 	/* drop the second user */
 	user2 = bus1_user_unref(user2);
@@ -104,15 +104,19 @@ static void bus1_test_quota(void)
 	mutex_init(&peer.lock);
 	peer.user = owner;
 	mutex_lock(&peer.lock);
-	bus1_pool_create_for_peer(&peer, BUS1_BYTES_MAX);
+	bus1_pool_create_for_peer(&peer, BUS1_POOL_SLICE_SIZE_MAX);
 
 	/* charge nothing: allocates the user stats, charge one message */
 	r = bus1_user_quota_charge(&peer, user1, 0, 0, 0);
 	WARN_ON(r < 0);
-	WARN_ON(atomic_read(&owner->n_slices) != BUS1_SLICES_MAX - 1);
-	WARN_ON(atomic_read(&owner->n_handles) != BUS1_HANDLES_MAX);
-	WARN_ON(atomic_read(&owner->n_inflight_bytes) != BUS1_BYTES_MAX);
-	WARN_ON(atomic_read(&owner->n_inflight_fds) != BUS1_FDS_MAX);
+	WARN_ON(atomic_read(&owner->n_slices) !=
+				atomic_read(&owner->max_slices) - 1);
+	WARN_ON(atomic_read(&owner->n_handles) !=
+				atomic_read(&owner->max_handles));
+	WARN_ON(atomic_read(&owner->n_inflight_bytes) !=
+				atomic_read(&owner->max_bytes));
+	WARN_ON(atomic_read(&owner->n_inflight_fds) !=
+				atomic_read(&owner->max_fds));
 	WARN_ON(peer.quota.n_stats < 1);
 	WARN_ON(peer.quota.stats == NULL);
 	WARN_ON(peer.quota.stats[0].n_slices != 1);
@@ -121,10 +125,14 @@ static void bus1_test_quota(void)
 	WARN_ON(peer.quota.stats[0].n_fds != 0);
 
 	bus1_user_quota_discharge(&peer, user1, 0, 0, 0);
-	WARN_ON(atomic_read(&owner->n_slices) != BUS1_SLICES_MAX);
-	WARN_ON(atomic_read(&owner->n_handles) != BUS1_HANDLES_MAX);
-	WARN_ON(atomic_read(&owner->n_inflight_bytes) != BUS1_BYTES_MAX);
-	WARN_ON(atomic_read(&owner->n_inflight_fds) != BUS1_FDS_MAX);
+	WARN_ON(atomic_read(&owner->n_slices) !=
+				atomic_read(&owner->max_slices));
+	WARN_ON(atomic_read(&owner->n_handles) !=
+				atomic_read(&owner->max_handles));
+	WARN_ON(atomic_read(&owner->n_inflight_bytes) !=
+				atomic_read(&owner->max_bytes));
+	WARN_ON(atomic_read(&owner->n_inflight_fds) !=
+				atomic_read(&owner->max_fds));
 	WARN_ON(peer.quota.n_stats < 1);
 	WARN_ON(peer.quota.stats == NULL);
 	WARN_ON(peer.quota.stats[0].n_slices != 0);
@@ -135,10 +143,14 @@ static void bus1_test_quota(void)
 	/* exceed the quota: nothing happens */
 	r = bus1_user_quota_charge(&peer, user1, -1, 0, 0);
 	WARN_ON(r != -EDQUOT);
-	WARN_ON(atomic_read(&owner->n_slices) != BUS1_SLICES_MAX);
-	WARN_ON(atomic_read(&owner->n_handles) != BUS1_HANDLES_MAX);
-	WARN_ON(atomic_read(&owner->n_inflight_bytes) != BUS1_BYTES_MAX);
-	WARN_ON(atomic_read(&owner->n_inflight_fds) != BUS1_FDS_MAX);
+	WARN_ON(atomic_read(&owner->n_slices) !=
+				atomic_read(&owner->max_slices));
+	WARN_ON(atomic_read(&owner->n_handles) !=
+				atomic_read(&owner->max_handles));
+	WARN_ON(atomic_read(&owner->n_inflight_bytes) !=
+				atomic_read(&owner->max_bytes));
+	WARN_ON(atomic_read(&owner->n_inflight_fds) !=
+				atomic_read(&owner->max_fds));
 	WARN_ON(peer.quota.n_stats < 1);
 	WARN_ON(peer.quota.stats == NULL);
 	WARN_ON(peer.quota.stats[0].n_slices != 0);
@@ -148,9 +160,12 @@ static void bus1_test_quota(void)
 
 	r = bus1_user_quota_charge(&peer, user1, 0, -1, 0);
 	WARN_ON(r != -EDQUOT);
-	WARN_ON(atomic_read(&owner->n_slices) != BUS1_SLICES_MAX);
-	WARN_ON(atomic_read(&owner->n_handles) != BUS1_HANDLES_MAX);
-	WARN_ON(atomic_read(&owner->n_inflight_fds) != BUS1_FDS_MAX);
+	WARN_ON(atomic_read(&owner->n_slices) !=
+				atomic_read(&owner->max_slices));
+	WARN_ON(atomic_read(&owner->n_handles) !=
+				atomic_read(&owner->max_handles));
+	WARN_ON(atomic_read(&owner->n_inflight_fds) !=
+				atomic_read(&owner->max_fds));
 	WARN_ON(peer.quota.n_stats < 1);
 	WARN_ON(peer.quota.stats == NULL);
 	WARN_ON(peer.quota.stats[0].n_slices != 0);
@@ -160,9 +175,12 @@ static void bus1_test_quota(void)
 
 	r = bus1_user_quota_charge(&peer, user1, 0, 0, -1);
 	WARN_ON(r != -EDQUOT);
-	WARN_ON(atomic_read(&owner->n_slices) != BUS1_SLICES_MAX);
-	WARN_ON(atomic_read(&owner->n_handles) != BUS1_HANDLES_MAX);
-	WARN_ON(atomic_read(&owner->n_inflight_fds) != BUS1_FDS_MAX);
+	WARN_ON(atomic_read(&owner->n_slices) !=
+				atomic_read(&owner->max_slices));
+	WARN_ON(atomic_read(&owner->n_handles) !=
+				atomic_read(&owner->max_handles));
+	WARN_ON(atomic_read(&owner->n_inflight_fds) !=
+				atomic_read(&owner->max_fds));
 	WARN_ON(peer.quota.n_stats < 1);
 	WARN_ON(peer.quota.stats == NULL);
 	WARN_ON(peer.quota.stats[0].n_slices != 0);
@@ -171,40 +189,59 @@ static void bus1_test_quota(void)
 	WARN_ON(peer.quota.stats[0].n_fds != 0);
 
 	/* verify the limits: size */
-	r = bus1_user_quota_charge(&peer, user1, BUS1_BYTES_MAX / 4, 0, 0);
+	r = bus1_user_quota_charge(&peer, user1,
+				   atomic_read(&owner->max_bytes) / 4, 0, 0);
 	WARN_ON(r < 0);
-	WARN_ON(atomic_read(&owner->n_slices) != BUS1_SLICES_MAX - 1);
-	WARN_ON(atomic_read(&owner->n_handles) != BUS1_HANDLES_MAX);
-	WARN_ON(atomic_read(&owner->n_inflight_fds) != BUS1_FDS_MAX);
+	WARN_ON(atomic_read(&owner->n_slices) !=
+				atomic_read(&owner->max_slices) - 1);
+	WARN_ON(atomic_read(&owner->n_handles) !=
+				atomic_read(&owner->max_handles));
+	WARN_ON(atomic_read(&owner->n_inflight_fds) !=
+				atomic_read(&owner->max_fds));
 	WARN_ON(peer.quota.n_stats < 1);
 	WARN_ON(peer.quota.stats == NULL);
 	WARN_ON(peer.quota.stats[0].n_slices != 1);
 	WARN_ON(peer.quota.stats[0].n_handles != 0);
-	WARN_ON(peer.quota.stats[0].n_bytes != BUS1_BYTES_MAX / 4);
+	WARN_ON(peer.quota.stats[0].n_bytes !=
+					atomic_read(&owner->max_bytes) / 4);
 	WARN_ON(peer.quota.stats[0].n_fds != 0);
 
-	r = bus1_user_quota_charge(&peer, user1, BUS1_BYTES_MAX / 4 + 1, 0, 0);
+	r = bus1_user_quota_charge(&peer, user1,
+				   atomic_read(&owner->max_bytes) / 4 + 1,
+				   0, 0);
 	WARN_ON(r != -EDQUOT);
 
-	r = bus1_user_quota_charge(&peer, user2, BUS1_BYTES_MAX / 4 + 1, 0, 0);
+	r = bus1_user_quota_charge(&peer, user2,
+				   atomic_read(&owner->max_bytes) / 4 + 1,
+				   0, 0);
 	WARN_ON(r < 0);
-	WARN_ON(atomic_read(&owner->n_slices) != BUS1_SLICES_MAX - 2);
-	WARN_ON(atomic_read(&owner->n_handles) != BUS1_HANDLES_MAX);
-	WARN_ON(atomic_read(&owner->n_inflight_fds) != BUS1_FDS_MAX);
+	WARN_ON(atomic_read(&owner->n_slices) !=
+				atomic_read(&owner->max_slices) - 2);
+	WARN_ON(atomic_read(&owner->n_handles) !=
+				atomic_read(&owner->max_handles));
+	WARN_ON(atomic_read(&owner->n_inflight_fds) !=
+				atomic_read(&owner->max_fds));
 	WARN_ON(peer.quota.n_stats < 2);
 	WARN_ON(peer.quota.stats == NULL);
 	WARN_ON(peer.quota.stats[1].n_slices != 1);
 	WARN_ON(peer.quota.stats[1].n_handles != 0);
-	WARN_ON(peer.quota.stats[1].n_bytes != BUS1_BYTES_MAX / 4 + 1);
+	WARN_ON(peer.quota.stats[1].n_bytes !=
+					atomic_read(&owner->max_bytes) / 4 + 1);
 	WARN_ON(peer.quota.stats[1].n_fds != 0);
 
-	r = bus1_user_quota_charge(&peer, user1, BUS1_BYTES_MAX / 4, 0, 0);
+	r = bus1_user_quota_charge(&peer, user1,
+				   atomic_read(&owner->max_bytes) / 4, 0, 0);
 	WARN_ON(r != -EDQUOT);
 
-	bus1_user_quota_discharge(&peer, user2, BUS1_BYTES_MAX / 4 + 1, 0, 0);
-	WARN_ON(atomic_read(&owner->n_slices) != BUS1_SLICES_MAX - 1);
-	WARN_ON(atomic_read(&owner->n_handles) != BUS1_HANDLES_MAX);
-	WARN_ON(atomic_read(&owner->n_inflight_fds) != BUS1_FDS_MAX);
+	bus1_user_quota_discharge(&peer, user2,
+				  atomic_read(&owner->max_bytes) / 4 + 1,
+				  0, 0);
+	WARN_ON(atomic_read(&owner->n_slices) !=
+				atomic_read(&owner->max_slices) - 1);
+	WARN_ON(atomic_read(&owner->n_handles) !=
+				atomic_read(&owner->max_handles));
+	WARN_ON(atomic_read(&owner->n_inflight_fds) !=
+				atomic_read(&owner->max_fds));
 	WARN_ON(peer.quota.n_stats < 2);
 	WARN_ON(peer.quota.stats == NULL);
 	WARN_ON(peer.quota.stats[1].n_slices != 0);
@@ -212,42 +249,61 @@ static void bus1_test_quota(void)
 	WARN_ON(peer.quota.stats[1].n_bytes != 0);
 	WARN_ON(peer.quota.stats[1].n_fds != 0);
 
-	r = bus1_user_quota_charge(&peer, user1, BUS1_BYTES_MAX / 4, 0, 0);
+	r = bus1_user_quota_charge(&peer, user1,
+				   atomic_read(&owner->max_bytes) / 4, 0, 0);
 	WARN_ON(r < 0);
-	WARN_ON(atomic_read(&owner->n_slices) != BUS1_SLICES_MAX - 2);
-	WARN_ON(atomic_read(&owner->n_handles) != BUS1_HANDLES_MAX);
-	WARN_ON(atomic_read(&owner->n_inflight_fds) != BUS1_FDS_MAX);
+	WARN_ON(atomic_read(&owner->n_slices) !=
+				atomic_read(&owner->max_slices) - 2);
+	WARN_ON(atomic_read(&owner->n_handles) !=
+				atomic_read(&owner->max_handles));
+	WARN_ON(atomic_read(&owner->n_inflight_fds) !=
+				atomic_read(&owner->max_fds));
 	WARN_ON(peer.quota.n_stats < 1);
 	WARN_ON(peer.quota.stats == NULL);
 	WARN_ON(peer.quota.stats[0].n_slices != 2);
 	WARN_ON(peer.quota.stats[0].n_handles != 0);
-	WARN_ON(peer.quota.stats[0].n_bytes != BUS1_BYTES_MAX / 2);
+	WARN_ON(peer.quota.stats[0].n_bytes !=
+					atomic_read(&owner->max_bytes) / 2);
 	WARN_ON(peer.quota.stats[0].n_fds != 0);
 
-	r = bus1_user_quota_charge(&peer, user1, BUS1_BYTES_MAX / 4, 0, 0);
+	r = bus1_user_quota_charge(&peer, user1,
+				   atomic_read(&owner->max_bytes) / 4, 0, 0);
 	WARN_ON(r != -EDQUOT);
 
-	r = bus1_user_quota_charge(&peer, user2, BUS1_BYTES_MAX / 4 + 1, 0, 0);
+	r = bus1_user_quota_charge(&peer, user2,
+				   atomic_read(&owner->max_bytes) / 4 + 1,
+				   0, 0);
 	WARN_ON(r != -EDQUOT);
 
-	r = bus1_user_quota_charge(&peer, user2, BUS1_BYTES_MAX / 4, 0, 0);
+	r = bus1_user_quota_charge(&peer, user2,
+				   atomic_read(&owner->max_bytes) / 4, 0, 0);
 	WARN_ON(r < 0);
-	WARN_ON(atomic_read(&owner->n_slices) != BUS1_SLICES_MAX - 3);
-	WARN_ON(atomic_read(&owner->n_handles) != BUS1_HANDLES_MAX);
-	WARN_ON(atomic_read(&owner->n_inflight_fds) != BUS1_FDS_MAX);
+	WARN_ON(atomic_read(&owner->n_slices) !=
+				atomic_read(&owner->max_slices) - 3);
+	WARN_ON(atomic_read(&owner->n_handles) !=
+				atomic_read(&owner->max_handles));
+	WARN_ON(atomic_read(&owner->n_inflight_fds) !=
+				atomic_read(&owner->max_fds));
 	WARN_ON(peer.quota.n_stats < 2);
 	WARN_ON(peer.quota.stats == NULL);
 	WARN_ON(peer.quota.stats[1].n_slices != 1);
 	WARN_ON(peer.quota.stats[1].n_handles != 0);
-	WARN_ON(peer.quota.stats[1].n_bytes != BUS1_BYTES_MAX / 4);
+	WARN_ON(peer.quota.stats[1].n_bytes !=
+					atomic_read(&owner->max_bytes) / 4);
 	WARN_ON(peer.quota.stats[1].n_fds != 0);
 
-	bus1_user_quota_discharge(&peer, user1, BUS1_BYTES_MAX / 4, 0, 0);
-	bus1_user_quota_discharge(&peer, user1, BUS1_BYTES_MAX / 4, 0, 0);
-	bus1_user_quota_discharge(&peer, user2, BUS1_BYTES_MAX / 4, 0, 0);
-	WARN_ON(atomic_read(&owner->n_slices) != BUS1_SLICES_MAX);
-	WARN_ON(atomic_read(&owner->n_handles) != BUS1_HANDLES_MAX);
-	WARN_ON(atomic_read(&owner->n_inflight_fds) != BUS1_FDS_MAX);
+	bus1_user_quota_discharge(&peer, user1,
+				  atomic_read(&owner->max_bytes) / 4, 0, 0);
+	bus1_user_quota_discharge(&peer, user1,
+				  atomic_read(&owner->max_bytes) / 4, 0, 0);
+	bus1_user_quota_discharge(&peer, user2,
+				  atomic_read(&owner->max_bytes) / 4, 0, 0);
+	WARN_ON(atomic_read(&owner->n_slices) !=
+				atomic_read(&owner->max_slices));
+	WARN_ON(atomic_read(&owner->n_handles) !=
+				atomic_read(&owner->max_handles));
+	WARN_ON(atomic_read(&owner->n_inflight_fds) !=
+				atomic_read(&owner->max_fds));
 	WARN_ON(peer.quota.n_stats < 2);
 	WARN_ON(peer.quota.stats == NULL);
 	WARN_ON(peer.quota.stats[0].n_slices != 0);
