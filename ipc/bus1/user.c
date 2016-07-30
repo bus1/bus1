@@ -60,14 +60,14 @@ static struct bus1_user *bus1_user_new(void)
 	kref_init(&u->ref);
 	u->id = BUS1_INTERNAL_UID_INVALID;
 	u->uid = INVALID_UID;
-	atomic_set(&u->n_slices, BUS1_SLICES_MAX);
-	atomic_set(&u->n_handles, BUS1_HANDLES_MAX);
-	atomic_set(&u->n_inflight_bytes, BUS1_BYTES_MAX);
-	atomic_set(&u->n_inflight_fds, BUS1_FDS_MAX);
 	atomic_set(&u->max_slices, BUS1_SLICES_MAX);
 	atomic_set(&u->max_handles, BUS1_HANDLES_MAX);
 	atomic_set(&u->max_bytes, BUS1_BYTES_MAX);
 	atomic_set(&u->max_fds, BUS1_FDS_MAX);
+	atomic_set(&u->n_slices, atomic_read(&u->max_slices));
+	atomic_set(&u->n_handles, atomic_read(&u->max_handles));
+	atomic_set(&u->n_inflight_bytes, atomic_read(&u->max_bytes));
+	atomic_set(&u->n_inflight_fds, atomic_read(&u->max_fds));
 
 	return u;
 }
