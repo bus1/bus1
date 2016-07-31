@@ -508,8 +508,8 @@ bus1_peer_queue_peek(struct bus1_peer_info *peer_info,
 	node = bus1_queue_peek(&peer_info->queue,
 			       !!(param->flags & BUS1_RECV_FLAG_SEED));
 	if (node) {
-		if (bus1_queue_node_get_type(node) ==
-					BUS1_QUEUE_NODE_MESSAGE_NORMAL) {
+		switch (bus1_queue_node_get_type(node)) {
+		case BUS1_QUEUE_NODE_MESSAGE_NORMAL:
 			message = bus1_message_from_node(node);
 
 			r = bus1_message_install(message, peer_info);
@@ -517,6 +517,50 @@ bus1_peer_queue_peek(struct bus1_peer_info *peer_info,
 				bus1_message_unref(message);
 				return ERR_PTR(r);
 			}
+
+			param->type = BUS1_MSG_DATA;
+			param->data.destination = message->data.destination;
+			param->data.uid = message->data.uid;
+			param->data.gid = message->data.gid;
+			param->data.pid = message->data.pid;
+			param->data.tid = message->data.tid;
+			param->data.offset = message->data.offset;
+			param->data.n_bytes = message->data.n_bytes;
+			param->data.n_handles = message->data.n_handles;
+			param->data.n_fds = message->data.n_fds;
+
+			bus1_pool_publish(&peer_info->pool, message->slice);
+			break;
+
+		case BUS1_QUEUE_NODE_HANDLE_DESTRUCTION:
+			param->type = BUS1_MSG_NODE_DESTROY;
+			param->data.destination = 0;
+			param->data.uid = 0;
+			param->data.gid = 0;
+			param->data.pid = 0;
+			param->data.tid = 0;
+			param->data.offset = BUS1_OFFSET_INVALID;
+			param->data.n_bytes = 0;
+			param->data.n_handles = 0;
+			param->data.n_fds = 0;
+			break;
+
+		case BUS1_QUEUE_NODE_HANDLE_RELEASE:
+			param->type = BUS1_MSG_NODE_RELEASE;
+			param->data.destination = 0;
+			param->data.uid = 0;
+			param->data.gid = 0;
+			param->data.pid = 0;
+			param->data.tid = 0;
+			param->data.offset = BUS1_OFFSET_INVALID;
+			param->data.n_bytes = 0;
+			param->data.n_handles = 0;
+			param->data.n_fds = 0;
+			break;
+
+		default:
+			WARN(1, "Invalid queue-node type");
+			return ERR_PTR(-ENOTRECOVERABLE);
 		}
 
 		if (drop)
@@ -549,19 +593,14 @@ static int bus1_peer_dequeue(struct bus1_peer_info *peer_info,
 	switch (bus1_queue_node_get_type(node)) {
 	case BUS1_QUEUE_NODE_MESSAGE_NORMAL:
 		message = bus1_message_from_node(node);
-		bus1_pool_publish(&peer_info->pool, message->slice);
 		bus1_message_dequeue(message, peer_info);
-		param->type = BUS1_MSG_DATA;
-		memcpy(&param->data, &message->data, sizeof(param->data));
 		break;
 
 	case BUS1_QUEUE_NODE_HANDLE_DESTRUCTION:
-		param->type = BUS1_MSG_NODE_DESTROY;
 		param->node_destroy.handle = bus1_handle_unref_queued(node);
 		break;
 
 	case BUS1_QUEUE_NODE_HANDLE_RELEASE:
-		param->type = BUS1_MSG_NODE_RELEASE;
 		param->node_release.handle = bus1_handle_unref_queued(node);
 		break;
 
@@ -600,19 +639,14 @@ static int bus1_peer_peek(struct bus1_peer_info *peer_info,
 	switch (bus1_queue_node_get_type(node)) {
 	case BUS1_QUEUE_NODE_MESSAGE_NORMAL:
 		message = bus1_message_from_node(node);
-		bus1_pool_publish(&peer_info->pool, message->slice);
-		param->type = BUS1_MSG_DATA;
-		memcpy(&param->data, &message->data, sizeof(param->data));
 		bus1_message_unref(message);
 		break;
 
 	case BUS1_QUEUE_NODE_HANDLE_DESTRUCTION:
-		param->type = BUS1_MSG_NODE_DESTROY;
 		param->node_destroy.handle = bus1_handle_unref_queued(node);
 		break;
 
 	case BUS1_QUEUE_NODE_HANDLE_RELEASE:
-		param->type = BUS1_MSG_NODE_RELEASE;
 		param->node_release.handle = bus1_handle_unref_queued(node);
 		break;
 
