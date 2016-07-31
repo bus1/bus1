@@ -188,7 +188,6 @@ int bus1_message_allocate(struct bus1_message *message,
 	}
 
 	message->slice = slice;
-	message->data.offset = slice->offset;
 	r = 0;
 
 exit:

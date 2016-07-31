@@ -524,7 +524,7 @@ bus1_peer_queue_peek(struct bus1_peer_info *peer_info,
 			param->data.gid = message->data.gid;
 			param->data.pid = message->data.pid;
 			param->data.tid = message->data.tid;
-			param->data.offset = message->data.offset;
+			param->data.offset = message->slice->offset;
 			param->data.n_bytes = message->data.n_bytes;
 			param->data.n_handles = message->data.n_handles;
 			param->data.n_fds = message->n_files;
