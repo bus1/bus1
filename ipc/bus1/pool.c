@@ -450,8 +450,8 @@ int bus1_pool_release_user(struct bus1_pool *pool,
 	if (!slice || !slice->ref_user)
 		return -ENXIO;
 
-	if (n_slicesp && !slice->ref_kernel)
-		*n_slicesp = 1;
+	if (n_slicesp)
+		*n_slicesp = !slice->ref_kernel;
 
 	slice->ref_user = false;
 	bus1_pool_free(pool, slice);
