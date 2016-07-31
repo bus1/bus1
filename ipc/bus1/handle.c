@@ -1854,45 +1854,9 @@ int bus1_handle_transfer_import(struct bus1_handle_transfer *transfer,
 }
 
 /**
- * bus1_handle_transfer_install() - install new nodes of transfer context
- * @transfer:		transfer context
- * @peer:		owning peer of @transfer
- *
- * After a transfer-context is imported, all the newly instantiated nodes must
- * be installed in the caller process. This function installs them and marks
- * them as done. It must be called *before* any derived inflight object is
- * installed.
- *
- * The caller must hold the peer-lock of @peer.
- */
-void bus1_handle_transfer_install(struct bus1_handle_transfer *transfer,
-				  struct bus1_peer *peer)
-{
-	union bus1_handle_entry *entry;
-	size_t pos;
-
-	lockdep_assert_held(&bus1_peer_dereference(peer)->lock);
-
-	if (transfer->n_new < 1)
-		return;
-
-	BUS1_HANDLE_BATCH_FOREACH_HANDLE(entry, pos, &transfer->batch) {
-		if (entry->handle && !bus1_handle_was_attached(entry->handle)) {
-			bus1_handle_attach_owner(entry->handle, peer);
-			bus1_handle_install_owner(entry->handle);
-
-			if (--transfer->n_new < 1)
-				break;
-		}
-	}
-
-	WARN_ON(transfer->n_new > 0);
-}
-
-/**
  * bus1_handle_transfer_export() - publish new nodes of transfer context
  * @transfer:		transfer context
- * @peer_info:		owning peer of @transfer
+ * @peer:		owning peer of @transfer
  * @ids:		user pointer to store IDs to
  * @n_ids:		number of IDs
  *
@@ -1906,16 +1870,31 @@ void bus1_handle_transfer_install(struct bus1_handle_transfer *transfer,
  * Return: 0 on success, negative error code on failure.
  */
 int bus1_handle_transfer_export(struct bus1_handle_transfer *transfer,
-				struct bus1_peer_info *peer_info,
+				struct bus1_peer *peer,
 				u64 __user *ids,
 				size_t n_ids)
 {
+	struct bus1_peer_info *peer_info = bus1_peer_dereference(peer);
 	union bus1_handle_entry *entry;
 	size_t pos;
 	u64 id;
 
 	lockdep_assert_held(&peer_info->lock);
 	WARN_ON(n_ids != transfer->batch.n_handles);
+
+	if (transfer->n_new < 1)
+		return 0;
+
+	BUS1_HANDLE_BATCH_FOREACH_HANDLE(entry, pos, &transfer->batch) {
+		if (entry->handle && !bus1_handle_was_attached(entry->handle)) {
+			bus1_handle_attach_owner(entry->handle, peer);
+			bus1_handle_install_owner(entry->handle);
+
+			if (--transfer->n_new < 1)
+				break;
+		}
+	}
+	WARN_ON(transfer->n_new > 0);
 
 	BUS1_HANDLE_BATCH_FOREACH_HANDLE(entry, pos, &transfer->batch) {
 		if (entry->handle && entry->handle->id == BUS1_HANDLE_INVALID) {

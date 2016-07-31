@@ -550,9 +550,8 @@ int bus1_transaction_commit(struct bus1_transaction *transaction)
 	if (param->n_handles) {
 		idp = (u64 __user *)(unsigned long)param->ptr_handles;
 		mutex_lock(&transaction->peer_info->lock);
-		bus1_handle_transfer_install(&transaction->handles, transaction->peer);
 		r = bus1_handle_transfer_export(&transaction->handles,
-						transaction->peer_info,
+						transaction->peer,
 						idp, param->n_handles);
 		mutex_unlock(&transaction->peer_info->lock);
 		if (r < 0)
@@ -621,9 +620,8 @@ int bus1_transaction_commit_seed(struct bus1_transaction *transaction)
 		return PTR_ERR(seed);
 
 	mutex_lock(&transaction->peer_info->lock);
-	bus1_handle_transfer_install(&transaction->handles, transaction->peer);
 	r = bus1_handle_transfer_export(&transaction->handles,
-					transaction->peer_info,
+					transaction->peer,
 					idp, transaction->param->n_handles);
 	mutex_unlock(&transaction->peer_info->lock);
 	if (r < 0)

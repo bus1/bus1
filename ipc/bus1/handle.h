@@ -221,10 +221,8 @@ int bus1_handle_transfer_import(struct bus1_handle_transfer *transfer,
 				struct bus1_peer_info *peer_info,
 				const u64 __user *ids,
 				size_t n_ids);
-void bus1_handle_transfer_install(struct bus1_handle_transfer *transfer,
-				  struct bus1_peer *peer);
 int bus1_handle_transfer_export(struct bus1_handle_transfer *transfer,
-				struct bus1_peer_info *peer_info,
+				struct bus1_peer *peer,
 				u64 __user *ids,
 				size_t n_ids);
 
