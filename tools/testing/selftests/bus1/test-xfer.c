@@ -84,7 +84,7 @@ static void test_xfer_multicast(void)
 	recv = (struct bus1_cmd_recv){};
 	r = bus1_client_recv(c1, &recv);
 	assert(r >= 0);
-	assert(recv.type == BUS1_MSG_DATA);
+	assert(recv.data.type == BUS1_MSG_DATA);
 	assert(recv.data.n_handles == 1);
 	assert(recv.data.n_fds == 0);
 
@@ -102,7 +102,7 @@ static void test_xfer_multicast(void)
 	recv = (struct bus1_cmd_recv){};
 	r = bus1_client_recv(c1, &recv);
 	assert(r >= 0);
-	assert(recv.type == BUS1_MSG_DATA);
+	assert(recv.data.type == BUS1_MSG_DATA);
 	assert(recv.data.n_handles == 1);
 	assert(recv.data.n_fds == 0);
 
@@ -129,7 +129,7 @@ static void test_xfer_multicast(void)
 	recv = (struct bus1_cmd_recv){};
 	r = bus1_client_recv(c2, &recv);
 	assert(r >= 0);
-	assert(recv.type == BUS1_MSG_DATA);
+	assert(recv.data.type == BUS1_MSG_DATA);
 	assert(recv.data.n_handles == 6);
 	assert(recv.data.n_fds == 0);
 
@@ -162,7 +162,7 @@ static void test_xfer_multicast(void)
 	recv = (struct bus1_cmd_recv){};
 	r = bus1_client_recv(c3, &recv);
 	assert(r >= 0);
-	assert(recv.type == BUS1_MSG_DATA);
+	assert(recv.data.type == BUS1_MSG_DATA);
 	assert(recv.data.n_handles == 6);
 	assert(recv.data.n_fds == 0);
 

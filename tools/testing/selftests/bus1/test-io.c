@@ -45,8 +45,8 @@ static int client_recv(struct bus1_client *client,
 	if (r < 0)
 		return r;
 
-	assert(recv.type == BUS1_MSG_DATA);
 	assert(recv.n_dropped == 0);
+	assert(recv.data.type == BUS1_MSG_DATA);
 
 	*datap = bus1_client_slice_from_offset(client, recv.data.offset);
 	*lenp = recv.data.n_bytes;
@@ -106,8 +106,8 @@ static void test_basic(void)
 	recv = (struct bus1_cmd_recv){};
 	r = bus1_client_recv(parent, &recv);
 	assert(r >= 0);
-	assert(recv.type == BUS1_MSG_DATA);
 	assert(recv.n_dropped == 0);
+	assert(recv.data.type == BUS1_MSG_DATA);
 	assert(recv.data.n_bytes == 0);
 	assert(recv.data.n_fds == 0);
 	assert(recv.data.n_handles == 1);
@@ -146,8 +146,8 @@ static void test_basic(void)
 	recv = (struct bus1_cmd_recv){};
 	r = bus1_client_recv(parent, &recv);
 	assert(r >= 0);
-	assert(recv.type == BUS1_MSG_DATA);
 	assert(recv.n_dropped == 0);
+	assert(recv.data.type == BUS1_MSG_DATA);
 	assert(recv.data.n_bytes == 0);
 	assert(recv.data.n_fds == 0);
 	assert(recv.data.n_handles == 1);
@@ -316,8 +316,8 @@ static uint64_t test_iterate(unsigned int iterations,
 		recv = (struct bus1_cmd_recv){};
 		r = bus1_client_recv(parent, &recv);
 		assert(r >= 0);
-		assert(recv.type == BUS1_MSG_DATA);
 		assert(recv.n_dropped == 0);
+		assert(recv.data.type == BUS1_MSG_DATA);
 		assert(recv.data.n_bytes == 0);
 		assert(recv.data.n_fds == 0);
 		assert(recv.data.n_handles == 1);

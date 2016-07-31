@@ -94,9 +94,9 @@ enum {
 
 struct bus1_cmd_recv {
 	__u64 flags;
-	__u64 type;
 	__u64 n_dropped;
 	struct bus1_msg_data {
+		__u64 type;
 		__u64 destination;
 		__u32 uid;
 		__u32 gid;
