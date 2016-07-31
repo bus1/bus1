@@ -193,6 +193,30 @@ exit:
 }
 
 /**
+ * bus1_message_deallocate_locked() - deallocate message resources
+ * @message:		message to deallocate
+ * @peer_info:		destination peer
+ *
+ * This is the same as bus1_message_deallocate(), but must be called with
+ * @peer_info held by the caller.
+ */
+void bus1_message_deallocate_locked(struct bus1_message *message,
+				    struct bus1_peer_info *peer_info)
+{
+	lockdep_assert_held(&peer_info->lock);
+
+	if (message->slice) {
+		bus1_user_quota_commit(peer_info, message->user,
+				       message->slice->size,
+				       message->handles.batch.n_entries,
+				       message->n_files);
+		atomic_inc(&peer_info->user->n_slices);
+		message->slice = bus1_pool_release_kernel(&peer_info->pool,
+							  message->slice);
+	}
+}
+
+/**
  * bus1_message_deallocate() - deallocate pool slice for discarded message
  * @message:		message to deallocate slice for
  * @peer_info:		destination peer
@@ -204,14 +228,7 @@ void bus1_message_deallocate(struct bus1_message *message,
 			     struct bus1_peer_info *peer_info)
 {
 	mutex_lock(&peer_info->lock);
-	if (message->slice) {
-		bus1_user_quota_discharge(peer_info, message->user,
-					  message->slice->size,
-					  message->handles.batch.n_entries,
-					  message->n_files);
-		message->slice = bus1_pool_release_kernel(&peer_info->pool,
-							  message->slice);
-	}
+	bus1_message_deallocate_locked(message, peer_info);
 	mutex_unlock(&peer_info->lock);
 }
 

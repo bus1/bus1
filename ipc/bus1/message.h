@@ -77,6 +77,8 @@ void bus1_message_flush(struct bus1_message *message,
 			struct bus1_peer_info *peer_info);
 int bus1_message_allocate(struct bus1_message *message,
 			  struct bus1_peer_info *peer_info);
+void bus1_message_deallocate_locked(struct bus1_message *message,
+				    struct bus1_peer_info *peer_info);
 void bus1_message_deallocate(struct bus1_message *message,
 			     struct bus1_peer_info *peer_info);
 int bus1_message_install(struct bus1_message *message,
