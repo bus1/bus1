@@ -594,13 +594,14 @@ bus1_peer_queue_peek(struct bus1_peer_info *peer_info,
 static int bus1_peer_dequeue(struct bus1_peer_info *peer_info,
 			     struct bus1_cmd_recv *param)
 {
+	const bool peek = param->flags & BUS1_RECV_FLAG_PEEK;
 	struct bus1_message *message = NULL;
 	struct bus1_queue_node *node;
 	int r;
 
 	mutex_lock(&peer_info->lock);
 
-	node = bus1_peer_queue_peek(peer_info, param, true);
+	node = bus1_peer_queue_peek(peer_info, param, !peek);
 	if (IS_ERR_OR_NULL(node)) {
 		r = PTR_ERR(node);
 		goto exit;
@@ -609,7 +610,8 @@ static int bus1_peer_dequeue(struct bus1_peer_info *peer_info,
 	switch (bus1_queue_node_get_type(node)) {
 	case BUS1_QUEUE_NODE_MESSAGE_NORMAL:
 		message = bus1_message_from_node(node);
-		bus1_message_dequeue(message, peer_info);
+		if (!peek)
+			bus1_message_dequeue(message, peer_info);
 		break;
 
 	case BUS1_QUEUE_NODE_HANDLE_DESTRUCTION:
@@ -627,48 +629,9 @@ static int bus1_peer_dequeue(struct bus1_peer_info *peer_info,
 
 exit:
 	mutex_unlock(&peer_info->lock);
-	if (message) {
+	if (message && !peek)
 		bus1_message_flush(message, peer_info);
-		bus1_message_unref(message);
-	}
-	return r;
-}
-
-static int bus1_peer_peek(struct bus1_peer_info *peer_info,
-			  struct bus1_cmd_recv *param)
-{
-	struct bus1_queue_node *node;
-	struct bus1_message *message;
-	int r;
-
-	mutex_lock(&peer_info->lock);
-
-	node = bus1_peer_queue_peek(peer_info, param, false);
-	if (IS_ERR_OR_NULL(node)) {
-		r = PTR_ERR(node);
-		goto exit;
-	}
-
-	switch (bus1_queue_node_get_type(node)) {
-	case BUS1_QUEUE_NODE_MESSAGE_NORMAL:
-		message = bus1_message_from_node(node);
-		bus1_message_unref(message);
-		break;
-
-	case BUS1_QUEUE_NODE_HANDLE_DESTRUCTION:
-	case BUS1_QUEUE_NODE_HANDLE_RELEASE:
-		bus1_handle_unref_queued(node);
-		break;
-
-	default:
-		WARN(1, "Invalid queue-node type");
-		break;
-	}
-
-	r = 0;
-
-exit:
-	mutex_unlock(&peer_info->lock);
+	bus1_message_unref(message);
 	return r;
 }
 
@@ -689,11 +652,7 @@ static int bus1_peer_ioctl_recv(struct bus1_peer *peer, unsigned long arg)
 		     param.msg.type != BUS1_MSG_NONE))
 		return -EINVAL;
 
-	if (param.flags & BUS1_RECV_FLAG_PEEK)
-		r = bus1_peer_peek(peer_info, &param);
-	else
-		r = bus1_peer_dequeue(peer_info, &param);
-
+	r = bus1_peer_dequeue(peer_info, &param);
 	if (r < 0)
 		return r;
 	if (!param.n_dropped && param.msg.type == BUS1_MSG_NONE)
