@@ -243,14 +243,17 @@ void bus1_message_dequeue(struct bus1_message *message,
  * bus1_message_install() - install message payload into target process
  * @message:		message to operate on
  * @peer_info:		calling peer
+ * @inst_fds:		whether to install FDs
  *
  * This installs the payload FDs and handles of @message into @peer_info and
- * the calling process.
+ * the calling process. Handles are always installed, FDs are only installed if
+ * explicitly requested via @inst_fds.
  *
  * Return: 0 on success, negative error code on failure.
  */
 int bus1_message_install(struct bus1_message *message,
-			 struct bus1_peer_info *peer_info)
+			 struct bus1_peer_info *peer_info,
+			 bool inst_fds)
 {
 	size_t n, pos, offset, n_fds = 0, n_ids = 0;
 	u64 ts, *ids = NULL;
@@ -262,7 +265,8 @@ int bus1_message_install(struct bus1_message *message,
 
 	if (WARN_ON(!message->slice))
 		return -ENOTRECOVERABLE;
-	if (message->handles.batch.n_entries == 0 && message->n_files == 0)
+	if (message->handles.batch.n_entries == 0 &&
+	    (!inst_fds || message->n_files == 0))
 		return 0;
 
 	/*
@@ -307,9 +311,8 @@ int bus1_message_install(struct bus1_message *message,
 		}
 	}
 
-	if (message->n_files > 0) {
-		fds = kmalloc(message->n_files * sizeof(*fds),
-			      GFP_TEMPORARY);
+	if (inst_fds && message->n_files > 0) {
+		fds = kmalloc(message->n_files * sizeof(*fds), GFP_TEMPORARY);
 		if (!fds) {
 			r = -ENOMEM;
 			goto exit;

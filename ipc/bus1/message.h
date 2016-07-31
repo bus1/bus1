@@ -80,7 +80,8 @@ int bus1_message_allocate(struct bus1_message *message,
 void bus1_message_deallocate(struct bus1_message *message,
 			     struct bus1_peer_info *peer_info);
 int bus1_message_install(struct bus1_message *message,
-			 struct bus1_peer_info *peer_info);
+			 struct bus1_peer_info *peer_info,
+			 bool inst_fds);
 void bus1_message_dequeue(struct bus1_message *message,
 			  struct bus1_peer_info *peer_info);
 

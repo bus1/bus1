@@ -494,6 +494,7 @@ bus1_peer_queue_peek(struct bus1_peer_info *peer_info,
 		     struct bus1_cmd_recv *param,
 		     bool drop)
 {
+	const bool inst_fds = param->flags & BUS1_RECV_FLAG_INSTALL_FDS;
 	struct bus1_queue_node *node;
 	struct bus1_message *message = NULL;
 	int r;
@@ -516,7 +517,7 @@ bus1_peer_queue_peek(struct bus1_peer_info *peer_info,
 		case BUS1_QUEUE_NODE_MESSAGE_NORMAL:
 			message = bus1_message_from_node(node);
 
-			r = bus1_message_install(message, peer_info);
+			r = bus1_message_install(message, peer_info, inst_fds);
 			if (r < 0) {
 				bus1_message_unref(message);
 				return ERR_PTR(r);
@@ -673,7 +674,8 @@ static int bus1_peer_ioctl_recv(struct bus1_peer *peer, unsigned long arg)
 	if (copy_from_user(&param, (void __user *)arg, sizeof(param)))
 		return -EFAULT;
 	if (unlikely(param.flags & ~(BUS1_RECV_FLAG_PEEK |
-				     BUS1_RECV_FLAG_SEED) ||
+				     BUS1_RECV_FLAG_SEED |
+				     BUS1_RECV_FLAG_INSTALL_FDS) ||
 		     param.n_dropped != 0 ||
 		     param.msg.type != BUS1_MSG_NONE))
 		return -EINVAL;

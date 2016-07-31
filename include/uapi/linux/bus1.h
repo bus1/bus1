@@ -83,6 +83,7 @@ struct bus1_cmd_send {
 enum {
 	BUS1_RECV_FLAG_PEEK		= 1ULL <<  0,
 	BUS1_RECV_FLAG_SEED		= 1ULL <<  1,
+	BUS1_RECV_FLAG_INSTALL_FDS	= 1ULL <<  2,
 };
 
 enum {
