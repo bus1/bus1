@@ -537,8 +537,8 @@ bus1_peer_queue_peek(struct bus1_peer_info *peer_info,
 			param->type = BUS1_MSG_NODE_DESTROY;
 			param->data.destination =
 						bus1_handle_unref_queued(node);
-			param->data.uid = 0;
-			param->data.gid = 0;
+			param->data.uid = -1;
+			param->data.gid = -1;
 			param->data.pid = 0;
 			param->data.tid = 0;
 			param->data.offset = BUS1_OFFSET_INVALID;
@@ -552,8 +552,8 @@ bus1_peer_queue_peek(struct bus1_peer_info *peer_info,
 			param->type = BUS1_MSG_NODE_RELEASE;
 			param->data.destination =
 						bus1_handle_unref_queued(node);
-			param->data.uid = 0;
-			param->data.gid = 0;
+			param->data.uid = -1;
+			param->data.gid = -1;
 			param->data.pid = 0;
 			param->data.tid = 0;
 			param->data.offset = BUS1_OFFSET_INVALID;
