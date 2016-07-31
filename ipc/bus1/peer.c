@@ -39,10 +39,10 @@ static void bus1_peer_info_reset(struct bus1_peer_info *peer_info, bool final)
 {
 	struct bus1_queue_node *node;
 	struct bus1_message *message;
-	size_t n_slices;
+	size_t n_slices, n_handles;
 	LIST_HEAD(list);
 
-	bus1_handle_flush_all(peer_info, final);
+	bus1_handle_flush_all(peer_info, &n_handles, final);
 	bus1_queue_flush(&peer_info->queue, &list, final);
 
 	mutex_lock(&peer_info->lock);
@@ -50,6 +50,7 @@ static void bus1_peer_info_reset(struct bus1_peer_info *peer_info, bool final)
 	mutex_unlock(&peer_info->lock);
 
 	atomic_add(n_slices, &peer_info->user->n_slices);
+	atomic_add(n_handles, &peer_info->user->n_handles);
 
 	while ((node = list_first_entry_or_null(&list, struct bus1_queue_node,
 						link))) {
@@ -358,6 +359,8 @@ out:
 static int bus1_peer_ioctl_node_destroy(struct bus1_peer *peer,
 					unsigned long arg)
 {
+	struct bus1_peer_info *peer_info = bus1_peer_dereference(peer);
+	size_t n_handles = 0;
 	u64 id;
 	int r;
 
@@ -367,9 +370,12 @@ static int bus1_peer_ioctl_node_destroy(struct bus1_peer *peer,
 		return -EFAULT;
 
 	/* returns >= 0 on success, and > 0 in case @id was modified */
-	r = bus1_node_destroy_by_id(peer, &id);
+	r = bus1_node_destroy_by_id(peer, &id, &n_handles);
 	if (r < 0)
 		return r;
+
+	atomic_add(n_handles, &peer_info->user->n_handles);
+
 	if (r > 0 && put_user(id, (u64 __user *)arg))
 		return -EFAULT;
 
@@ -379,6 +385,8 @@ static int bus1_peer_ioctl_node_destroy(struct bus1_peer *peer,
 static int bus1_peer_ioctl_handle_release(struct bus1_peer *peer,
 					  unsigned long arg)
 {
+	struct bus1_peer_info *peer_info = bus1_peer_dereference(peer);
+	size_t n_handles = 0;
 	u64 id;
 	int r;
 
@@ -388,9 +396,12 @@ static int bus1_peer_ioctl_handle_release(struct bus1_peer *peer,
 		return -EFAULT;
 
 	/* returns >= 0 on success, and > 0 in case @id was modified */
-	r = bus1_handle_release_by_id(peer, &id);
+	r = bus1_handle_release_by_id(peer, &id, &n_handles);
 	if (r < 0)
 		return r;
+
+	atomic_add(n_handles, &peer_info->user->n_handles);
+
 	if (r > 0 && put_user(id, (u64 __user *)arg))
 		return -EFAULT;
 

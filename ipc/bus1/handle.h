@@ -194,9 +194,15 @@ int bus1_handle_pair(struct bus1_peer *peer,
 		     struct bus1_peer *clone,
 		     u64 *node_idp,
 		     u64 *handle_idp);
-int bus1_handle_release_by_id(struct bus1_peer *peer, u64 *idp);
-int bus1_node_destroy_by_id(struct bus1_peer *peer, u64 *idp);
-void bus1_handle_flush_all(struct bus1_peer_info *peer_info, bool final);
+int bus1_handle_release_by_id(struct bus1_peer *peer,
+			      u64 *idp,
+			      size_t *n_handlesp);
+int bus1_node_destroy_by_id(struct bus1_peer *peer,
+			    u64 *idp,
+			    size_t *n_handlesp);
+void bus1_handle_flush_all(struct bus1_peer_info *peer_info,
+			   size_t *n_handlesp,
+			   bool final);
 
 /* destination context */
 void bus1_handle_dest_init(struct bus1_handle_dest *dest);

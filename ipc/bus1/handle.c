@@ -26,6 +26,7 @@
 #include "handle.h"
 #include "peer.h"
 #include "queue.h"
+#include "util.h"
 
 /**
  * struct bus1_handle - handle objects
@@ -1122,6 +1123,12 @@ int bus1_handle_pair(struct bus1_peer *peer,
 		if (r < 0)
 			goto exit;
 	} else {
+		/* account new node on @peer_info */
+		if (!bus1_atomic_sub_if_ge(&peer_info->user->n_handles, 1, 1)) {
+			r = -EDQUOT;
+			goto exit;
+		}
+
 		mutex_lock(&peer_info->lock);
 
 		bus1_handle_attach_owner(peer_handle, peer);
@@ -1164,24 +1171,43 @@ exit:
  * bus1_handle_release_by_id() - release a user handle
  * @peer_info:		peer to operate on
  * @idp:		pointer to handle ID
+ * @n_handlesp:		output-var to store number of released handles, or NULL
  *
  * This releases a *user* visible reference to the handle with the given ID.
  * The usual allocation rules for @idp apply. If @idp was modified, 1 is
  * returned. If @idp was not modified, 0 is returned. On error, a negative
  * error code is returned.
  *
+ * For each handle of which the last user-refcount is dropped, this increments
+ * @n_handlesp by one (usually this means either 0 or 1).
+ *
  * Return: >=0 on success, negative error code on failure.
  */
-int bus1_handle_release_by_id(struct bus1_peer *peer, u64 *idp)
+int bus1_handle_release_by_id(struct bus1_peer *peer,
+			      u64 *idp,
+			      size_t *n_handlesp)
 {
 	struct bus1_peer_info *peer_info = bus1_peer_dereference(peer);
 	struct bus1_handle *handle;
+	size_t n_handles = 0;
 	int r, n_user;
 
 	if (*idp & BUS1_NODE_FLAG_ALLOCATE) {
+		/*
+		 * Handle accounting counts both, valid user-referenced handles
+		 * and live nodes. This call creates a new live-node including
+		 * a user-reference, but drops the latter immediately and leaves
+		 * the node around live. Therefore, the accounting net-change of
+		 * this is +1.
+		 */
+		if (atomic_dec_if_positive(&peer_info->user->n_handles) < 0)
+			return -EDQUOT;
+
 		handle = bus1_handle_new_owner(*idp);
-		if (IS_ERR(handle))
+		if (IS_ERR(handle)) {
+			atomic_inc(&peer_info->user->n_handles);
 			return PTR_ERR(handle);
+		}
 
 		mutex_lock(&peer_info->lock);
 		bus1_handle_attach_owner(handle, peer);
@@ -1221,6 +1247,9 @@ int bus1_handle_release_by_id(struct bus1_peer *peer, u64 *idp)
 		}
 	}
 
+	if (n_handlesp)
+		*n_handlesp = n_handles;
+
 	bus1_handle_unref(handle);
 	return r;
 }
@@ -1229,18 +1258,25 @@ int bus1_handle_release_by_id(struct bus1_peer *peer, u64 *idp)
  * bus1_node_destroy_by_id() - destroy a node
  * @peer_info:		peer to operate on
  * @idp:		pointer to handle ID
+ * @n_handlesp:		output-var to store number of released handles, or NULL
  *
  * This destroys the underlying node of the handle with the given ID. The usual
  * allocation rules for @idp apply. If @idp was modified, 1 is returned. If
  * @idp was not modified, 0 is returned. On error, a negative error code is
  * returned.
  *
+ * For each handle of which the last user-refcount is dropped, this increments
+ * @n_handlesp by one (usually this means either 0 or 1).
+ *
  * Return: >=0 on success, negative error code on failure.
  */
-int bus1_node_destroy_by_id(struct bus1_peer *peer, u64 *idp)
+int bus1_node_destroy_by_id(struct bus1_peer *peer,
+			    u64 *idp,
+			    size_t *n_handlesp)
 {
 	struct bus1_peer_info *peer_info = bus1_peer_dereference(peer);
 	struct bus1_handle *handle;
+	size_t n_handles = 0;
 	int r;
 
 	if (*idp & BUS1_NODE_FLAG_ALLOCATE) {
@@ -1266,11 +1302,15 @@ int bus1_node_destroy_by_id(struct bus1_peer *peer, u64 *idp)
 		    bus1_node_is_destroyed(handle->node)) {
 			r = -ENXIO;
 		} else {
+			++n_handles;
 			bus1_node_destroy(handle->node, peer_info);
 			r = 0;
 		}
 		mutex_unlock(&peer_info->lock);
 	}
+
+	if (n_handlesp)
+		*n_handlesp = n_handles;
 
 	bus1_handle_unref(handle);
 	return r;
@@ -1279,6 +1319,7 @@ int bus1_node_destroy_by_id(struct bus1_peer *peer, u64 *idp)
 /**
  * bus1_handle_flush_all() - flush all nodes and handles of a peer
  * @peer_info:		peer to operate on
+ * @n_handlesp:		output-var to store number of released handles, or NULL
  * @final:		whether to flush persistent nodes
  *
  * This atomically destroys all nodes, and releases all handles, of the given
@@ -1286,14 +1327,20 @@ int bus1_node_destroy_by_id(struct bus1_peer *peer, u64 *idp)
  * release is only atomic in regard to the holding peer. That is, the possible
  * effect on any remote node is not atomic, but done sequentially afterwards.
  *
+ * For each handle of which the last user-refcount is dropped, this increments
+ * @n_handlesp by one.
+ *
  * If @final is false, persistent nodes are left untouched, otherwise, even
  * persistent nodes are destroyed.
  */
-void bus1_handle_flush_all(struct bus1_peer_info *peer_info, bool final)
+void bus1_handle_flush_all(struct bus1_peer_info *peer_info,
+			   size_t *n_handlesp,
+			   bool final)
 {
 	struct bus1_handle *h;
 	struct rb_node *n, *next;
 	LIST_HEAD(list_remote);
+	size_t n_handles = 0;
 
 	mutex_lock(&peer_info->lock);
 	for (n = rb_first(&peer_info->map_handles_by_node); n; n = next) {
@@ -1303,6 +1350,7 @@ void bus1_handle_flush_all(struct bus1_peer_info *peer_info, bool final)
 		if (bus1_handle_is_owner(h)) {
 			if (final || !test_bit(BUS1_NODE_BIT_PERSISTENT,
 					       &h->node->flags)) {
+				++n_handles;
 				bus1_handle_ref(h);
 				bus1_node_destroy(h->node, peer_info);
 				if (atomic_xchg(&h->n_user, -1) != -1)
@@ -1329,6 +1377,9 @@ void bus1_handle_flush_all(struct bus1_peer_info *peer_info, bool final)
 		bus1_handle_detach_holder(h);
 		bus1_handle_unref(h);
 	}
+
+	if (n_handlesp)
+		*n_handlesp = n_handles;
 }
 
 /**
@@ -1408,8 +1459,14 @@ int bus1_handle_dest_import(struct bus1_handle_dest *dest,
 		if (bus1_peer_acquire(peer))
 			return -ESHUTDOWN;
 
+		if (atomic_dec_if_positive(&peer_info->user->n_handles) < 0) {
+			bus1_peer_release(peer);
+			return -EDQUOT;
+		}
+
 		handle = bus1_handle_new_owner(id);
 		if (IS_ERR(handle)) {
+			atomic_inc(&peer_info->user->n_handles);
 			bus1_peer_release(peer);
 			return PTR_ERR(handle);
 		}
@@ -1877,7 +1934,7 @@ int bus1_handle_transfer_export(struct bus1_handle_transfer *transfer,
 {
 	struct bus1_peer_info *peer_info = bus1_peer_dereference(peer);
 	union bus1_handle_entry *entry;
-	size_t pos;
+	size_t pos, n_new = 0;
 	u64 id;
 
 	lockdep_assert_held(&peer_info->lock);
@@ -1892,6 +1949,7 @@ int bus1_handle_transfer_export(struct bus1_handle_transfer *transfer,
 		if (WARN_ON(!bus1_handle_is_owner(entry->handle)))
 			continue;
 
+		++n_new;
 		if (entry->handle->id == BUS1_HANDLE_INVALID) {
 			id = bus1_handle_prepare_publish(entry->handle,
 							 peer_info, 0, 0);
@@ -1899,6 +1957,9 @@ int bus1_handle_transfer_export(struct bus1_handle_transfer *transfer,
 				return -EFAULT;
 		}
 	}
+
+	if (!bus1_atomic_sub_if_ge(&peer_info->user->n_handles, n_new, n_new))
+		return -EDQUOT;
 
 	BUS1_HANDLE_BATCH_FOREACH_HANDLE(entry, pos, &transfer->batch) {
 		if (!entry->handle || bus1_handle_was_attached(entry->handle))
