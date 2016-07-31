@@ -427,7 +427,7 @@ void bus1_pool_publish(struct bus1_pool *pool, struct bus1_pool_slice *slice)
  * bus1_pool_release_user() - release a public slice
  * @pool:	pool to operate on
  * @offset:	offset of slice to release
- * @n_slicesp:	output variable to store number of released slices
+ * @n_slicesp:	output variable to store number of released slices, or NULL
  *
  * Release the user-space reference to a pool-slice, specified via the offset
  * of the slice. If both, the user-space reference *and* the kernel-space
@@ -462,7 +462,7 @@ int bus1_pool_release_user(struct bus1_pool *pool,
 /**
  * bus1_pool_flush() - flush all user references
  * @pool:	pool to flush
- * @n_slicesp:	pointer to number of flushed slices
+ * @n_slicesp:	output variable to store number of released slices, or NULL
  *
  * This flushes all user-references to any slice in @pool. Kernel references
  * are left untouched.
