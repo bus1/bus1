@@ -84,12 +84,12 @@ static void test_xfer_multicast(void)
 	recv = (struct bus1_cmd_recv){};
 	r = bus1_client_recv(c1, &recv);
 	assert(r >= 0);
-	assert(recv.data.type == BUS1_MSG_DATA);
-	assert(recv.data.n_handles == 1);
-	assert(recv.data.n_fds == 0);
+	assert(recv.msg.type == BUS1_MSG_DATA);
+	assert(recv.msg.n_handles == 1);
+	assert(recv.msg.n_fds == 0);
 
-	slice = bus1_client_slice_from_offset(c1, recv.data.offset);
-	handle20 = *(uint64_t *)(slice + c_align_to(recv.data.n_bytes, 8));
+	slice = bus1_client_slice_from_offset(c1, recv.msg.offset);
+	handle20 = *(uint64_t *)(slice + c_align_to(recv.msg.n_bytes, 8));
 	assert(!(handle20 & BUS1_NODE_FLAG_ALLOCATE));
 	assert(handle20 & BUS1_NODE_FLAG_MANAGED);
 
@@ -102,12 +102,12 @@ static void test_xfer_multicast(void)
 	recv = (struct bus1_cmd_recv){};
 	r = bus1_client_recv(c1, &recv);
 	assert(r >= 0);
-	assert(recv.data.type == BUS1_MSG_DATA);
-	assert(recv.data.n_handles == 1);
-	assert(recv.data.n_fds == 0);
+	assert(recv.msg.type == BUS1_MSG_DATA);
+	assert(recv.msg.n_handles == 1);
+	assert(recv.msg.n_fds == 0);
 
-	slice = bus1_client_slice_from_offset(c1, recv.data.offset);
-	handle30 = *(uint64_t *)(slice + c_align_to(recv.data.n_bytes, 8));
+	slice = bus1_client_slice_from_offset(c1, recv.msg.offset);
+	handle30 = *(uint64_t *)(slice + c_align_to(recv.msg.n_bytes, 8));
 	assert(!(handle30 & BUS1_NODE_FLAG_ALLOCATE));
 	assert(handle30 & BUS1_NODE_FLAG_MANAGED);
 
@@ -129,13 +129,13 @@ static void test_xfer_multicast(void)
 	recv = (struct bus1_cmd_recv){};
 	r = bus1_client_recv(c2, &recv);
 	assert(r >= 0);
-	assert(recv.data.type == BUS1_MSG_DATA);
-	assert(recv.data.n_handles == 6);
-	assert(recv.data.n_fds == 0);
+	assert(recv.msg.type == BUS1_MSG_DATA);
+	assert(recv.msg.n_handles == 6);
+	assert(recv.msg.n_fds == 0);
 
-	slice = bus1_client_slice_from_offset(c2, recv.data.offset);
+	slice = bus1_client_slice_from_offset(c2, recv.msg.offset);
 
-	p = (uint64_t *)(slice + c_align_to(recv.data.n_bytes, 8));
+	p = (uint64_t *)(slice + c_align_to(recv.msg.n_bytes, 8));
 	assert(*p == node20);
 
 	++p;
@@ -162,13 +162,13 @@ static void test_xfer_multicast(void)
 	recv = (struct bus1_cmd_recv){};
 	r = bus1_client_recv(c3, &recv);
 	assert(r >= 0);
-	assert(recv.data.type == BUS1_MSG_DATA);
-	assert(recv.data.n_handles == 6);
-	assert(recv.data.n_fds == 0);
+	assert(recv.msg.type == BUS1_MSG_DATA);
+	assert(recv.msg.n_handles == 6);
+	assert(recv.msg.n_fds == 0);
 
-	slice = bus1_client_slice_from_offset(c3, recv.data.offset);
+	slice = bus1_client_slice_from_offset(c3, recv.msg.offset);
 
-	p = (uint64_t *)(slice + c_align_to(recv.data.n_bytes, 8));
+	p = (uint64_t *)(slice + c_align_to(recv.msg.n_bytes, 8));
 	assert(!(*p & BUS1_NODE_FLAG_ALLOCATE));
 	assert(*p & BUS1_NODE_FLAG_MANAGED);
 

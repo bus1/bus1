@@ -46,10 +46,10 @@ static int client_recv(struct bus1_client *client,
 		return r;
 
 	assert(recv.n_dropped == 0);
-	assert(recv.data.type == BUS1_MSG_DATA);
+	assert(recv.msg.type == BUS1_MSG_DATA);
 
-	*datap = bus1_client_slice_from_offset(client, recv.data.offset);
-	*lenp = recv.data.n_bytes;
+	*datap = bus1_client_slice_from_offset(client, recv.msg.offset);
+	*lenp = recv.msg.n_bytes;
 
 	return 0;
 }
@@ -107,15 +107,15 @@ static void test_basic(void)
 	r = bus1_client_recv(parent, &recv);
 	assert(r >= 0);
 	assert(recv.n_dropped == 0);
-	assert(recv.data.type == BUS1_MSG_DATA);
-	assert(recv.data.n_bytes == 0);
-	assert(recv.data.n_fds == 0);
-	assert(recv.data.n_handles == 1);
+	assert(recv.msg.type == BUS1_MSG_DATA);
+	assert(recv.msg.n_bytes == 0);
+	assert(recv.msg.n_fds == 0);
+	assert(recv.msg.n_handles == 1);
 
 	child_handles[0] = *(uint64_t*) bus1_client_slice_from_offset(parent,
-							recv.data.offset);
+							recv.msg.offset);
 
-	r = bus1_client_slice_release(parent, recv.data.offset);
+	r = bus1_client_slice_release(parent, recv.msg.offset);
 	assert(r >= 0);
 
 	/* create second child */
@@ -147,15 +147,15 @@ static void test_basic(void)
 	r = bus1_client_recv(parent, &recv);
 	assert(r >= 0);
 	assert(recv.n_dropped == 0);
-	assert(recv.data.type == BUS1_MSG_DATA);
-	assert(recv.data.n_bytes == 0);
-	assert(recv.data.n_fds == 0);
-	assert(recv.data.n_handles == 1);
+	assert(recv.msg.type == BUS1_MSG_DATA);
+	assert(recv.msg.n_bytes == 0);
+	assert(recv.msg.n_fds == 0);
+	assert(recv.msg.n_handles == 1);
 
 	child_handles[1] = *(uint64_t*) bus1_client_slice_from_offset(parent,
-							recv.data.offset);
+							recv.msg.offset);
 
-	r = bus1_client_slice_release(parent, recv.data.offset);
+	r = bus1_client_slice_release(parent, recv.msg.offset);
 	assert(r >= 0);
 
 	/* multicast */
@@ -317,15 +317,15 @@ static uint64_t test_iterate(unsigned int iterations,
 		r = bus1_client_recv(parent, &recv);
 		assert(r >= 0);
 		assert(recv.n_dropped == 0);
-		assert(recv.data.type == BUS1_MSG_DATA);
-		assert(recv.data.n_bytes == 0);
-		assert(recv.data.n_fds == 0);
-		assert(recv.data.n_handles == 1);
+		assert(recv.msg.type == BUS1_MSG_DATA);
+		assert(recv.msg.n_bytes == 0);
+		assert(recv.msg.n_fds == 0);
+		assert(recv.msg.n_handles == 1);
 
 		child_handles[i] = *(uint64_t*) bus1_client_slice_from_offset(parent,
-								recv.data.offset);
+								recv.msg.offset);
 
-		r = bus1_client_slice_release(parent, recv.data.offset);
+		r = bus1_client_slice_release(parent, recv.msg.offset);
 		assert(r >= 0);
 	}
 

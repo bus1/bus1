@@ -149,7 +149,7 @@ static void test_api_handle(void)
 	recv = (struct bus1_cmd_recv){};
 	r = bus1_client_recv(c1, &recv);
 	assert(r >= 0);
-	assert(recv.data.type == BUS1_MSG_NODE_RELEASE);
+	assert(recv.msg.type == BUS1_MSG_NODE_RELEASE);
 
 	/* verify that the owner can destroy its handle exactly once */
 
@@ -164,7 +164,7 @@ static void test_api_handle(void)
 	recv = (struct bus1_cmd_recv){};
 	r = bus1_client_recv(c1, &recv);
 	assert(r >= 0);
-	assert(recv.data.type == BUS1_MSG_NODE_DESTROY);
+	assert(recv.msg.type == BUS1_MSG_NODE_DESTROY);
 
 	/* verify that both queues are empty (no unexpected notifications) */
 
@@ -236,14 +236,14 @@ static void test_api_seed(void)
 
 	r = bus1_client_recv(client, &recv);
 	assert(r >= 0);
-	assert(recv.data.type == BUS1_MSG_DATA);
+	assert(recv.msg.type == BUS1_MSG_DATA);
 
-	slice = bus1_client_slice_from_offset(client, recv.data.offset);
+	slice = bus1_client_slice_from_offset(client, recv.msg.offset);
 	assert(slice);
 
-	assert(recv.data.n_bytes == strlen(payload) + 1);
-	assert(strncmp(slice, payload, recv.data.n_bytes) == 0);
-	handle_id = *(uint64_t*)((uint8_t*)slice + ((recv.data.n_bytes + 7) & ~(7ULL)));
+	assert(recv.msg.n_bytes == strlen(payload) + 1);
+	assert(strncmp(slice, payload, recv.msg.n_bytes) == 0);
+	handle_id = *(uint64_t*)((uint8_t*)slice + ((recv.msg.n_bytes + 7) & ~(7ULL)));
 	assert(handle_id != 0);
 	assert(handle_id != BUS1_HANDLE_INVALID);
 	assert(!(handle_id & BUS1_NODE_FLAG_ALLOCATE));

@@ -518,49 +518,46 @@ bus1_peer_queue_peek(struct bus1_peer_info *peer_info,
 				return ERR_PTR(r);
 			}
 
-			param->data.type = BUS1_MSG_DATA;
-			param->data.destination = message->destination;
-			param->data.uid = message->uid;
-			param->data.gid = message->gid;
-			param->data.pid = message->pid;
-			param->data.tid = message->tid;
-			param->data.offset = message->slice->offset;
-			param->data.n_bytes = message->n_bytes;
-			param->data.n_handles =
-					message->handles.batch.n_entries;
-			param->data.n_fds = message->n_files;
+			param->msg.type = BUS1_MSG_DATA;
+			param->msg.destination = message->destination;
+			param->msg.uid = message->uid;
+			param->msg.gid = message->gid;
+			param->msg.pid = message->pid;
+			param->msg.tid = message->tid;
+			param->msg.offset = message->slice->offset;
+			param->msg.n_bytes = message->n_bytes;
+			param->msg.n_handles = message->handles.batch.n_entries;
+			param->msg.n_fds = message->n_files;
 
 			bus1_pool_publish(&peer_info->pool, message->slice);
 			break;
 
 		case BUS1_QUEUE_NODE_HANDLE_DESTRUCTION:
 			kref_get(&node->ref);
-			param->data.type = BUS1_MSG_NODE_DESTROY;
-			param->data.destination =
-						bus1_handle_unref_queued(node);
-			param->data.uid = -1;
-			param->data.gid = -1;
-			param->data.pid = 0;
-			param->data.tid = 0;
-			param->data.offset = BUS1_OFFSET_INVALID;
-			param->data.n_bytes = 0;
-			param->data.n_handles = 0;
-			param->data.n_fds = 0;
+			param->msg.type = BUS1_MSG_NODE_DESTROY;
+			param->msg.destination = bus1_handle_unref_queued(node);
+			param->msg.uid = -1;
+			param->msg.gid = -1;
+			param->msg.pid = 0;
+			param->msg.tid = 0;
+			param->msg.offset = BUS1_OFFSET_INVALID;
+			param->msg.n_bytes = 0;
+			param->msg.n_handles = 0;
+			param->msg.n_fds = 0;
 			break;
 
 		case BUS1_QUEUE_NODE_HANDLE_RELEASE:
 			kref_get(&node->ref);
-			param->data.type = BUS1_MSG_NODE_RELEASE;
-			param->data.destination =
-						bus1_handle_unref_queued(node);
-			param->data.uid = -1;
-			param->data.gid = -1;
-			param->data.pid = 0;
-			param->data.tid = 0;
-			param->data.offset = BUS1_OFFSET_INVALID;
-			param->data.n_bytes = 0;
-			param->data.n_handles = 0;
-			param->data.n_fds = 0;
+			param->msg.type = BUS1_MSG_NODE_RELEASE;
+			param->msg.destination = bus1_handle_unref_queued(node);
+			param->msg.uid = -1;
+			param->msg.gid = -1;
+			param->msg.pid = 0;
+			param->msg.tid = 0;
+			param->msg.offset = BUS1_OFFSET_INVALID;
+			param->msg.n_bytes = 0;
+			param->msg.n_handles = 0;
+			param->msg.n_fds = 0;
 			break;
 
 		default:
@@ -674,7 +671,7 @@ static int bus1_peer_ioctl_recv(struct bus1_peer *peer, unsigned long arg)
 	if (unlikely(param.flags & ~(BUS1_RECV_FLAG_PEEK |
 				     BUS1_RECV_FLAG_SEED) ||
 		     param.n_dropped != 0 ||
-		     param.data.type != BUS1_MSG_NONE))
+		     param.msg.type != BUS1_MSG_NONE))
 		return -EINVAL;
 
 	if (param.flags & BUS1_RECV_FLAG_PEEK)
@@ -684,7 +681,7 @@ static int bus1_peer_ioctl_recv(struct bus1_peer *peer, unsigned long arg)
 
 	if (r < 0)
 		return r;
-	if (!param.n_dropped && param.data.type == BUS1_MSG_NONE)
+	if (!param.n_dropped && param.msg.type == BUS1_MSG_NONE)
 		return -EAGAIN;
 
 	return copy_to_user((void __user *)arg,
