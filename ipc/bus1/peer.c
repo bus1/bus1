@@ -505,7 +505,6 @@ bus1_peer_queue_peek(struct bus1_peer_info *peer_info,
 		     struct bus1_cmd_recv *param,
 		     bool drop)
 {
-	const bool inst_fds = param->flags & BUS1_RECV_FLAG_INSTALL_FDS;
 	struct bus1_queue_node *node;
 	struct bus1_message *message = NULL;
 	int r;
@@ -528,7 +527,7 @@ bus1_peer_queue_peek(struct bus1_peer_info *peer_info,
 		case BUS1_QUEUE_NODE_MESSAGE_NORMAL:
 			message = bus1_message_from_node(node);
 
-			r = bus1_message_install(message, peer_info, inst_fds);
+			r = bus1_message_install(message, peer_info, param);
 			if (r < 0) {
 				bus1_message_unref(message);
 				return ERR_PTR(r);

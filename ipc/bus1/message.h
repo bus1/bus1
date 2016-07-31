@@ -43,6 +43,7 @@ struct bus1_user;
  * @files:			passed file descriptors
  * @n_bytes:			number of user-bytes transmitted
  * @n_files:			number of files transmitted
+ * @n_accounted_handles:	number of accounted handles
  * @handles:			passed handles
  */
 struct bus1_message {
@@ -63,6 +64,7 @@ struct bus1_message {
 	struct file **files;
 	size_t n_bytes;
 	size_t n_files;
+	size_t n_accounted_handles;
 	struct bus1_handle_inflight handles;
 	/* handles must be last */
 };
@@ -83,7 +85,7 @@ void bus1_message_deallocate(struct bus1_message *message,
 			     struct bus1_peer_info *peer_info);
 int bus1_message_install(struct bus1_message *message,
 			 struct bus1_peer_info *peer_info,
-			 bool inst_fds);
+			 struct bus1_cmd_recv *param);
 
 /**
  * bus1_message_from_node - get parent message of a queue node

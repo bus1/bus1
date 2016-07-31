@@ -67,6 +67,7 @@ struct bus1_message *bus1_message_new(size_t n_bytes,
 	message->files = (void *)((u8 *)message + base_size);
 	message->n_bytes = n_bytes; /* does *not* match slice->size! */
 	message->n_files = n_files;
+	message->n_accounted_handles = 0;
 	bus1_handle_inflight_init(&message->handles, n_handles);
 	memset(message->files, 0, n_files * sizeof(*message->files));
 
@@ -184,6 +185,7 @@ int bus1_message_allocate(struct bus1_message *message,
 		goto exit;
 	}
 
+	message->n_accounted_handles = message->handles.batch.n_entries;
 	message->slice = slice;
 	r = 0;
 
@@ -212,9 +214,9 @@ void bus1_message_deallocate_locked(struct bus1_message *message,
 				       message->n_files);
 		if (!bus1_pool_slice_is_public(message->slice))
 			atomic_inc(&peer_info->user->n_slices);
-		/* XXX: properly track count of non-inflight handles */
-		atomic_add(message->handles.batch.n_entries,
-			   &peer_info->user->n_handles);
+		if (message->n_accounted_handles > 0)
+			atomic_add(message->n_accounted_handles,
+				   &peer_info->user->n_handles);
 		message->slice = bus1_pool_release_kernel(&peer_info->pool,
 							  message->slice);
 	}
@@ -250,9 +252,11 @@ void bus1_message_deallocate(struct bus1_message *message,
  */
 int bus1_message_install(struct bus1_message *message,
 			 struct bus1_peer_info *peer_info,
-			 bool inst_fds)
+			 struct bus1_cmd_recv *param)
 {
-	size_t n, pos, offset, n_fds = 0, n_ids = 0;
+	const bool inst_fds = param->flags & BUS1_RECV_FLAG_INSTALL_FDS;
+	const bool peek = param->flags & BUS1_RECV_FLAG_PEEK;
+	size_t n, pos, offset, n_handles = 0, n_fds = 0, n_ids = 0;
 	u64 ts, *ids = NULL;
 	int r, *fds = NULL;
 	struct kvec vec;
@@ -288,7 +292,8 @@ int bus1_message_install(struct bus1_message *message,
 		pos = 0;
 
 		while ((n = bus1_handle_inflight_walk(&message->handles,
-						peer_info, &pos, &iter, ids, ts,
+						peer_info, &pos, &n_handles,
+						&iter, ids, ts,
 						message->qnode.sender)) > 0) {
 			WARN_ON(n > n_ids);
 
@@ -330,6 +335,21 @@ int bus1_message_install(struct bus1_message *message,
 					 offset, &vec, 1, vec.iov_len);
 		if (r < 0)
 			goto exit;
+	}
+
+	/* account handles */
+	if (n_handles > 0) {
+		if (!peek) {
+			WARN_ON(n_handles > message->n_accounted_handles);
+			atomic_add(message->n_accounted_handles - n_handles,
+				   &peer_info->user->n_handles);
+			message->n_accounted_handles = 0;
+			n_handles = 0;
+		} else if (!bus1_atomic_sub_if_ge(&peer_info->user->n_handles,
+						  n_handles, n_handles)) {
+			r = -EDQUOT;
+			goto exit;
+		}
 	}
 
 	/* publish pool slice */

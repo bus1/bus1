@@ -1109,6 +1109,12 @@ int bus1_handle_pair(struct bus1_peer *peer,
 		goto exit;
 	}
 
+	/* account new handle on @clone_info */
+	if (atomic_dec_if_positive(&clone_info->user->n_handles) < 0) {
+		r = -EDQUOT;
+		goto exit;
+	}
+
 	/*
 	 * Now that we imported (or allocated) the original node, and allocated
 	 * a fresh handle for the clone, we must attach it. If the node is new,
@@ -1120,11 +1126,14 @@ int bus1_handle_pair(struct bus1_peer *peer,
 		mutex_lock(&owner_info->lock);
 		r = bus1_handle_attach_holder(clone_handle, clone) ? 0 : -ENXIO;
 		mutex_unlock(&owner_info->lock);
-		if (r < 0)
+		if (r < 0) {
+			atomic_inc(&clone_info->user->n_handles);
 			goto exit;
+		}
 	} else {
-		/* account new node on @peer_info */
-		if (!bus1_atomic_sub_if_ge(&peer_info->user->n_handles, 1, 1)) {
+		/* account new node+handle on @peer_info */
+		if (!bus1_atomic_sub_if_ge(&peer_info->user->n_handles, 2, 2)) {
+			atomic_inc(&clone_info->user->n_handles);
 			r = -EDQUOT;
 			goto exit;
 		}
@@ -1241,6 +1250,7 @@ int bus1_handle_release_by_id(struct bus1_peer *peer,
 				mutex_unlock(&peer_info->lock);
 				r = 0;
 			} else {
+				++n_handles;
 				bus1_handle_release_unlock(handle, peer_info);
 				r = 0;
 			}
@@ -1280,9 +1290,21 @@ int bus1_node_destroy_by_id(struct bus1_peer *peer,
 	int r;
 
 	if (*idp & BUS1_NODE_FLAG_ALLOCATE) {
+		/*
+		 * Handle accounting counts both, valid user-referenced handles
+		 * and live nodes. This call creates a new live-node and
+		 * immediately destroys it, but leaves a user-reference behind
+		 * (DESTROY never releases user references). Therefore, the
+		 * accounting net-change of this is +1.
+		 */
+		if (atomic_dec_if_positive(&peer_info->user->n_handles) < 0)
+			return -EDQUOT;
+
 		handle = bus1_handle_new_owner(*idp);
-		if (IS_ERR(handle))
+		if (IS_ERR(handle)) {
+			atomic_inc(&peer_info->user->n_handles);
 			return PTR_ERR(handle);
+		}
 
 		mutex_lock(&peer_info->lock);
 		bus1_handle_attach_owner(handle, peer);
@@ -1353,18 +1375,22 @@ void bus1_handle_flush_all(struct bus1_peer_info *peer_info,
 				++n_handles;
 				bus1_handle_ref(h);
 				bus1_node_destroy(h->node, peer_info);
-				if (atomic_xchg(&h->n_user, -1) != -1)
+				if (atomic_xchg(&h->n_user, -1) != -1) {
 					bus1_handle_release_owner(h, peer_info);
+					++n_handles;
+				}
 				bus1_handle_unref(h);
 			}
-		} else if (atomic_xchg(&h->n_user, -1) != -1 &&
-			   atomic_dec_and_test(&h->n_inflight)) {
-			rb_erase(&h->rb_node, &peer_info->map_handles_by_node);
-			RB_CLEAR_NODE(&h->rb_node); /* steal ref */
-
-			bus1_handle_uninstall_holder(h, peer_info);
-			WARN_ON(!RB_EMPTY_NODE(&h->qnode.rb));
-			list_add(&h->qnode.link, &list_remote);
+		} else if (atomic_xchg(&h->n_user, -1) != -1) {
+			++n_handles;
+			if (atomic_dec_and_test(&h->n_inflight)) {
+				rb_erase(&h->rb_node,
+					 &peer_info->map_handles_by_node);
+				RB_CLEAR_NODE(&h->rb_node); /* steal ref */
+				bus1_handle_uninstall_holder(h, peer_info);
+				WARN_ON(!RB_EMPTY_NODE(&h->qnode.rb));
+				list_add(&h->qnode.link, &list_remote);
+			}
 		}
 	}
 	mutex_unlock(&peer_info->lock);
@@ -1459,7 +1485,9 @@ int bus1_handle_dest_import(struct bus1_handle_dest *dest,
 		if (bus1_peer_acquire(peer))
 			return -ESHUTDOWN;
 
-		if (atomic_dec_if_positive(&peer_info->user->n_handles) < 0) {
+		/* account node+userref */
+		if (bus1_atomic_sub_if_ge(&peer_info->user->n_handles,
+					  2, 2) < 0) {
 			bus1_peer_release(peer);
 			return -EDQUOT;
 		}
@@ -1958,6 +1986,7 @@ int bus1_handle_transfer_export(struct bus1_handle_transfer *transfer,
 		}
 	}
 
+	n_new *= 2; /* account for node+handle */
 	if (!bus1_atomic_sub_if_ge(&peer_info->user->n_handles, n_new, n_new))
 		return -EDQUOT;
 
@@ -2164,6 +2193,7 @@ void bus1_handle_inflight_install(struct bus1_handle_inflight *inflight,
  * @peer_info:		peer info of inflight owner
  * @pos:		current iterator position
  * @iter:		opaque iterator
+ * @new:		counts new handle installs
  * @ids:		output storage for ID block
  * @timestamp:		timestamp of the transaction
  *
@@ -2176,7 +2206,8 @@ void bus1_handle_inflight_install(struct bus1_handle_inflight *inflight,
  * On each call, this function advances @pos and @iter to keep track of the
  * iteration, and updates @ids with the handle IDs of the current block. It
  * returns the size of the current block, which is at most
- * BUS1_HANDLE_BATCH_SIZE.
+ * BUS1_HANDLE_BATCH_SIZE. For each newly to-be-installed user-space, it
+ * increases @new by one.
  *
  * Once this returns 0, the iteration is finished.
  *
@@ -2185,6 +2216,7 @@ void bus1_handle_inflight_install(struct bus1_handle_inflight *inflight,
 size_t bus1_handle_inflight_walk(struct bus1_handle_inflight *inflight,
 				 struct bus1_peer_info *peer_info,
 				 size_t *pos,
+				 size_t *new,
 				 void **iter,
 				 u64 *ids,
 				 u64 timestamp,
@@ -2203,11 +2235,15 @@ size_t bus1_handle_inflight_walk(struct bus1_handle_inflight *inflight,
 
 	for (i = 0; i < n; ++i) {
 		h = (*block)[i].handle;
-		if (h)
+		if (h) {
 			ids[i] = bus1_handle_prepare_publish(h, peer_info,
 							     timestamp, sender);
-		else
+			if (ids[i] != BUS1_HANDLE_INVALID &&
+			    atomic_read(&h->n_user) < 0)
+				++*new;
+		} else {
 			ids[i] = BUS1_HANDLE_INVALID;
+		}
 	}
 
 	return n;
