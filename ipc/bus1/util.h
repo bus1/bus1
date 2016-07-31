@@ -21,6 +21,7 @@
 
 #include <linux/atomic.h>
 #include <linux/err.h>
+#include <linux/file.h>
 #include <linux/types.h>
 
 struct dentry;
@@ -52,6 +53,23 @@ bus1_debugfs_create_atomic_x(const char *name,
 }
 
 #endif
+
+/**
+ * bus1_fput() - drop file reference
+ * @file:	file to operate on, or NULL
+ *
+ * This is a wrapper around fput(), but is a no-op if NULL is passed. It thus
+ * follows our convention of unref-functions, by ignoring NULL and always
+ * returning NULL (like most driver-core and VFS functions do as well).
+ *
+ * Return: NULL is returned.
+ */
+static inline struct file *bus1_fput(struct file *file)
+{
+	if (file)
+		fput(file);
+	return NULL;
+}
 
 /**
  * bus1_atomic_sub_if_ge() - subtract, if above threshold

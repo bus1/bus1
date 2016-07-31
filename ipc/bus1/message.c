@@ -20,6 +20,7 @@
 #include "pool.h"
 #include "queue.h"
 #include "user.h"
+#include "util.h"
 
 /**
  * bus1_message_new() - allocate new message
@@ -99,8 +100,7 @@ static void bus1_message_free(struct kref *ref)
 	WARN_ON(message->transaction.next);
 
 	for (i = 0; i < message->n_files; ++i)
-		if (message->files[i])
-			fput(message->files[i]);
+		bus1_fput(message->files[i]);
 
 	bus1_handle_inflight_destroy(&message->handles);
 	bus1_queue_node_destroy(&message->qnode);

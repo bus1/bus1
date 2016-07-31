@@ -184,7 +184,7 @@ struct file *bus1_import_fd(int fd, bool bus1)
 	}
 
 	if (f != ret)
-		fput(f);
+		bus1_fput(f);
 
 	return ret;
 }

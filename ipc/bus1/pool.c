@@ -26,6 +26,7 @@
 #include <linux/uio.h>
 #include "peer.h"
 #include "pool.h"
+#include "util.h"
 
 /* lockdep assertion to verify the parent peer is locked */
 #define bus1_pool_assert_held(_pool) \
@@ -227,7 +228,7 @@ int bus1_pool_create_internal(struct bus1_pool *pool, size_t size)
 error_put_write:
 	put_write_access(file_inode(f));
 error_put_file:
-	fput(f);
+	bus1_fput(f);
 	return r;
 }
 
@@ -258,8 +259,7 @@ void bus1_pool_destroy(struct bus1_pool *pool)
 	}
 
 	put_write_access(file_inode(pool->f));
-	fput(pool->f);
-	pool->f = NULL;
+	pool->f = bus1_fput(pool->f);
 }
 
 /**

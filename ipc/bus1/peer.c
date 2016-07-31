@@ -351,8 +351,7 @@ static int bus1_peer_ioctl_handle_transfer(struct bus1_peer *src,
 
 out:
 	bus1_peer_release(dst);
-	if (dst_file)
-		fput(dst_file);
+	bus1_fput(dst_file);
 	return r;
 }
 

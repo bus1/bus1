@@ -104,9 +104,7 @@ static int bus1_fop_mmap(struct file *file, struct vm_area_struct *vma)
 	pool = &bus1_peer_dereference(peer)->pool;
 
 	/* replace the connection file with our shmem file */
-	if (vma->vm_file)
-		fput(vma->vm_file);
-
+	bus1_fput(vma->vm_file);
 	vma->vm_file = get_file(pool->f);
 	vma->vm_flags &= ~VM_MAYWRITE;
 

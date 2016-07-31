@@ -117,8 +117,7 @@ static void bus1_transaction_destroy(struct bus1_transaction *transaction)
 	}
 
 	for (i = 0; i < transaction->param->n_fds; ++i)
-		if (transaction->files[i])
-			fput(transaction->files[i]);
+		bus1_fput(transaction->files[i]);
 
 	bus1_handle_transfer_release(&transaction->handles,
 				     transaction->peer_info);
