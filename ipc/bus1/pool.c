@@ -185,7 +185,7 @@ int bus1_pool_create_internal(struct bus1_pool *pool, size_t size)
 	if (size == 0 || size > BUS1_POOL_SIZE_MAX)
 		return -EMSGSIZE;
 
-	f = shmem_file_setup(KBUILD_MODNAME "-peer", size, 0);
+	f = shmem_file_setup(KBUILD_MODNAME "-peer", size, VM_NORESERVE);
 	if (IS_ERR(f))
 		return PTR_ERR(f);
 
