@@ -211,6 +211,8 @@ void bus1_message_deallocate_locked(struct bus1_message *message,
 				       message->handles.batch.n_entries,
 				       message->n_files);
 		atomic_inc(&peer_info->user->n_slices);
+		atomic_add(message->handles.batch.n_entries,
+			   &peer_info->user->n_handles);
 		message->slice = bus1_pool_release_kernel(&peer_info->pool,
 							  message->slice);
 	}
@@ -251,6 +253,9 @@ void bus1_message_dequeue(struct bus1_message *message,
 				       message->slice->size,
 				       message->handles.batch.n_entries,
 				       message->n_files);
+		/* XXX: properly track count of non-inflight handles */
+		atomic_add(message->handles.batch.n_entries,
+			   &peer_info->user->n_handles);
 		message->slice = bus1_pool_release_kernel(&peer_info->pool,
 							  message->slice);
 	}

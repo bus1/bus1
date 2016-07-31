@@ -490,7 +490,4 @@ void bus1_user_quota_commit(struct bus1_peer_info *peer_info,
 	/* discharge any inflight-only resources */
 	atomic_add(n_bytes, &peer_info->user->n_inflight_bytes);
 	atomic_add(n_fds, &peer_info->user->n_inflight_fds);
-
-	/* XXX: properly track count of non-inflight handles */
-	atomic_add(n_handles, &peer_info->user->n_handles);
 }
