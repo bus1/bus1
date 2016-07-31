@@ -533,8 +533,10 @@ bus1_peer_queue_peek(struct bus1_peer_info *peer_info,
 			break;
 
 		case BUS1_QUEUE_NODE_HANDLE_DESTRUCTION:
+			kref_get(&node->ref);
 			param->type = BUS1_MSG_NODE_DESTROY;
-			param->data.destination = 0;
+			param->data.destination =
+						bus1_handle_unref_queued(node);
 			param->data.uid = 0;
 			param->data.gid = 0;
 			param->data.pid = 0;
@@ -546,8 +548,10 @@ bus1_peer_queue_peek(struct bus1_peer_info *peer_info,
 			break;
 
 		case BUS1_QUEUE_NODE_HANDLE_RELEASE:
+			kref_get(&node->ref);
 			param->type = BUS1_MSG_NODE_RELEASE;
-			param->data.destination = 0;
+			param->data.destination =
+						bus1_handle_unref_queued(node);
 			param->data.uid = 0;
 			param->data.gid = 0;
 			param->data.pid = 0;
@@ -597,11 +601,8 @@ static int bus1_peer_dequeue(struct bus1_peer_info *peer_info,
 		break;
 
 	case BUS1_QUEUE_NODE_HANDLE_DESTRUCTION:
-		param->node_destroy.handle = bus1_handle_unref_queued(node);
-		break;
-
 	case BUS1_QUEUE_NODE_HANDLE_RELEASE:
-		param->node_release.handle = bus1_handle_unref_queued(node);
+		bus1_handle_unref_queued(node);
 		break;
 
 	default:
@@ -643,11 +644,8 @@ static int bus1_peer_peek(struct bus1_peer_info *peer_info,
 		break;
 
 	case BUS1_QUEUE_NODE_HANDLE_DESTRUCTION:
-		param->node_destroy.handle = bus1_handle_unref_queued(node);
-		break;
-
 	case BUS1_QUEUE_NODE_HANDLE_RELEASE:
-		param->node_release.handle = bus1_handle_unref_queued(node);
+		bus1_handle_unref_queued(node);
 		break;
 
 	default:
