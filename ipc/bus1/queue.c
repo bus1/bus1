@@ -22,6 +22,23 @@
 #define BUS1_QUEUE_TYPE_SHIFT (62)
 #define BUS1_QUEUE_TYPE_MASK (((u64)3ULL) << BUS1_QUEUE_TYPE_SHIFT)
 
+static void bus1_queue_node_set_type(struct bus1_queue_node *node, u64 type)
+{
+	BUILD_BUG_ON((_BUS1_QUEUE_NODE_N - 1) > (BUS1_QUEUE_TYPE_MASK >>
+							BUS1_QUEUE_TYPE_SHIFT));
+
+	WARN_ON(type & ~(BUS1_QUEUE_TYPE_MASK >> BUS1_QUEUE_TYPE_SHIFT));
+	node->timestamp_and_type &= ~BUS1_QUEUE_TYPE_MASK;
+	node->timestamp_and_type |= type << BUS1_QUEUE_TYPE_SHIFT;
+}
+
+static void bus1_queue_node_set_timestamp(struct bus1_queue_node *node, u64 ts)
+{
+	WARN_ON(ts & BUS1_QUEUE_TYPE_MASK);
+	node->timestamp_and_type &= BUS1_QUEUE_TYPE_MASK;
+	node->timestamp_and_type |= ts;
+}
+
 /**
  * bus1_queue_node_get_type() - query node type
  * @node:		node to query
@@ -52,27 +69,99 @@ u64 bus1_queue_node_get_timestamp(struct bus1_queue_node *node)
 	return node->timestamp_and_type & ~BUS1_QUEUE_TYPE_MASK;
 }
 
-static void bus1_queue_node_set_type(struct bus1_queue_node *node, u64 type)
-{
-	BUILD_BUG_ON((_BUS1_QUEUE_NODE_N - 1) > (BUS1_QUEUE_TYPE_MASK >>
-							BUS1_QUEUE_TYPE_SHIFT));
-
-	WARN_ON(type & ~(BUS1_QUEUE_TYPE_MASK >> BUS1_QUEUE_TYPE_SHIFT));
-	node->timestamp_and_type &= ~BUS1_QUEUE_TYPE_MASK;
-	node->timestamp_and_type |= type << BUS1_QUEUE_TYPE_SHIFT;
-}
-
-static void bus1_queue_node_set_timestamp(struct bus1_queue_node *node, u64 ts)
-{
-	WARN_ON(ts & BUS1_QUEUE_TYPE_MASK);
-	node->timestamp_and_type &= BUS1_QUEUE_TYPE_MASK;
-	node->timestamp_and_type |= ts;
-}
-
 static void bus1_queue_node_no_free(struct kref *ref)
 {
 	/* no-op kref_put() callback that is used if we hold >1 reference */
 	WARN(1, "Queue node freed unexpectedly");
+}
+
+/**
+ * bus1_queue_node_init() - initialize queue node
+ * @node:		node to initialize
+ * @type:		message type
+ * @sender:		sender tag
+ *
+ * This initializes a previously unused node, and prepares it for use with a
+ * message queue. The initial ref-count is set to 1.
+ */
+void bus1_queue_node_init(struct bus1_queue_node *node,
+			  unsigned int type,
+			  unsigned long sender)
+{
+	RB_CLEAR_NODE(&node->rb);
+	kref_init(&node->ref);
+	node->sender = sender;
+	node->timestamp_and_type = 0;
+	bus1_queue_node_set_type(node, type);
+}
+
+/**
+ * bus1_queue_node_destroy() - destroy queue node
+ * @node:		node to destroy, or NULL
+ *
+ * This destroys a previously initialized queue node. This is a no-op and only
+ * serves as debugger, testing whether the node was properly unqueued before.
+ * This must not be called if there are still references left to the node. That
+ * is, this function should rather be called from your kref_put() callback.
+ */
+void bus1_queue_node_destroy(struct bus1_queue_node *node)
+{
+	if (!node)
+		return;
+
+	WARN_ON(!RB_EMPTY_NODE(&node->rb));
+	WARN_ON(atomic_read(&node->ref.refcount) > 0);
+}
+
+/**
+ * bus1_queue_node_is_queued() - check whether a node is queued
+ * @node:		node to query, or NULL
+ *
+ * This checks whether a node is currently queued in a message queue. That is,
+ * the node was linked via bus1_queue_stage() and as not been dequeued, yet
+ * (both via bus1_queue_remove() or bus1_queue_flush()).
+ *
+ * Return: True if @node is currently queued.
+ */
+bool bus1_queue_node_is_queued(struct bus1_queue_node *node)
+{
+	return node && !RB_EMPTY_NODE(&node->rb);
+}
+
+/**
+ * bus1_queue_node_is_committed() - check whether a node is committed
+ * @node:		node to query, or NULL
+ *
+ * This checks whether a given node was already committed. In this case, the
+ * queue node is owned by the queue. In all other cases, the node is usually
+ * owned by an ongoing transaction or some other ongoing operation.
+ *
+ * Return: True if @node is committed.
+ */
+bool bus1_queue_node_is_committed(struct bus1_queue_node *node)
+{
+	u64 ts;
+
+	ts = node ? bus1_queue_node_get_timestamp(node) : 0;
+	return ts != 0 && !(ts & 1);
+}
+
+/**
+ * bus1_queue_node_is_staging() - check whether a node is marked staging
+ * @node:		node to query, or NULL
+ *
+ * This checks whether a given node is queued, but still marked staging. That
+ * means, the node has been put on the queue but there is still a transaction
+ * that pins it to commit it later.
+ *
+ * Return: True if @node is queued as staging entry.
+ */
+bool bus1_queue_node_is_staging(struct bus1_queue_node *node)
+{
+	u64 ts;
+
+	ts = node ? bus1_queue_node_get_timestamp(node) : 0;
+	return ts & 1;
 }
 
 static int bus1_queue_node_compare(struct bus1_queue_node *node,
@@ -471,93 +560,4 @@ struct bus1_queue_node *bus1_queue_peek(struct bus1_queue *queue, bool seed)
 	mutex_unlock(&queue->lock);
 
 	return node;
-}
-
-/**
- * bus1_queue_node_init() - initialize queue node
- * @node:		node to initialize
- * @type:		message type
- * @sender:		sender tag
- *
- * This initializes a previously unused node, and prepares it for use with a
- * message queue. The initial ref-count is set to 1.
- */
-void bus1_queue_node_init(struct bus1_queue_node *node,
-			  unsigned int type,
-			  unsigned long sender)
-{
-	RB_CLEAR_NODE(&node->rb);
-	kref_init(&node->ref);
-	node->sender = sender;
-	node->timestamp_and_type = 0;
-	bus1_queue_node_set_type(node, type);
-}
-
-/**
- * bus1_queue_node_destroy() - destroy queue node
- * @node:		node to destroy, or NULL
- *
- * This destroys a previously initialized queue node. This is a no-op and only
- * serves as debugger, testing whether the node was properly unqueued before.
- * This must not be called if there are still references left to the node. That
- * is, this function should rather be called from your kref_put() callback.
- */
-void bus1_queue_node_destroy(struct bus1_queue_node *node)
-{
-	if (!node)
-		return;
-
-	WARN_ON(!RB_EMPTY_NODE(&node->rb));
-	WARN_ON(atomic_read(&node->ref.refcount) > 0);
-}
-
-/**
- * bus1_queue_node_is_queued() - check whether a node is queued
- * @node:		node to query, or NULL
- *
- * This checks whether a node is currently queued in a message queue. That is,
- * the node was linked via bus1_queue_stage() and as not been dequeued, yet
- * (both via bus1_queue_remove() or bus1_queue_flush()).
- *
- * Return: True if @node is currently queued.
- */
-bool bus1_queue_node_is_queued(struct bus1_queue_node *node)
-{
-	return node && !RB_EMPTY_NODE(&node->rb);
-}
-
-/**
- * bus1_queue_node_is_committed() - check whether a node is committed
- * @node:		node to query, or NULL
- *
- * This checks whether a given node was already committed. In this case, the
- * queue node is owned by the queue. In all other cases, the node is usually
- * owned by an ongoing transaction or some other ongoing operation.
- *
- * Return: True if @node is committed.
- */
-bool bus1_queue_node_is_committed(struct bus1_queue_node *node)
-{
-	u64 ts;
-
-	ts = node ? bus1_queue_node_get_timestamp(node) : 0;
-	return ts != 0 && !(ts & 1);
-}
-
-/**
- * bus1_queue_node_is_staging() - check whether a node is marked staging
- * @node:		node to query, or NULL
- *
- * This checks whether a given node is queued, but still marked staging. That
- * means, the node has been put on the queue but there is still a transaction
- * that pins it to commit it later.
- *
- * Return: True if @node is queued as staging entry.
- */
-bool bus1_queue_node_is_staging(struct bus1_queue_node *node)
-{
-	u64 ts;
-
-	ts = node ? bus1_queue_node_get_timestamp(node) : 0;
-	return ts & 1;
 }

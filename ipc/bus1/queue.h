@@ -96,33 +96,11 @@
 #include <linux/rbtree.h>
 #include <linux/rcupdate.h>
 
-struct bus1_queue_node;
-
 enum {
 	BUS1_QUEUE_NODE_MESSAGE_NORMAL,
 	BUS1_QUEUE_NODE_HANDLE_DESTRUCTION,
 	BUS1_QUEUE_NODE_HANDLE_RELEASE,
 	_BUS1_QUEUE_NODE_N,
-};
-
-/**
- * struct bus1_queue - message queue
- * @clock:		local clock (used for Lamport Timestamps)
- * @front:		cached front entry
- * @waitq:		pointer to wait-queue to use for wake-ups
- * @seed:		seed message
- * @messages:		queued messages
- * @lock:		data lock
- * @n_dropped:		number of dropped messages since last report
- */
-struct bus1_queue {
-	u64 clock;
-	struct rb_node __rcu *front;
-	wait_queue_head_t *waitq;
-	struct bus1_queue_node *seed;
-	struct rb_root messages;
-	struct mutex lock;
-	atomic_t n_dropped;
 };
 
 /**
@@ -145,6 +123,37 @@ struct bus1_queue_node {
 	u64 timestamp_and_type;
 };
 
+/**
+ * struct bus1_queue - message queue
+ * @clock:		local clock (used for Lamport Timestamps)
+ * @front:		cached front entry
+ * @waitq:		pointer to wait-queue to use for wake-ups
+ * @seed:		seed message
+ * @messages:		queued messages
+ * @lock:		data lock
+ * @n_dropped:		number of dropped messages since last report
+ */
+struct bus1_queue {
+	u64 clock;
+	struct rb_node __rcu *front;
+	wait_queue_head_t *waitq;
+	struct bus1_queue_node *seed;
+	struct rb_root messages;
+	struct mutex lock;
+	atomic_t n_dropped;
+};
+
+/* nodes */
+void bus1_queue_node_init(struct bus1_queue_node *node,
+			  unsigned int type,
+			  unsigned long sender);
+void bus1_queue_node_destroy(struct bus1_queue_node *node);
+bool bus1_queue_node_is_queued(struct bus1_queue_node *node);
+bool bus1_queue_node_is_committed(struct bus1_queue_node *node);
+bool bus1_queue_node_is_staging(struct bus1_queue_node *node);
+unsigned int bus1_queue_node_get_type(struct bus1_queue_node *node);
+u64 bus1_queue_node_get_timestamp(struct bus1_queue_node *node);
+
 /* queue */
 void bus1_queue_init(struct bus1_queue *queue, wait_queue_head_t *waitq);
 void bus1_queue_destroy(struct bus1_queue *queue);
@@ -162,17 +171,6 @@ void bus1_queue_commit_unstaged(struct bus1_queue *queue,
 void bus1_queue_remove(struct bus1_queue *queue, struct bus1_queue_node *node);
 void bus1_queue_drop(struct bus1_queue *queue, struct bus1_queue_node *node);
 struct bus1_queue_node *bus1_queue_peek(struct bus1_queue *queue, bool seed);
-
-/* nodes */
-void bus1_queue_node_init(struct bus1_queue_node *node,
-			  unsigned int type,
-			  unsigned long sender);
-void bus1_queue_node_destroy(struct bus1_queue_node *node);
-bool bus1_queue_node_is_queued(struct bus1_queue_node *node);
-bool bus1_queue_node_is_committed(struct bus1_queue_node *node);
-bool bus1_queue_node_is_staging(struct bus1_queue_node *node);
-unsigned int bus1_queue_node_get_type(struct bus1_queue_node *node);
-u64 bus1_queue_node_get_timestamp(struct bus1_queue_node *node);
 
 /**
  * bus1_queue_tick() - increment queue clock
