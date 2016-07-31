@@ -127,4 +127,23 @@ ssize_t bus1_pool_write_kvec(struct bus1_pool *pool,
 		bus1_pool_create_internal(&(_peer)->pool, (_size));	\
 	})
 
+/**
+ * bus1_pool_slice_is_public() - check whether a slice is public
+ * @slice:		slice to check
+ *
+ * This checks whether @slice is public. That is, bus1_pool_publish() has been
+ * called and the user has not released their reference, yet.
+ *
+ * Note that if you need reliable results, you better make sure this cannot
+ * race calls to bus1_pool_publish() (or bus1_pool_release_user(),
+ * respectively). IOW, keep the owning peer locked.
+ *
+ * Return: True if public, false if not.
+ */
+static inline bool bus1_pool_slice_is_public(struct bus1_pool_slice *slice)
+{
+	WARN_ON(!slice->ref_kernel);
+	return slice->ref_user;
+}
+
 #endif /* __BUS1_POOL_H */

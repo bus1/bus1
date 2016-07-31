@@ -611,7 +611,7 @@ static int bus1_peer_dequeue(struct bus1_peer_info *peer_info,
 	case BUS1_QUEUE_NODE_MESSAGE_NORMAL:
 		message = bus1_message_from_node(node);
 		if (!peek)
-			bus1_message_dequeue(message, peer_info);
+			bus1_message_deallocate_locked(message, peer_info);
 		break;
 
 	case BUS1_QUEUE_NODE_HANDLE_DESTRUCTION:
