@@ -51,17 +51,13 @@ struct bus1_message *bus1_message_new(size_t n_bytes,
 	if (!message)
 		return ERR_PTR(-ENOMEM);
 
+	message->destination = BUS1_HANDLE_INVALID;
+	message->uid = -1;
+	message->gid = -1;
+	message->pid = 0;
+	message->tid = 0;
 	bus1_queue_node_init(&message->qnode, BUS1_QUEUE_NODE_MESSAGE_NORMAL,
 			     (unsigned long)peer_info);
-	message->data.destination = 0;
-	message->data.uid = -1;
-	message->data.gid = -1;
-	message->data.pid = 0;
-	message->data.tid = 0;
-	message->data.offset = BUS1_OFFSET_INVALID;
-	message->data.n_bytes = n_bytes;
-	message->data.n_handles = n_handles;
-	message->data.n_fds = n_files;
 	message->transaction.next = NULL;
 	message->transaction.dest.handle = NULL;
 	message->transaction.dest.raw_peer = NULL;
@@ -165,7 +161,7 @@ int bus1_message_allocate(struct bus1_message *message,
 
 	/* cannot overflow as all of those are limited */
 	slice_size = ALIGN(message->n_bytes, 8) +
-		     ALIGN(message->data.n_handles * sizeof(u64), 8) +
+		     ALIGN(message->handles.batch.n_entries * sizeof(u64), 8) +
 		     ALIGN(message->n_files + sizeof(int), 8);
 
 	/* empty slices are forbidden, so make sure to allocate a minimum */
@@ -174,7 +170,7 @@ int bus1_message_allocate(struct bus1_message *message,
 	mutex_lock(&peer_info->lock);
 
 	r = bus1_user_quota_charge(peer_info, message->user, slice_size,
-				   message->data.n_handles,
+				   message->handles.batch.n_entries,
 				   message->n_files);
 	if (r < 0)
 		goto exit;
@@ -182,7 +178,7 @@ int bus1_message_allocate(struct bus1_message *message,
 	slice = bus1_pool_alloc(&peer_info->pool, slice_size);
 	if (IS_ERR(slice)) {
 		bus1_user_quota_discharge(peer_info, message->user, slice_size,
-					  message->data.n_handles,
+					  message->handles.batch.n_entries,
 					  message->n_files);
 		r = PTR_ERR(slice);
 		goto exit;
@@ -211,7 +207,7 @@ void bus1_message_deallocate(struct bus1_message *message,
 	if (message->slice) {
 		bus1_user_quota_discharge(peer_info, message->user,
 					  message->slice->size,
-					  message->data.n_handles,
+					  message->handles.batch.n_entries,
 					  message->n_files);
 		message->slice = bus1_pool_release_kernel(&peer_info->pool,
 							  message->slice);
@@ -236,7 +232,7 @@ void bus1_message_dequeue(struct bus1_message *message,
 	if (!WARN_ON(!message->slice)) {
 		bus1_user_quota_commit(peer_info, message->user,
 				       message->slice->size,
-				       message->data.n_handles,
+				       message->handles.batch.n_entries,
 				       message->n_files);
 		message->slice = bus1_pool_release_kernel(&peer_info->pool,
 							  message->slice);
@@ -266,7 +262,7 @@ int bus1_message_install(struct bus1_message *message,
 
 	if (WARN_ON(!message->slice))
 		return -ENOTRECOVERABLE;
-	if (message->data.n_handles == 0 && message->n_files == 0)
+	if (message->handles.batch.n_entries == 0 && message->n_files == 0)
 		return 0;
 
 	/*
@@ -280,8 +276,8 @@ int bus1_message_install(struct bus1_message *message,
 	 * the temporary slot we reserved.
 	 */
 
-	if (message->data.n_handles > 0) {
-		n_ids = min_t(size_t, message->data.n_handles,
+	if (message->handles.batch.n_entries > 0) {
+		n_ids = min_t(size_t, message->handles.batch.n_entries,
 				      BUS1_HANDLE_BATCH_SIZE);
 		ids = kmalloc(n_ids * sizeof(*ids), GFP_TEMPORARY);
 		if (!ids) {
@@ -330,7 +326,8 @@ int bus1_message_install(struct bus1_message *message,
 		vec.iov_base = fds;
 		vec.iov_len = n_fds * sizeof(int);
 		offset = ALIGN(message->n_bytes, 8) +
-			 ALIGN(message->data.n_handles * sizeof(u64), 8);
+			 ALIGN(message->handles.batch.n_entries * sizeof(u64),
+			       8);
 
 		r = bus1_pool_write_kvec(&peer_info->pool, message->slice,
 					 offset, &vec, 1, vec.iov_len);

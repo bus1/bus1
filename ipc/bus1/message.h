@@ -30,18 +30,28 @@ struct bus1_user;
 
 /**
  * struct bus1_message - message
+ * @destination:		destination ID
+ * @uid:			sender UID
+ * @gid:			sender GID
+ * @pid:			sender PID
+ * @tid:			sender TID
  * @qnode:			embedded queue node
- * @data:			message data
  * @transaction.next:		message list (during transactions)
  * @transaction.dest:		pinned destination (during transactions)
  * @user:			sending user
  * @slice:			actual message data
  * @files:			passed file descriptors
+ * @n_bytes:			number of user-bytes transmitted
+ * @n_files:			number of files transmitted
  * @handles:			passed handles
  */
 struct bus1_message {
+	u64 destination;
+	uid_t uid;
+	gid_t gid;
+	pid_t pid;
+	pid_t tid;
 	struct bus1_queue_node qnode;
-	struct bus1_msg_data data;
 
 	struct {
 		struct bus1_message *next;

@@ -519,14 +519,15 @@ bus1_peer_queue_peek(struct bus1_peer_info *peer_info,
 			}
 
 			param->type = BUS1_MSG_DATA;
-			param->data.destination = message->data.destination;
-			param->data.uid = message->data.uid;
-			param->data.gid = message->data.gid;
-			param->data.pid = message->data.pid;
-			param->data.tid = message->data.tid;
+			param->data.destination = message->destination;
+			param->data.uid = message->uid;
+			param->data.gid = message->gid;
+			param->data.pid = message->pid;
+			param->data.tid = message->tid;
 			param->data.offset = message->slice->offset;
 			param->data.n_bytes = message->n_bytes;
-			param->data.n_handles = message->data.n_handles;
+			param->data.n_handles =
+					message->handles.batch.n_entries;
 			param->data.n_fds = message->n_files;
 
 			bus1_pool_publish(&peer_info->pool, message->slice);

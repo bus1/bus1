@@ -306,12 +306,12 @@ bus1_transaction_instantiate_message(struct bus1_transaction *transaction,
 	if (r < 0)
 		goto error;
 
-	message->data.uid = from_kuid_munged(peer_info->cred->user_ns,
-					     transaction->cred->uid);
-	message->data.gid = from_kgid_munged(peer_info->cred->user_ns,
-					     transaction->cred->gid);
-	message->data.pid = pid_nr_ns(transaction->pid, peer_info->pid_ns);
-	message->data.tid = pid_nr_ns(transaction->tid, peer_info->pid_ns);
+	message->uid = from_kuid_munged(peer_info->cred->user_ns,
+					transaction->cred->uid);
+	message->gid = from_kgid_munged(peer_info->cred->user_ns,
+					transaction->cred->gid);
+	message->pid = pid_nr_ns(transaction->pid, peer_info->pid_ns);
+	message->tid = pid_nr_ns(transaction->tid, peer_info->pid_ns);
 
 	for (i = 0; i < transaction->param->n_fds; ++i)
 		message->files[i] = get_file(transaction->files[i]);
@@ -431,7 +431,7 @@ void bus1_transaction_commit_one(struct bus1_transaction *transaction,
 		return;
 	}
 
-	message->data.destination = id;
+	message->destination = id;
 
 	if (!bus1_queue_commit_staged(&peer_info->queue, &message->qnode,
 				      timestamp)) {
