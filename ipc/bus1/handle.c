@@ -925,7 +925,8 @@ static u64 bus1_handle_prepare_publish(struct bus1_handle *handle,
 	 */
 
 	lockdep_assert_held(&peer_info->lock);
-	WARN_ON(!bus1_handle_is_attached(handle));
+	WARN_ON(!bus1_handle_is_owner(handle) &&
+		!bus1_handle_is_attached(handle));
 
 	if (!bus1_node_is_valid(handle->node, timestamp, sender))
 		return BUS1_HANDLE_INVALID;
@@ -1886,19 +1887,12 @@ int bus1_handle_transfer_export(struct bus1_handle_transfer *transfer,
 		return 0;
 
 	BUS1_HANDLE_BATCH_FOREACH_HANDLE(entry, pos, &transfer->batch) {
-		if (entry->handle && !bus1_handle_was_attached(entry->handle)) {
-			bus1_handle_attach_owner(entry->handle, peer);
-			bus1_handle_install_owner(entry->handle);
+		if (!entry->handle || bus1_handle_was_attached(entry->handle))
+			continue;
+		if (WARN_ON(!bus1_handle_is_owner(entry->handle)))
+			continue;
 
-			if (--transfer->n_new < 1)
-				break;
-		}
-	}
-	WARN_ON(transfer->n_new > 0);
-
-	BUS1_HANDLE_BATCH_FOREACH_HANDLE(entry, pos, &transfer->batch) {
-		if (entry->handle && entry->handle->id == BUS1_HANDLE_INVALID) {
-			WARN_ON(!bus1_handle_is_owner(entry->handle));
+		if (entry->handle->id == BUS1_HANDLE_INVALID) {
 			id = bus1_handle_prepare_publish(entry->handle,
 							 peer_info, 0, 0);
 			if (put_user(id, ids + pos))
@@ -1907,12 +1901,17 @@ int bus1_handle_transfer_export(struct bus1_handle_transfer *transfer,
 	}
 
 	BUS1_HANDLE_BATCH_FOREACH_HANDLE(entry, pos, &transfer->batch) {
-		if (entry->handle &&
-		    bus1_handle_is_owner(entry->handle) &&
-		    RB_EMPTY_NODE(&entry->handle->rb_id))
-			bus1_handle_publish(entry->handle, peer_info, 0, 0);
+		if (!entry->handle || bus1_handle_was_attached(entry->handle))
+			continue;
+		if (WARN_ON(!bus1_handle_is_owner(entry->handle)))
+			continue;
+
+		bus1_handle_attach_owner(entry->handle, peer);
+		bus1_handle_install_owner(entry->handle);
+		bus1_handle_publish(entry->handle, peer_info, 0, 0);
 	}
 
+	transfer->n_new = 0;
 	return 0;
 }
 
