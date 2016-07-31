@@ -1828,7 +1828,9 @@ int bus1_handle_transfer_import(struct bus1_handle_transfer *transfer,
 		return r;
 
 	BUS1_HANDLE_BATCH_FOREACH_ENTRY(entry, pos, &transfer->batch) {
-		if (entry->id & BUS1_NODE_FLAG_ALLOCATE) {
+		if (entry->id == BUS1_HANDLE_INVALID) {
+			handle = NULL;
+		} else if (entry->id & BUS1_NODE_FLAG_ALLOCATE) {
 			handle = bus1_handle_new_owner(entry->id);
 			if (IS_ERR(handle))
 				return PTR_ERR(handle);
@@ -1875,8 +1877,7 @@ void bus1_handle_transfer_install(struct bus1_handle_transfer *transfer,
 		return;
 
 	BUS1_HANDLE_BATCH_FOREACH_HANDLE(entry, pos, &transfer->batch) {
-		WARN_ON(!entry->handle);
-		if (!bus1_handle_was_attached(entry->handle)) {
+		if (entry->handle && !bus1_handle_was_attached(entry->handle)) {
 			bus1_handle_attach_owner(entry->handle, peer);
 			bus1_handle_install_owner(entry->handle);
 
@@ -1917,8 +1918,7 @@ int bus1_handle_transfer_export(struct bus1_handle_transfer *transfer,
 	WARN_ON(n_ids != transfer->batch.n_handles);
 
 	BUS1_HANDLE_BATCH_FOREACH_HANDLE(entry, pos, &transfer->batch) {
-		WARN_ON(!entry->handle);
-		if (entry->handle->id == BUS1_HANDLE_INVALID) {
+		if (entry->handle && entry->handle->id == BUS1_HANDLE_INVALID) {
 			WARN_ON(!bus1_handle_is_owner(entry->handle));
 			id = bus1_handle_prepare_publish(entry->handle,
 							 peer_info, 0, 0);
@@ -1928,7 +1928,8 @@ int bus1_handle_transfer_export(struct bus1_handle_transfer *transfer,
 	}
 
 	BUS1_HANDLE_BATCH_FOREACH_HANDLE(entry, pos, &transfer->batch) {
-		if (bus1_handle_is_owner(entry->handle) &&
+		if (entry->handle &&
+		    bus1_handle_is_owner(entry->handle) &&
 		    RB_EMPTY_NODE(&entry->handle->rb_id))
 			bus1_handle_publish(entry->handle, peer_info, 0, 0);
 	}
@@ -2004,7 +2005,7 @@ int bus1_handle_inflight_import(struct bus1_handle_inflight *inflight,
 				struct bus1_handle_transfer *transfer)
 {
 	union bus1_handle_entry *from, *to;
-	struct bus1_handle *handle;
+	struct bus1_handle *handle, *t;
 	size_t pos_from, pos_to;
 	int r;
 
@@ -2019,16 +2020,20 @@ int bus1_handle_inflight_import(struct bus1_handle_inflight *inflight,
 	to = BUS1_HANDLE_BATCH_FIRST(&inflight->batch, pos_to);
 
 	BUS1_HANDLE_BATCH_FOREACH_HANDLE(from, pos_from, &transfer->batch) {
-		handle = bus1_handle_find_by_node(peer_info,
-						  from->handle->node);
-		if (handle && !bus1_handle_acquire(handle, peer_info))
-			handle = bus1_handle_unref(handle);
-		if (!handle) {
-			handle = bus1_handle_new_holder(from->handle->node);
-			if (IS_ERR(handle))
-				return PTR_ERR(handle);
+		t = from->handle;
+		if (t) {
+			handle = bus1_handle_find_by_node(peer_info, t->node);
+			if (handle && !bus1_handle_acquire(handle, peer_info))
+				handle = bus1_handle_unref(handle);
+			if (!handle) {
+				handle = bus1_handle_new_holder(t->node);
+				if (IS_ERR(handle))
+					return PTR_ERR(handle);
 
-			++inflight->n_new;
+				++inflight->n_new;
+			}
+		} else {
+			handle = NULL;
 		}
 
 		to->handle = handle;
@@ -2188,15 +2193,14 @@ void bus1_handle_inflight_commit(struct bus1_handle_inflight *inflight,
 				 unsigned long sender)
 {
 	union bus1_handle_entry *e;
-	struct bus1_handle *h;
 	size_t pos;
 
 	lockdep_assert_held(&peer_info->lock);
 	WARN_ON(inflight->batch.n_handles != inflight->batch.n_entries);
 
 	BUS1_HANDLE_BATCH_FOREACH_HANDLE(e, pos, &inflight->batch) {
-		h = e->handle;
-		if (h)
-			bus1_handle_publish(h, peer_info, timestamp, sender);
+		if (e->handle)
+			bus1_handle_publish(e->handle, peer_info, timestamp,
+					    sender);
 	}
 }
