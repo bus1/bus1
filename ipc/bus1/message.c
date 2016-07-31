@@ -265,9 +265,6 @@ int bus1_message_install(struct bus1_message *message,
 
 	if (WARN_ON(!message->slice))
 		return -ENOTRECOVERABLE;
-	if (message->handles.batch.n_entries == 0 &&
-	    (!inst_fds || message->n_files == 0))
-		return 0;
 
 	/*
 	 * This is carefully crafted to first allocate temporary resources that
@@ -337,6 +334,9 @@ int bus1_message_install(struct bus1_message *message,
 		if (r < 0)
 			goto exit;
 	}
+
+	/* publish pool slice */
+	bus1_pool_publish(&peer_info->pool, message->slice);
 
 	/* commit handles */
 	if (n_ids > 0)
