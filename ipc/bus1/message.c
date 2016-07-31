@@ -68,6 +68,7 @@ struct bus1_message *bus1_message_new(size_t n_bytes,
 	message->user = bus1_user_ref(peer_info->user);
 	message->slice = NULL;
 	message->files = (void *)((u8 *)message + base_size);
+	message->n_files = n_files;
 	bus1_handle_inflight_init(&message->handles, n_handles);
 	memset(message->files, 0, n_files * sizeof(*message->files));
 
@@ -100,7 +101,7 @@ static void bus1_message_free(struct kref *ref)
 	WARN_ON(message->transaction.dest.handle);
 	WARN_ON(message->transaction.next);
 
-	for (i = 0; i < message->data.n_fds; ++i)
+	for (i = 0; i < message->n_files; ++i)
 		if (message->files[i])
 			fput(message->files[i]);
 
@@ -164,7 +165,7 @@ int bus1_message_allocate(struct bus1_message *message,
 	/* cannot overflow as all of those are limited */
 	slice_size = ALIGN(message->data.n_bytes, 8) +
 		     ALIGN(message->data.n_handles * sizeof(u64), 8) +
-		     ALIGN(message->data.n_fds + sizeof(int), 8);
+		     ALIGN(message->n_files + sizeof(int), 8);
 
 	/* empty slices are forbidden, so make sure to allocate a minimum */
 	slice_size = max_t(size_t, slice_size, 8);
@@ -173,7 +174,7 @@ int bus1_message_allocate(struct bus1_message *message,
 
 	r = bus1_user_quota_charge(peer_info, message->user, slice_size,
 				   message->data.n_handles,
-				   message->data.n_fds);
+				   message->n_files);
 	if (r < 0)
 		goto exit;
 
@@ -181,7 +182,7 @@ int bus1_message_allocate(struct bus1_message *message,
 	if (IS_ERR(slice)) {
 		bus1_user_quota_discharge(peer_info, message->user, slice_size,
 					  message->data.n_handles,
-					  message->data.n_fds);
+					  message->n_files);
 		r = PTR_ERR(slice);
 		goto exit;
 	}
@@ -211,7 +212,7 @@ void bus1_message_deallocate(struct bus1_message *message,
 		bus1_user_quota_discharge(peer_info, message->user,
 					  message->slice->size,
 					  message->data.n_handles,
-					  message->data.n_fds);
+					  message->n_files);
 		message->slice = bus1_pool_release_kernel(&peer_info->pool,
 							  message->slice);
 	}
@@ -236,7 +237,7 @@ void bus1_message_dequeue(struct bus1_message *message,
 		bus1_user_quota_commit(peer_info, message->user,
 				       message->slice->size,
 				       message->data.n_handles,
-				       message->data.n_fds);
+				       message->n_files);
 		message->slice = bus1_pool_release_kernel(&peer_info->pool,
 							  message->slice);
 	}
@@ -265,7 +266,7 @@ int bus1_message_install(struct bus1_message *message,
 
 	if (WARN_ON(!message->slice))
 		return -ENOTRECOVERABLE;
-	if (message->data.n_handles == 0 && message->data.n_fds == 0)
+	if (message->data.n_handles == 0 && message->n_files == 0)
 		return 0;
 
 	/*
@@ -310,15 +311,15 @@ int bus1_message_install(struct bus1_message *message,
 		}
 	}
 
-	if (message->data.n_fds > 0) {
-		fds = kmalloc(message->data.n_fds * sizeof(*fds),
+	if (message->n_files > 0) {
+		fds = kmalloc(message->n_files * sizeof(*fds),
 			      GFP_TEMPORARY);
 		if (!fds) {
 			r = -ENOMEM;
 			goto exit;
 		}
 
-		for ( ; n_fds < message->data.n_fds; ++n_fds) {
+		for ( ; n_fds < message->n_files; ++n_fds) {
 			r = get_unused_fd_flags(O_CLOEXEC);
 			if (r < 0)
 				goto exit;

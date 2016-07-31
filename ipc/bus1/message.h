@@ -51,6 +51,7 @@ struct bus1_message {
 	struct bus1_user *user;
 	struct bus1_pool_slice *slice;
 	struct file **files;
+	size_t n_files;
 	struct bus1_handle_inflight handles;
 	/* handles must be last */
 };
