@@ -68,6 +68,7 @@ struct bus1_message *bus1_message_new(size_t n_bytes,
 	message->user = bus1_user_ref(peer_info->user);
 	message->slice = NULL;
 	message->files = (void *)((u8 *)message + base_size);
+	message->n_bytes = n_bytes; /* does *not* match slice->size! */
 	message->n_files = n_files;
 	bus1_handle_inflight_init(&message->handles, n_handles);
 	memset(message->files, 0, n_files * sizeof(*message->files));
@@ -163,7 +164,7 @@ int bus1_message_allocate(struct bus1_message *message,
 		return -ENOTRECOVERABLE;
 
 	/* cannot overflow as all of those are limited */
-	slice_size = ALIGN(message->data.n_bytes, 8) +
+	slice_size = ALIGN(message->n_bytes, 8) +
 		     ALIGN(message->data.n_handles * sizeof(u64), 8) +
 		     ALIGN(message->n_files + sizeof(int), 8);
 
@@ -289,7 +290,7 @@ int bus1_message_install(struct bus1_message *message,
 		}
 
 		ts = bus1_queue_node_get_timestamp(&message->qnode);
-		offset = ALIGN(message->data.n_bytes, 8);
+		offset = ALIGN(message->n_bytes, 8);
 		pos = 0;
 
 		while ((n = bus1_handle_inflight_walk(&message->handles,
@@ -328,7 +329,7 @@ int bus1_message_install(struct bus1_message *message,
 
 		vec.iov_base = fds;
 		vec.iov_len = n_fds * sizeof(int);
-		offset = ALIGN(message->data.n_bytes, 8) +
+		offset = ALIGN(message->n_bytes, 8) +
 			 ALIGN(message->data.n_handles * sizeof(u64), 8);
 
 		r = bus1_pool_write_kvec(&peer_info->pool, message->slice,
