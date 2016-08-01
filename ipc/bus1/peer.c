@@ -55,7 +55,7 @@ static void bus1_peer_info_reset(struct bus1_peer_info *peer_info, bool final)
 	while ((node = list_first_entry_or_null(&list, struct bus1_queue_node,
 						link))) {
 		list_del(&node->link);
-		RB_CLEAR_NODE(&node->rb);
+		RB_CLEAR_NODE(&node->rb); /* reset the link/rb union */
 
 		switch (bus1_queue_node_get_type(node)) {
 		case BUS1_QUEUE_NODE_MESSAGE_NORMAL:
