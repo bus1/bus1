@@ -14,7 +14,7 @@
 #include <time.h>
 #include "test.h"
 
-static int client_send(struct bus1_client *client, uint64_t *destinations,
+static int client_send(struct bus1_peer *client, uint64_t *destinations,
 		       size_t n_destinations, void *data, size_t len)
 {
 	struct iovec vec = {
@@ -28,10 +28,10 @@ static int client_send(struct bus1_client *client, uint64_t *destinations,
 		.n_vecs = 1,
 	};
 
-	return bus1_client_send(client, &send);
+	return bus1_peer_send(client, &send);
 }
 
-static int client_recv(struct bus1_client *client,
+static int client_recv(struct bus1_peer *client,
 		       const void **datap,
 		       size_t *lenp)
 {
@@ -41,28 +41,28 @@ static int client_recv(struct bus1_client *client,
 	assert(datap);
 	assert(lenp);
 
-	r = bus1_client_recv(client, &recv);
+	r = bus1_peer_recv(client, &recv);
 	if (r < 0)
 		return r;
 
 	assert(recv.n_dropped == 0);
 	assert(recv.msg.type == BUS1_MSG_DATA);
 
-	*datap = bus1_client_slice_from_offset(client, recv.msg.offset);
+	*datap = bus1_peer_slice_from_offset(client, recv.msg.offset);
 	*lenp = recv.msg.n_bytes;
 
 	return 0;
 }
 
-static int client_slice_release(struct bus1_client *client, void *slice)
+static int client_slice_release(struct bus1_peer *client, void *slice)
 {
-	return bus1_client_slice_release(client,
-				bus1_client_slice_to_offset(client, slice));
+	return bus1_peer_slice_release(client,
+				bus1_peer_slice_to_offset(client, slice));
 }
 
 static void test_basic(void)
 {
-	struct bus1_client *parent, *child1, *child2;
+	struct bus1_peer *parent, *child1, *child2;
 	uint64_t node, aux, parent_handle, child_handles[2];
 	struct bus1_cmd_send send;
 	struct bus1_cmd_recv recv;
@@ -72,22 +72,22 @@ static void test_basic(void)
 	int r;
 
 	/* create parent */
-	r = bus1_client_new_from_path(&parent, test_path);
+	r = bus1_peer_new_from_path(&parent, test_path);
 	assert(r >= 0);
 
-	r = bus1_client_mmap(parent);
+	r = bus1_peer_mmap(parent);
 	assert(r >= 0);
 
 	/* create first child */
-	r = bus1_client_new_from_path(&child1, test_path);
+	r = bus1_peer_new_from_path(&child1, test_path);
 	assert(r >= 0);
 
 	node = BUS1_NODE_FLAG_MANAGED | BUS1_NODE_FLAG_ALLOCATE;
 	parent_handle = BUS1_HANDLE_INVALID;
-	r = bus1_client_handle_transfer(parent, child1, &node, &parent_handle);
+	r = bus1_peer_handle_transfer(parent, child1, &node, &parent_handle);
 	assert(r >= 0);
 
-	r = bus1_client_mmap(child1);
+	r = bus1_peer_mmap(child1);
 	assert(r >= 0);
 
 	/* allocate and send node as auxiliary data to parent */
@@ -98,13 +98,13 @@ static void test_basic(void)
 		.ptr_handles = (unsigned long)&aux,
 		.n_handles = 1,
 	};
-	r = bus1_client_send(child1, &send);
+	r = bus1_peer_send(child1, &send);
 	assert(r >= 0);
 	assert(!(aux & BUS1_NODE_FLAG_ALLOCATE));
 	assert(aux & BUS1_NODE_FLAG_MANAGED);
 
 	recv = (struct bus1_cmd_recv){};
-	r = bus1_client_recv(parent, &recv);
+	r = bus1_peer_recv(parent, &recv);
 	assert(r >= 0);
 	assert(recv.n_dropped == 0);
 	assert(recv.msg.type == BUS1_MSG_DATA);
@@ -112,22 +112,22 @@ static void test_basic(void)
 	assert(recv.msg.n_fds == 0);
 	assert(recv.msg.n_handles == 1);
 
-	child_handles[0] = *(uint64_t*) bus1_client_slice_from_offset(parent,
+	child_handles[0] = *(uint64_t*) bus1_peer_slice_from_offset(parent,
 							recv.msg.offset);
 
-	r = bus1_client_slice_release(parent, recv.msg.offset);
+	r = bus1_peer_slice_release(parent, recv.msg.offset);
 	assert(r >= 0);
 
 	/* create second child */
-	r = bus1_client_new_from_path(&child2, test_path);
+	r = bus1_peer_new_from_path(&child2, test_path);
 	assert(r >= 0);
 
 	node = BUS1_NODE_FLAG_MANAGED | BUS1_NODE_FLAG_ALLOCATE;
 	parent_handle = BUS1_HANDLE_INVALID;
-	r = bus1_client_handle_transfer(parent, child2, &node, &parent_handle);
+	r = bus1_peer_handle_transfer(parent, child2, &node, &parent_handle);
 	assert(r >= 0);
 
-	r = bus1_client_mmap(child2);
+	r = bus1_peer_mmap(child2);
 	assert(r >= 0);
 
 	/* allocate and send node as auxiliary data to parent */
@@ -138,13 +138,13 @@ static void test_basic(void)
 		.ptr_handles = (unsigned long)&aux,
 		.n_handles = 1,
 	};
-	r = bus1_client_send(child2, &send);
+	r = bus1_peer_send(child2, &send);
 	assert(r >= 0);
 	assert(!(aux & BUS1_NODE_FLAG_ALLOCATE));
 	assert(aux & BUS1_NODE_FLAG_MANAGED);
 
 	recv = (struct bus1_cmd_recv){};
-	r = bus1_client_recv(parent, &recv);
+	r = bus1_peer_recv(parent, &recv);
 	assert(r >= 0);
 	assert(recv.n_dropped == 0);
 	assert(recv.msg.type == BUS1_MSG_DATA);
@@ -152,10 +152,10 @@ static void test_basic(void)
 	assert(recv.msg.n_fds == 0);
 	assert(recv.msg.n_handles == 1);
 
-	child_handles[1] = *(uint64_t*) bus1_client_slice_from_offset(parent,
+	child_handles[1] = *(uint64_t*) bus1_peer_slice_from_offset(parent,
 							recv.msg.offset);
 
-	r = bus1_client_slice_release(parent, recv.msg.offset);
+	r = bus1_peer_slice_release(parent, recv.msg.offset);
 	assert(r >= 0);
 
 	/* multicast */
@@ -181,9 +181,9 @@ static void test_basic(void)
 	assert(r >= 0);
 
 	/* cleanup */
-	parent = bus1_client_free(parent);
-	child1 = bus1_client_free(child1);
-	child2 = bus1_client_free(child2);
+	parent = bus1_peer_free(parent);
+	child1 = bus1_peer_free(child1);
+	child2 = bus1_peer_free(child2);
 }
 
 static inline uint64_t nsec_from_clock(clockid_t clock)
@@ -236,8 +236,8 @@ static uint64_t test_iterate_uds(unsigned int iterations, size_t n_bytes)
 	return (time_end - time_start) / iterations;
 }
 
-static void test_one(struct bus1_client *parent,
-		     struct bus1_client **children,
+static void test_one(struct bus1_peer *parent,
+		     struct bus1_peer **children,
 		     uint64_t *child_handles,
 		     unsigned int n_destinations,
 		     char *payload,
@@ -268,7 +268,7 @@ static uint64_t test_iterate(unsigned int iterations,
 			     unsigned int n_destinations,
 			     size_t n_bytes)
 {
-	struct bus1_client *parent, *children[n_destinations];
+	struct bus1_peer *parent, *children[n_destinations];
 	uint64_t child_handles[n_destinations];
 	char payload[n_bytes];
 	unsigned int i;
@@ -276,10 +276,10 @@ static uint64_t test_iterate(unsigned int iterations,
 	int r;
 
 	/* create parent */
-	r = bus1_client_new_from_path(&parent, test_path);
+	r = bus1_peer_new_from_path(&parent, test_path);
 	assert(r >= 0);
 
-	r = bus1_client_mmap(parent);
+	r = bus1_peer_mmap(parent);
 	assert(r >= 0);
 
 	/* create children */
@@ -290,14 +290,14 @@ static uint64_t test_iterate(unsigned int iterations,
 
 		node = BUS1_NODE_FLAG_MANAGED | BUS1_NODE_FLAG_ALLOCATE;
 		parent_handle = BUS1_HANDLE_INVALID;
-		r = bus1_client_new_from_path(children + i, test_path);
+		r = bus1_peer_new_from_path(children + i, test_path);
 		assert(r >= 0);
 
-		r = bus1_client_handle_transfer(parent, children[i],
+		r = bus1_peer_handle_transfer(parent, children[i],
 					      &node, &parent_handle);
 		assert(r >= 0);
 
-		r = bus1_client_mmap(children[i]);
+		r = bus1_peer_mmap(children[i]);
 		assert(r >= 0);
 
 		/* allocate and send node as auxiliary data to parent */
@@ -308,13 +308,13 @@ static uint64_t test_iterate(unsigned int iterations,
 			.ptr_handles = (unsigned long)&aux,
 			.n_handles = 1,
 		};
-		r = bus1_client_send(children[i], &send);
+		r = bus1_peer_send(children[i], &send);
 		assert(r >= 0);
 		assert(!(aux & BUS1_NODE_FLAG_ALLOCATE));
 		assert(aux & BUS1_NODE_FLAG_MANAGED);
 
 		recv = (struct bus1_cmd_recv){};
-		r = bus1_client_recv(parent, &recv);
+		r = bus1_peer_recv(parent, &recv);
 		assert(r >= 0);
 		assert(recv.n_dropped == 0);
 		assert(recv.msg.type == BUS1_MSG_DATA);
@@ -322,10 +322,10 @@ static uint64_t test_iterate(unsigned int iterations,
 		assert(recv.msg.n_fds == 0);
 		assert(recv.msg.n_handles == 1);
 
-		child_handles[i] = *(uint64_t*) bus1_client_slice_from_offset(parent,
+		child_handles[i] = *(uint64_t*) bus1_peer_slice_from_offset(parent,
 								recv.msg.offset);
 
-		r = bus1_client_slice_release(parent, recv.msg.offset);
+		r = bus1_peer_slice_release(parent, recv.msg.offset);
 		assert(r >= 0);
 	}
 
@@ -338,10 +338,10 @@ static uint64_t test_iterate(unsigned int iterations,
 	time_end = nsec_from_clock(CLOCK_THREAD_CPUTIME_ID);
 
 	/* cleanup */
-	parent = bus1_client_free(parent);
+	parent = bus1_peer_free(parent);
 
 	for (i = 0; i < n_destinations; i++)
-		children[i] = bus1_client_free(children[i]);
+		children[i] = bus1_peer_free(children[i]);
 
 	return (time_end - time_start) / iterations;
 }

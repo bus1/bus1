@@ -1,7 +1,7 @@
 TEST_PROGS := bus1-test
 
 OBJS =				\
-	bus1-client.o		\
+	bus1-peer.o		\
 	test.o			\
 	test-api.o		\
 	test-io.o		\
@@ -17,7 +17,7 @@ include ../lib.mk
 clean:
 	$(RM) $(TEST_PROGS)
 
-%.o: %.c bus1-client.h test.h ../../../../usr/include/linux/bus1.h
+%.o: %.c bus1-peer.h test.h ../../../../usr/include/linux/bus1.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
 bus1-test: $(OBJS)

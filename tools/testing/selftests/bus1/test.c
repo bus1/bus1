@@ -22,7 +22,6 @@
 #include <sys/wait.h>
 #include <syscall.h>
 #include <unistd.h>
-#include "bus1-client.h"
 #include "test.h"
 
 #define N_TESTS (sizeof(tests) / sizeof(tests[0]))

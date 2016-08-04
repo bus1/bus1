@@ -11,7 +11,7 @@
 #include <stdlib.h>
 #include "test.h"
 
-static int multicast_handles(struct bus1_client *client,
+static int multicast_handles(struct bus1_peer *client,
 			     const uint64_t *destinations,
 			     size_t n_destinations,
 			     const uint64_t *handles,
@@ -24,14 +24,14 @@ static int multicast_handles(struct bus1_client *client,
 		.n_handles = n_handles,
 	};
 
-	return bus1_client_send(client, &send);
+	return bus1_peer_send(client, &send);
 }
 
 /* verify behavior of transferring existing and new handles via multicast */
 static void test_xfer_multicast(void)
 {
 	struct bus1_cmd_recv recv;
-	struct bus1_client *c1, *c2, *c3;
+	struct bus1_peer *c1, *c2, *c3;
 	uint64_t node2, node3, node20, node30;
 	uint64_t handle2, handle3, handle20, handle30;
 	uint64_t array_dest[2], array_handles[6];
@@ -52,27 +52,27 @@ static void test_xfer_multicast(void)
 	/* create three peers and pass a handle from the second and third
 	 * to the first */
 
-	r = bus1_client_new_from_path(&c1, test_path);
+	r = bus1_peer_new_from_path(&c1, test_path);
 	assert(r >= 0);
-	r = bus1_client_mmap(c1);
+	r = bus1_peer_mmap(c1);
 	assert(r >= 0);
-	r = bus1_client_new_from_path(&c2, test_path);
+	r = bus1_peer_new_from_path(&c2, test_path);
 	assert(r >= 0);
-	r = bus1_client_mmap(c2);
+	r = bus1_peer_mmap(c2);
 	assert(r >= 0);
-	r = bus1_client_new_from_path(&c3, test_path);
+	r = bus1_peer_new_from_path(&c3, test_path);
 	assert(r >= 0);
-	r = bus1_client_mmap(c3);
+	r = bus1_peer_mmap(c3);
 	assert(r >= 0);
 
 	node2 = BUS1_NODE_FLAG_MANAGED | BUS1_NODE_FLAG_ALLOCATE;
 	handle2 = BUS1_HANDLE_INVALID;
-	r = bus1_client_handle_transfer(c1, c2, &node2, &handle2);
+	r = bus1_peer_handle_transfer(c1, c2, &node2, &handle2);
 	assert(r >= 0);
 
 	node3 = BUS1_NODE_FLAG_MANAGED | BUS1_NODE_FLAG_ALLOCATE;
 	handle3 = BUS1_HANDLE_INVALID;
-	r = bus1_client_handle_transfer(c1, c3, &node3, &handle3);
+	r = bus1_peer_handle_transfer(c1, c3, &node3, &handle3);
 	assert(r >= 0);
 
 	/* create node20 by sending back to c1 */
@@ -82,13 +82,13 @@ static void test_xfer_multicast(void)
 	assert(r >= 0);
 
 	recv = (struct bus1_cmd_recv){};
-	r = bus1_client_recv(c1, &recv);
+	r = bus1_peer_recv(c1, &recv);
 	assert(r >= 0);
 	assert(recv.msg.type == BUS1_MSG_DATA);
 	assert(recv.msg.n_handles == 1);
 	assert(recv.msg.n_fds == 0);
 
-	slice = bus1_client_slice_from_offset(c1, recv.msg.offset);
+	slice = bus1_peer_slice_from_offset(c1, recv.msg.offset);
 	handle20 = *(uint64_t *)(slice + c_align_to(recv.msg.n_bytes, 8));
 	assert(!(handle20 & BUS1_NODE_FLAG_ALLOCATE));
 	assert(handle20 & BUS1_NODE_FLAG_MANAGED);
@@ -100,13 +100,13 @@ static void test_xfer_multicast(void)
 	assert(r >= 0);
 
 	recv = (struct bus1_cmd_recv){};
-	r = bus1_client_recv(c1, &recv);
+	r = bus1_peer_recv(c1, &recv);
 	assert(r >= 0);
 	assert(recv.msg.type == BUS1_MSG_DATA);
 	assert(recv.msg.n_handles == 1);
 	assert(recv.msg.n_fds == 0);
 
-	slice = bus1_client_slice_from_offset(c1, recv.msg.offset);
+	slice = bus1_peer_slice_from_offset(c1, recv.msg.offset);
 	handle30 = *(uint64_t *)(slice + c_align_to(recv.msg.n_bytes, 8));
 	assert(!(handle30 & BUS1_NODE_FLAG_ALLOCATE));
 	assert(handle30 & BUS1_NODE_FLAG_MANAGED);
@@ -127,13 +127,13 @@ static void test_xfer_multicast(void)
 	/* dequeue on c2 and verify content */
 
 	recv = (struct bus1_cmd_recv){};
-	r = bus1_client_recv(c2, &recv);
+	r = bus1_peer_recv(c2, &recv);
 	assert(r >= 0);
 	assert(recv.msg.type == BUS1_MSG_DATA);
 	assert(recv.msg.n_handles == 6);
 	assert(recv.msg.n_fds == 0);
 
-	slice = bus1_client_slice_from_offset(c2, recv.msg.offset);
+	slice = bus1_peer_slice_from_offset(c2, recv.msg.offset);
 
 	p = (uint64_t *)(slice + c_align_to(recv.msg.n_bytes, 8));
 	assert(*p == node20);
@@ -160,13 +160,13 @@ static void test_xfer_multicast(void)
 	/* dequeue on c3 and verify content */
 
 	recv = (struct bus1_cmd_recv){};
-	r = bus1_client_recv(c3, &recv);
+	r = bus1_peer_recv(c3, &recv);
 	assert(r >= 0);
 	assert(recv.msg.type == BUS1_MSG_DATA);
 	assert(recv.msg.n_handles == 6);
 	assert(recv.msg.n_fds == 0);
 
-	slice = bus1_client_slice_from_offset(c3, recv.msg.offset);
+	slice = bus1_peer_slice_from_offset(c3, recv.msg.offset);
 
 	p = (uint64_t *)(slice + c_align_to(recv.msg.n_bytes, 8));
 	assert(!(*p & BUS1_NODE_FLAG_ALLOCATE));
@@ -193,11 +193,11 @@ static void test_xfer_multicast(void)
 	/* verify that all queues are empty */
 
 	recv = (struct bus1_cmd_recv){};
-	r = bus1_client_recv(c1, &recv);
+	r = bus1_peer_recv(c1, &recv);
 	assert(r == -EAGAIN);
-	r = bus1_client_recv(c2, &recv);
+	r = bus1_peer_recv(c2, &recv);
 	assert(r == -EAGAIN);
-	r = bus1_client_recv(c3, &recv);
+	r = bus1_peer_recv(c3, &recv);
 	assert(r == -EAGAIN);
 
 	/*
@@ -208,32 +208,32 @@ static void test_xfer_multicast(void)
 	 *  - 1x handle30
 	 */
 
-	r = bus1_client_node_destroy(c1, node2);
+	r = bus1_peer_node_destroy(c1, node2);
 	assert(r >= 0);
-	r = bus1_client_handle_release(c1, node2);
+	r = bus1_peer_handle_release(c1, node2);
 	assert(r >= 0);
-	r = bus1_client_handle_release(c1, node2);
+	r = bus1_peer_handle_release(c1, node2);
 	assert(r < 0);
 
-	r = bus1_client_node_destroy(c1, node3);
+	r = bus1_peer_node_destroy(c1, node3);
 	assert(r >= 0);
-	r = bus1_client_handle_release(c1, node3);
+	r = bus1_peer_handle_release(c1, node3);
 	assert(r >= 0);
-	r = bus1_client_handle_release(c1, node3);
+	r = bus1_peer_handle_release(c1, node3);
 	assert(r < 0);
 
-	r = bus1_client_node_destroy(c1, handle20);
+	r = bus1_peer_node_destroy(c1, handle20);
 	assert(r < 0);
-	r = bus1_client_handle_release(c1, handle20);
+	r = bus1_peer_handle_release(c1, handle20);
 	assert(r >= 0);
-	r = bus1_client_handle_release(c1, handle20);
+	r = bus1_peer_handle_release(c1, handle20);
 	assert(r < 0);
 
-	r = bus1_client_node_destroy(c1, handle30);
+	r = bus1_peer_node_destroy(c1, handle30);
 	assert(r < 0);
-	r = bus1_client_handle_release(c1, handle30);
+	r = bus1_peer_handle_release(c1, handle30);
 	assert(r >= 0);
-	r = bus1_client_handle_release(c1, handle30);
+	r = bus1_peer_handle_release(c1, handle30);
 	assert(r < 0);
 
 	/*
@@ -242,22 +242,22 @@ static void test_xfer_multicast(void)
 	 *  - 2x node20
 	 */
 
-	r = bus1_client_node_destroy(c2, handle2);
+	r = bus1_peer_node_destroy(c2, handle2);
 	assert(r < 0);
-	r = bus1_client_handle_release(c2, handle2);
+	r = bus1_peer_handle_release(c2, handle2);
 	assert(r >= 0);
-	r = bus1_client_handle_release(c2, handle2);
+	r = bus1_peer_handle_release(c2, handle2);
 	assert(r >= 0);
-	r = bus1_client_handle_release(c2, handle2);
+	r = bus1_peer_handle_release(c2, handle2);
 	assert(r < 0);
 
-	r = bus1_client_node_destroy(c2, node20);
+	r = bus1_peer_node_destroy(c2, node20);
 	assert(r >= 0);
-	r = bus1_client_handle_release(c2, node20);
+	r = bus1_peer_handle_release(c2, node20);
 	assert(r >= 0);
-	r = bus1_client_handle_release(c2, node20);
+	r = bus1_peer_handle_release(c2, node20);
 	assert(r >= 0);
-	r = bus1_client_handle_release(c2, node20);
+	r = bus1_peer_handle_release(c2, node20);
 	assert(r < 0);
 
 	/*
@@ -266,22 +266,22 @@ static void test_xfer_multicast(void)
 	 *  - 2x node30
 	 */
 
-	r = bus1_client_node_destroy(c3, handle3);
+	r = bus1_peer_node_destroy(c3, handle3);
 	assert(r < 0);
-	r = bus1_client_handle_release(c3, handle3);
+	r = bus1_peer_handle_release(c3, handle3);
 	assert(r >= 0);
-	r = bus1_client_handle_release(c3, handle3);
+	r = bus1_peer_handle_release(c3, handle3);
 	assert(r >= 0);
-	r = bus1_client_handle_release(c3, handle3);
+	r = bus1_peer_handle_release(c3, handle3);
 	assert(r < 0);
 
-	r = bus1_client_node_destroy(c3, node30);
+	r = bus1_peer_node_destroy(c3, node30);
 	assert(r >= 0);
-	r = bus1_client_handle_release(c3, node30);
+	r = bus1_peer_handle_release(c3, node30);
 	assert(r >= 0);
-	r = bus1_client_handle_release(c3, node30);
+	r = bus1_peer_handle_release(c3, node30);
 	assert(r >= 0);
-	r = bus1_client_handle_release(c3, node30);
+	r = bus1_peer_handle_release(c3, node30);
 	assert(r < 0);
 
 	/*
@@ -292,9 +292,9 @@ static void test_xfer_multicast(void)
 	 * notifications that have been queued).
 	 */
 
-	bus1_client_free(c3);
-	bus1_client_free(c2);
-	bus1_client_free(c1);
+	bus1_peer_free(c3);
+	bus1_peer_free(c2);
+	bus1_peer_free(c1);
 }
 
 int test_xfer(void)

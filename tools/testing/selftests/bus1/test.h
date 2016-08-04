@@ -27,7 +27,7 @@
 #include <sys/uio.h>
 #include <sys/wait.h>
 #include <unistd.h>
-#include "bus1-client.h"
+#include "bus1-peer.h"
 
 enum {
 	TEST_OK,
