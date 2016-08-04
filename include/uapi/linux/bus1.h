@@ -10,36 +10,6 @@
  * your option) any later version.
  */
 
-/**
- * Public Bus1 API
- *
- * This header defines the public bus1 API. If the kernel module is loaded, its
- * entry point is a single character device named 'bus1', accepting ioctls as
- * defined below.
- */
-
-/**
- * Error Codes
- *
- * All operations performed on bus1 fds return negative error codes. The
- * following error codes are well-defined and used all over the place:
- *
- *   EAGAIN:            no messages ready to be dequeued
- *   EBADF:             invalid file-descriptor
- *   EDQUOT:            quota exceeded
- *   EFAULT:            cannot access ioctl parameters
- *   EHOSTUNREACH:      destination node has been destroyed
- *   EINVAL:            invalid ioctl parameters
- *   EMSGSIZE:          ioctl parameters are too small/large
- *   ENOMEM:            out of kernel memory
- *   ENOTTY:            unknown ioctl
- *   ENXIO:             invalid handle or slice
- *   EOPNOTSUPP:        could not pass file-descriptor of unsupported type
- *   EPERM:             permission denied to mmap pool as writable
- *   ESHUTDOWN:         local peer was already disconnected
- *   EXFULL:            target memory pool is full
- */
-
 #include <linux/ioctl.h>
 #include <linux/types.h>
 
