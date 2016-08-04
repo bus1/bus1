@@ -105,8 +105,6 @@ static void bus1_pool_slice_link_busy(struct bus1_pool_slice *slice,
 	rb_insert_color(&slice->rb, &pool->slices_busy);
 
 	pool->allocated_size += slice->size;
-
-	WARN_ON(pool->allocated_size > pool->size);
 }
 
 /* find free slice big enough to hold @size bytes */
@@ -156,10 +154,8 @@ bus1_pool_slice_find_by_offset(struct bus1_pool *pool, size_t offset)
 /**
  * bus1_pool_create_internal() - create memory pool
  * @pool:	(uninitialized) pool to operate on
- * @size:	size of the pool
  *
- * Initialize a new pool object. This allocates a backing shmem object with the
- * given name and size.
+ * Initialize a new pool object.
  *
  * Note that all pools must be embedded into a parent bus1_peer_info object. The
  * code works fine, if you don't, but the lockdep-annotations will fail
@@ -168,7 +164,7 @@ bus1_pool_slice_find_by_offset(struct bus1_pool *pool, size_t offset)
  *
  * Return: 0 on success, negative error code on failure.
  */
-int bus1_pool_create_internal(struct bus1_pool *pool, size_t size)
+int bus1_pool_create_internal(struct bus1_pool *pool)
 {
 	struct bus1_pool_slice *slice;
 	struct page *p;
@@ -177,15 +173,10 @@ int bus1_pool_create_internal(struct bus1_pool *pool, size_t size)
 
 	/* cannot calculate width of bitfields, so hardcode '4' as flag-size */
 	BUILD_BUG_ON(BUS1_POOL_SLICE_SIZE_BITS + 4 > 32);
-	BUILD_BUG_ON(BUS1_POOL_SIZE_MAX >=
-		     (1ULL <<
-		      (sizeof(((struct bus1_pool_slice *)0)->offset) * 8)));
+	BUILD_BUG_ON(BUS1_POOL_SLICE_SIZE_MAX > U32_MAX);
 
-	size = ALIGN(size, 8);
-	if (size == 0 || size > BUS1_POOL_SIZE_MAX)
-		return -EMSGSIZE;
-
-	f = shmem_file_setup(KBUILD_MODNAME "-peer", size, VM_NORESERVE);
+	f = shmem_file_setup(KBUILD_MODNAME "-peer",
+			     ALIGN(BUS1_POOL_SLICE_SIZE_MAX, 8), VM_NORESERVE);
 	if (IS_ERR(f))
 		return PTR_ERR(f);
 
@@ -193,7 +184,7 @@ int bus1_pool_create_internal(struct bus1_pool *pool, size_t size)
 	if (r < 0)
 		goto error_put_file;
 
-	slice = bus1_pool_slice_new(0, size);
+	slice = bus1_pool_slice_new(0, BUS1_POOL_SLICE_SIZE_MAX);
 	if (IS_ERR(slice)) {
 		r = PTR_ERR(slice);
 		goto error_put_write;
@@ -204,7 +195,6 @@ int bus1_pool_create_internal(struct bus1_pool *pool, size_t size)
 	slice->ref_user = false;
 
 	pool->f = f;
-	pool->size = size;
 	pool->allocated_size = 0;
 	INIT_LIST_HEAD(&pool->slices);
 	pool->slices_free = RB_ROOT;

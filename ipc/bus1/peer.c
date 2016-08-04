@@ -140,7 +140,7 @@ static struct bus1_peer_info *bus1_peer_info_new(wait_queue_head_t *waitq)
 		goto error;
 	}
 
-	r = bus1_pool_create_for_peer(peer_info, BUS1_POOL_SLICE_SIZE_MAX);
+	r = bus1_pool_create_for_peer(peer_info);
 	if (r < 0)
 		goto error;
 

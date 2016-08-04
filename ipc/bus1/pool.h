@@ -47,12 +47,9 @@ struct file;
 struct iovec;
 struct kvec;
 
-/* internal: maximum offset, which implies the maximum pool size */
-#define BUS1_POOL_SIZE_MAX U32_MAX
-
 /* internal: number of bits available to slice size */
 #define BUS1_POOL_SLICE_SIZE_BITS (28)
-#define BUS1_POOL_SLICE_SIZE_MAX ((1 << BUS1_POOL_SLICE_SIZE_BITS) - 8)
+#define BUS1_POOL_SLICE_SIZE_MAX ((1 << BUS1_POOL_SLICE_SIZE_BITS) - 1)
 
 /**
  * struct bus1_pool_slice - pool slice
@@ -80,7 +77,6 @@ struct bus1_pool_slice {
 /**
  * struct bus1_pool - client pool
  * @f:			backing shmem file
- * @size:		size of the file
  * @allocated_size:	currently allocated memory in bytes
  * @slices:		all slices sorted by address
  * @slices_busy:	tree of allocated slices
@@ -88,7 +84,6 @@ struct bus1_pool_slice {
  */
 struct bus1_pool {
 	struct file *f;
-	size_t size;
 	size_t allocated_size;
 	struct list_head slices;
 	struct rb_root slices_busy;
@@ -97,7 +92,7 @@ struct bus1_pool {
 
 #define BUS1_POOL_NULL ((struct bus1_pool){})
 
-int bus1_pool_create_internal(struct bus1_pool *pool, size_t size);
+int bus1_pool_create_internal(struct bus1_pool *pool);
 void bus1_pool_destroy(struct bus1_pool *pool);
 
 struct bus1_pool_slice *bus1_pool_alloc(struct bus1_pool *pool, size_t size);
@@ -123,8 +118,8 @@ ssize_t bus1_pool_write_kvec(struct bus1_pool *pool,
 			     size_t total_len);
 
 /* see bus1_pool_create_internal() for details */
-#define bus1_pool_create_for_peer(_peer, _size) ({		\
-		bus1_pool_create_internal(&(_peer)->pool, (_size));	\
+#define bus1_pool_create_for_peer(_peer) ({			\
+		bus1_pool_create_internal(&(_peer)->pool);	\
 	})
 
 /**

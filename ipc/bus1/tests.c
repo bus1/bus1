@@ -104,7 +104,7 @@ static void bus1_test_quota(void)
 	mutex_init(&peer.lock);
 	peer.user = owner;
 	mutex_lock(&peer.lock);
-	bus1_pool_create_for_peer(&peer, BUS1_POOL_SLICE_SIZE_MAX);
+	bus1_pool_create_for_peer(&peer);
 
 	/* charge nothing: allocates the user stats, charge one message */
 	r = bus1_user_quota_charge(&peer, user1, 0, 0, 0);
@@ -323,106 +323,9 @@ static void bus1_test_quota(void)
 	WARN_ON(bus1_user_unref(owner));
 }
 
-static void bus1_test_pool(void)
-{
-	struct bus1_peer_info peer = {};
-	struct bus1_pool *pool = &peer.pool;
-	struct bus1_pool_slice *slice1, *slice2, *slice3;
-	size_t offset, n_slices;
-
-	/* make lockdep happy */
-	mutex_init(&peer.lock);
-	mutex_lock(&peer.lock);
-
-	WARN_ON(bus1_pool_create_for_peer(&peer, BUS1_POOL_SIZE_MAX + 1)
-		!= -EMSGSIZE);
-	WARN_ON(bus1_pool_create_for_peer(&peer, 0) != -EMSGSIZE);
-	WARN_ON(bus1_pool_create_for_peer(&peer, PAGE_SIZE - 8) < 0);
-
-	WARN_ON(bus1_pool_alloc(pool, 0) != ERR_PTR(-EMSGSIZE));
-	WARN_ON(bus1_pool_alloc(pool, BUS1_POOL_SLICE_SIZE_MAX + 1) !=
-		ERR_PTR(-EMSGSIZE));
-	WARN_ON(bus1_pool_alloc(pool, PAGE_SIZE) != ERR_PTR(-EXFULL));
-
-	/* split the pool in four parts, the first three of equal size and
-	 * the reminder the same size - 1 */
-	slice1 = bus1_pool_alloc(pool, PAGE_SIZE / 4);
-	slice2 = bus1_pool_alloc(pool, PAGE_SIZE / 4);
-	slice3 = bus1_pool_alloc(pool, PAGE_SIZE / 4);
-	WARN_ON(IS_ERR(slice1) || IS_ERR(slice2) || IS_ERR(slice3));
-	/* there is not space for a fourth */
-	WARN_ON(bus1_pool_alloc(pool, PAGE_SIZE / 4) != ERR_PTR(-EXFULL));
-
-	/* drop the first slice */
-	slice1 = bus1_pool_release_kernel(pool, slice1);
-	WARN_ON(slice1);
-	/* there is enough space in the pool, but the slices are not
-	 * adjacent for a bigger slice */
-	WARN_ON(bus1_pool_alloc(pool, PAGE_SIZE / 3) !=
-		ERR_PTR(-EXFULL));
-	/* there is space to add back a same sized slice though */
-	slice1 = bus1_pool_alloc(pool, PAGE_SIZE / 4);
-	WARN_ON(IS_ERR(slice1));
-	/* drop the last slice instead */
-	slice3 = bus1_pool_release_kernel(pool, slice3);
-	WARN_ON(slice3);
-	/* now there is space for the bigger slice */
-	slice3 = bus1_pool_alloc(pool, PAGE_SIZE / 3);
-	WARN_ON(IS_ERR(slice3));
-
-	/* test publish and release */
-	/* can't release a non-existet slice */
-	WARN_ON(bus1_pool_release_user(pool, 1, NULL) != -ENXIO);
-	/* can't user-release an unpublished slice */
-	WARN_ON(bus1_pool_release_user(pool, PAGE_SIZE / 4, NULL) != -ENXIO);
-	/* verify that publish does the righ thing */
-	bus1_pool_publish(pool, slice2);
-	WARN_ON(slice2->offset != PAGE_SIZE / 4);
-	WARN_ON(slice2->size != PAGE_SIZE / 4);
-	/* release the slice again */
-	WARN_ON(bus1_pool_release_user(pool, slice2->offset, NULL) < 0);
-	/* can't release a slice that has already been released */
-	WARN_ON(bus1_pool_release_user(pool, slice2->offset, NULL) != -ENXIO);
-	/* publish again */
-	bus1_pool_publish(pool, slice2);
-	offset = slice2->offset;
-	/* release the kernel ref */
-	slice2 = bus1_pool_release_kernel(pool, slice2);
-	/* verify that the slice is still busy by trying to reuse the space */
-	WARN_ON(bus1_pool_alloc(pool, PAGE_SIZE / 4) != ERR_PTR(-EXFULL));
-	/* now also release the user ref */
-	WARN_ON(bus1_pool_release_user(pool, offset, NULL) < 0);
-	/* verify that the slice was now released and the space can be reused */
-	slice2 = bus1_pool_alloc(pool, PAGE_SIZE / 4);
-	WARN_ON(IS_ERR(slice2));
-	/* publish all slices */
-	bus1_pool_publish(pool, slice1);
-	WARN_ON(slice1->offset != 0);
-	WARN_ON(slice1->size != PAGE_SIZE / 4);
-	bus1_pool_publish(pool, slice2);
-	WARN_ON(slice2->offset != PAGE_SIZE / 4);
-	WARN_ON(slice2->size != PAGE_SIZE / 4);
-	bus1_pool_publish(pool, slice3);
-	WARN_ON(slice3->offset != PAGE_SIZE / 2);
-	WARN_ON(slice3->size != ALIGN(PAGE_SIZE / 3, 8));
-	/* drop all kernel-references */
-	slice1 = bus1_pool_release_kernel(pool, slice1);
-	slice2 = bus1_pool_release_kernel(pool, slice2);
-	slice3 = bus1_pool_release_kernel(pool, slice3);
-	/* flush user references */
-	bus1_pool_flush(pool, &n_slices);
-	WARN_ON(n_slices != 3);
-
-	/* XXX: test writing of iovecs and kvecs */
-
-	bus1_pool_destroy(pool);
-	mutex_unlock(&peer.lock);
-}
-
 void bus1_tests_run(void)
 {
 	pr_info("run selftests..\n");
 	bus1_test_user();
 	bus1_test_quota();
-	bus1_test_pool();
 }
