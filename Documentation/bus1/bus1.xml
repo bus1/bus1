@@ -223,11 +223,10 @@
   </refsect1>
 
   <refsect1>
-    <title>Return values</title>
-
+    <title>Return value</title>
     <para>
-      On success, all bus1 ioctls return an integer greater than, or equal to,
-      <errorcode>0</errorcode>. On failure, a negative error code is returned.
+All bus1 operations return zero on success. On failure, a negative error code is
+returned.
     </para>
 
     <refsect2>
