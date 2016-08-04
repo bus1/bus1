@@ -7,6 +7,14 @@
   <refentryinfo>
     <title>bus1</title>
     <productname>bus1</productname>
+
+    <authorgroup>
+      <author>
+        <contrib>Documentation</contrib>
+        <firstname>David</firstname>
+        <surname>Herrmann</surname>
+      </author>
+    </authorgroup>
   </refentryinfo>
 
   <refmeta>
