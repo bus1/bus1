@@ -594,23 +594,23 @@ static int bus1_peer_dequeue(struct bus1_peer_info *peer_info,
 			     struct bus1_cmd_recv *param)
 {
 	const bool peek = param->flags & BUS1_RECV_FLAG_PEEK;
-	struct bus1_message *message = NULL;
 	struct bus1_queue_node *node;
-	int r;
+	struct bus1_message *message;
 
 	mutex_lock(&peer_info->lock);
-
 	node = bus1_peer_queue_peek(peer_info, param, !peek);
-	if (IS_ERR_OR_NULL(node)) {
-		r = PTR_ERR(node);
-		goto exit;
-	}
+	mutex_unlock(&peer_info->lock);
+	if (IS_ERR_OR_NULL(node))
+		return PTR_ERR(node);
 
 	switch (bus1_queue_node_get_type(node)) {
 	case BUS1_QUEUE_NODE_MESSAGE_NORMAL:
 		message = bus1_message_from_node(node);
-		if (!peek)
-			bus1_message_deallocate_locked(message, peer_info);
+		if (!peek) {
+			bus1_message_deallocate(message, peer_info);
+			bus1_message_flush(message, peer_info);
+		}
+		bus1_message_unref(message);
 		break;
 
 	case BUS1_QUEUE_NODE_HANDLE_DESTRUCTION:
@@ -620,18 +620,10 @@ static int bus1_peer_dequeue(struct bus1_peer_info *peer_info,
 
 	default:
 		WARN(1, "Invalid queue-node type");
-		r = -ENOTRECOVERABLE;
-		break;
+		return -ENOTRECOVERABLE;
 	}
 
-	r = 0;
-
-exit:
-	mutex_unlock(&peer_info->lock);
-	if (message && !peek)
-		bus1_message_flush(message, peer_info);
-	bus1_message_unref(message);
-	return r;
+	return 0;
 }
 
 static int bus1_peer_ioctl_recv(struct bus1_peer *peer, unsigned long arg)

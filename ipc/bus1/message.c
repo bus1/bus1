@@ -194,16 +194,8 @@ exit:
 	return r;
 }
 
-/**
- * bus1_message_deallocate_locked() - deallocate message resources
- * @message:		message to deallocate
- * @peer_info:		destination peer
- *
- * This is the same as bus1_message_deallocate(), but must be called with
- * @peer_info held by the caller.
- */
-void bus1_message_deallocate_locked(struct bus1_message *message,
-				    struct bus1_peer_info *peer_info)
+static void bus1_message_deallocate_locked(struct bus1_message *message,
+					   struct bus1_peer_info *peer_info)
 {
 	lockdep_assert_held(&peer_info->lock);
 
