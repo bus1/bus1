@@ -23,6 +23,7 @@
 #include <linux/sched.h>
 #include <linux/seq_file.h>
 #include <linux/slab.h>
+#include <linux/uio.h>
 #include <uapi/linux/bus1.h>
 #include "active.h"
 #include "main.h"
@@ -162,6 +163,8 @@ struct dentry *bus1_debugdir;
 static int __init bus1_init(void)
 {
 	int r;
+
+	BUILD_BUG_ON(BUS1_VEC_MAX != UIO_MAXIOV);
 
 	bus1_tests_run();
 
