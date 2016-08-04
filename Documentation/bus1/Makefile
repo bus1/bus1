@@ -9,7 +9,13 @@ XMLFILES := $(addprefix $(obj)/,$(DOCS))
 MANFILES := $(patsubst %.xml, %.7, $(XMLFILES))
 HTMLFILES := $(patsubst %.xml, %.html, $(XMLFILES))
 
-XMLTO_ARGS := -m $(srctree)/$(src)/stylesheet.xsl --skip-validation
+XMLTO_ARGS := \
+	-m $(srctree)/$(src)/stylesheet.xsl \
+	--skip-validation \
+	--stringparam funcsynopsis.style=ansi \
+	--stringparam man.output.quietly=1 \
+	--stringparam man.authors.section.enabled=0 \
+	--stringparam man.copyright.section.enabled=0
 
 quiet_cmd_db2man = MAN     $@
       cmd_db2man = xmlto man $(XMLTO_ARGS) -o $(obj) $<
