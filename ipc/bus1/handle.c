@@ -192,6 +192,17 @@ static bool bus1_handle_is_attached(struct bus1_handle *handle)
 	return handle && atomic_read(&handle->n_inflight) > 0;
 }
 
+static bool bus1_handle_had_userref(struct bus1_handle *handle)
+{
+	/*
+	 * Is the user allowed to use this handle? Must be called on a handle
+	 * retrieved via ID lookup. The check is intentionally racy, since we
+	 * do not need atomicity here.
+	 */
+	return bus1_handle_is_owner(handle) ||
+	       atomic_read(&handle->n_user) >= 0;
+}
+
 static void bus1_handle_init(struct bus1_handle *handle, struct bus1_node *node)
 {
 	bus1_queue_node_init(&handle->qnode, BUS1_QUEUE_NODE_HANDLE_DESTRUCTION,
@@ -1084,7 +1095,7 @@ int bus1_handle_pair(struct bus1_peer *peer,
 		if (!peer_handle)
 			return -ENXIO;
 
-		if (atomic_read(&peer_handle->n_user) < 0) {
+		if (!bus1_handle_had_userref(peer_handle)) {
 			r = -ENXIO;
 			goto exit;
 		}
@@ -1520,7 +1531,7 @@ int bus1_handle_dest_import(struct bus1_handle_dest *dest,
 		 * we also atomically acquired the inflight reference. The fact
 		 * that it is not atomic, does not matter.
 		 */
-		if (atomic_read(&handle->n_user) < 0) {
+		if (!bus1_handle_had_userref(handle)) {
 			bus1_handle_unref(handle);
 			return -ENXIO;
 		}
@@ -1925,7 +1936,7 @@ int bus1_handle_transfer_import(struct bus1_handle_transfer *transfer,
 		} else {
 			handle = bus1_handle_find_by_id(peer_info, entry->id);
 			if (!handle ||
-			    atomic_read(&handle->n_user) < 0 ||
+			    !bus1_handle_had_userref(handle) ||
 			    !bus1_handle_acquire(handle, peer_info)) {
 				handle = bus1_handle_unref(handle);
 				return -ENXIO;
