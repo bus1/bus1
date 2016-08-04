@@ -16,6 +16,7 @@
  * XXX
  */
 
+#include <linux/atomic.h>
 #include <linux/fs.h>
 #include <linux/kernel.h>
 #include <uapi/linux/bus1.h>
@@ -53,6 +54,7 @@ struct bus1_message {
 	pid_t pid;
 	pid_t tid;
 	struct bus1_queue_node qnode;
+	atomic_t n_pins;
 
 	struct {
 		struct bus1_message *next;
@@ -75,15 +77,14 @@ struct bus1_message *bus1_message_new(size_t n_bytes,
 				      struct bus1_peer_info *peer_info);
 struct bus1_message *bus1_message_ref(struct bus1_message *message);
 struct bus1_message *bus1_message_unref(struct bus1_message *message);
-void bus1_message_flush(struct bus1_message *message,
-			struct bus1_peer_info *peer_info);
 int bus1_message_allocate(struct bus1_message *message,
 			  struct bus1_peer_info *peer_info);
-void bus1_message_deallocate(struct bus1_message *message,
-			     struct bus1_peer_info *peer_info);
 int bus1_message_install(struct bus1_message *message,
 			 struct bus1_peer_info *peer_info,
 			 struct bus1_cmd_recv *param);
+struct bus1_message *bus1_message_pin(struct bus1_message *message);
+struct bus1_message *bus1_message_unpin(struct bus1_message *message,
+					struct bus1_peer_info *peer_info);
 
 /**
  * bus1_message_from_node - get parent message of a queue node

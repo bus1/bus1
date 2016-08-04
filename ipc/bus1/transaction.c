@@ -109,8 +109,7 @@ static void bus1_transaction_destroy(struct bus1_transaction *transaction)
 		message->transaction.dest = (struct bus1_handle_dest){};
 
 		bus1_queue_remove(&peer_info->queue, &message->qnode);
-		bus1_message_deallocate(message, peer_info);
-		bus1_message_flush(message, peer_info);
+		bus1_message_unpin(message, peer_info);
 		bus1_message_unref(message);
 		bus1_active_lockdep_released(&dest.raw_peer->active);
 		bus1_handle_dest_destroy(&dest, transaction->peer_info);
@@ -319,12 +318,9 @@ bus1_transaction_instantiate_message(struct bus1_transaction *transaction,
 
 error:
 	if (message)
-		bus1_message_deallocate(message, peer_info);
+		bus1_message_unpin(message, peer_info);
 	if (r < 0) {
-		if (message) {
-			bus1_message_flush(message, peer_info);
-			bus1_message_unref(message);
-		}
+		bus1_message_unref(message);
 		message = ERR_PTR(r);
 	}
 	return message;
@@ -408,7 +404,6 @@ void bus1_transaction_commit_one(struct bus1_transaction *transaction,
 		 * is increased in the receiving queue.
 		 */
 		bus1_queue_drop(&peer_info->queue, &message->qnode);
-		bus1_message_flush(message, peer_info);
 		bus1_message_unref(message);
 		return;
 	}
@@ -424,8 +419,7 @@ void bus1_transaction_commit_one(struct bus1_transaction *transaction,
 		 * sender nor the receiver.
 		 */
 		bus1_queue_remove(&peer_info->queue, &message->qnode);
-		bus1_message_deallocate(message, peer_info);
-		bus1_message_flush(message, peer_info);
+		bus1_message_unpin(message, peer_info);
 		bus1_message_unref(message);
 		return;
 	}
@@ -438,8 +432,7 @@ void bus1_transaction_commit_one(struct bus1_transaction *transaction,
 		 * The message has been flushed from the queue, but it has not
 		 * been cleaned up. Release all resources.
 		 */
-		bus1_message_deallocate(message, peer_info);
-		bus1_message_flush(message, peer_info);
+		bus1_message_unpin(message, peer_info);
 	}
 
 	bus1_message_unref(message);
@@ -636,8 +629,7 @@ int bus1_transaction_commit_seed(struct bus1_transaction *transaction)
 
 exit:
 	if (seed) {
-		bus1_message_deallocate(seed, transaction->peer_info);
-		bus1_message_flush(seed, transaction->peer_info);
+		bus1_message_unpin(seed, transaction->peer_info);
 		bus1_message_unref(seed);
 	}
 	return r;

@@ -8,6 +8,7 @@
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+#include <linux/atomic.h>
 #include <linux/err.h>
 #include <linux/file.h>
 #include <linux/fs.h>
@@ -59,6 +60,7 @@ struct bus1_message *bus1_message_new(size_t n_bytes,
 	message->tid = 0;
 	bus1_queue_node_init(&message->qnode, BUS1_QUEUE_NODE_MESSAGE_NORMAL,
 			     (unsigned long)peer_info);
+	atomic_set(&message->n_pins, 0);
 	message->transaction.next = NULL;
 	message->transaction.dest.handle = NULL;
 	message->transaction.dest.raw_peer = NULL;
@@ -99,6 +101,7 @@ static void bus1_message_free(struct kref *ref)
 	WARN_ON(message->transaction.dest.raw_peer);
 	WARN_ON(message->transaction.dest.handle);
 	WARN_ON(message->transaction.next);
+	WARN_ON(atomic_read(&message->n_pins) > 0);
 
 	for (i = 0; i < message->n_files; ++i)
 		bus1_fput(message->files[i]);
@@ -127,26 +130,15 @@ struct bus1_message *bus1_message_unref(struct bus1_message *message)
 }
 
 /**
- * bus1_message_flush() - flush pinned resources
- * @message:		message to flush
- * @peer_info:		owning peer
- *
- * This flushes all pinned resources of the message. This might require locking
- * the owning peer.
- */
-void bus1_message_flush(struct bus1_message *message,
-			struct bus1_peer_info *peer_info)
-{
-	bus1_handle_inflight_flush(&message->handles, peer_info);
-}
-
-/**
- * bus1_message_allocate() - allocate pool slice for message payload
- * @message:		message to allocate slice for
- * @peer_info:		destination peer
+ * bus1_message_allocate() - allocate message resources
+ * @message:		message to operate on
+ * @peer_info:		owning peer of the message
  *
  * Allocate a pool slice for the given message, and charge the quota of the
  * given user for all the associated in-flight resources.
+ *
+ * This returns the message resources pinned. Use bus1_message_unpin() to
+ * realease them again.
  *
  * Return: 0 on success, negative error code on failure.
  */
@@ -157,7 +149,7 @@ int bus1_message_allocate(struct bus1_message *message,
 	size_t slice_size;
 	int r;
 
-	if (WARN_ON(message->slice))
+	if (WARN_ON(atomic_read(&message->n_pins) > 0 || message->slice))
 		return -ENOTRECOVERABLE;
 
 	/* cannot overflow as all of those are limited */
@@ -187,6 +179,7 @@ int bus1_message_allocate(struct bus1_message *message,
 
 	message->n_accounted_handles = message->handles.batch.n_entries;
 	message->slice = slice;
+	WARN_ON(atomic_inc_return(&message->n_pins) != 1);
 	r = 0;
 
 exit:
@@ -194,11 +187,10 @@ exit:
 	return r;
 }
 
-static void bus1_message_deallocate_locked(struct bus1_message *message,
-					   struct bus1_peer_info *peer_info)
+static void bus1_message_deallocate(struct bus1_message *message,
+				    struct bus1_peer_info *peer_info)
 {
-	lockdep_assert_held(&peer_info->lock);
-
+	mutex_lock(&peer_info->lock);
 	if (message->slice) {
 		bus1_user_quota_commit(peer_info, message->user,
 				       message->slice->size,
@@ -212,22 +204,47 @@ static void bus1_message_deallocate_locked(struct bus1_message *message,
 		message->slice = bus1_pool_release_kernel(&peer_info->pool,
 							  message->slice);
 	}
+	mutex_unlock(&peer_info->lock);
+
+	bus1_handle_inflight_flush(&message->handles, peer_info);
 }
 
 /**
- * bus1_message_deallocate() - deallocate pool slice for discarded message
- * @message:		message to deallocate slice for
- * @peer_info:		destination peer
+ * bus1_message_pin() - pin message resources
+ * @message:		message to pin, or NULL
  *
- * If allocated, deallocate the slice for the given peer and discharge the
- * associated user quota.
+ * Pin the resources of the given message. The caller must have them already
+ * pinned, this just increments the pin-counter.
+ *
+ * If NULL is passed, this is a no-op.
+ *
+ * Return: @message is returned.
  */
-void bus1_message_deallocate(struct bus1_message *message,
-			     struct bus1_peer_info *peer_info)
+struct bus1_message *bus1_message_pin(struct bus1_message *message)
 {
-	mutex_lock(&peer_info->lock);
-	bus1_message_deallocate_locked(message, peer_info);
-	mutex_unlock(&peer_info->lock);
+	if (message)
+		WARN_ON(atomic_inc_return(&message->n_pins) < 2);
+	return message;
+}
+
+/**
+ * bus1_message_unpin() - release pinned message resources
+ * @message:		message to unpin, or NULL
+ * @peer_info:		owner of the message
+ *
+ * This unpins the resources of the message. If this was the last pin, the
+ * resources are deallocated and flushed.
+ *
+ * If NULL is passed, this is a no-op.
+ *
+ * Return: NULL is returned.
+ */
+struct bus1_message *bus1_message_unpin(struct bus1_message *message,
+					struct bus1_peer_info *peer_info)
+{
+	if (message && atomic_dec_and_test(&message->n_pins))
+		bus1_message_deallocate(message, peer_info);
+	return NULL;
 }
 
 /**

@@ -66,10 +66,8 @@ static void bus1_peer_info_reset(struct bus1_peer_info *peer_info, bool final)
 			 * queue serves as hint to its owner that it was
 			 * flushed.
 			 */
-			if (!bus1_queue_node_is_staging(node)) {
-				bus1_message_deallocate(message, peer_info);
-				bus1_message_flush(message, peer_info);
-			}
+			if (!bus1_queue_node_is_staging(node))
+				bus1_message_unpin(message, peer_info);
 			bus1_message_unref(message);
 			break;
 		case BUS1_QUEUE_NODE_HANDLE_DESTRUCTION:
@@ -606,10 +604,8 @@ static int bus1_peer_dequeue(struct bus1_peer_info *peer_info,
 	switch (bus1_queue_node_get_type(node)) {
 	case BUS1_QUEUE_NODE_MESSAGE_NORMAL:
 		message = bus1_message_from_node(node);
-		if (!peek) {
-			bus1_message_deallocate(message, peer_info);
-			bus1_message_flush(message, peer_info);
-		}
+		if (!peek)
+			bus1_message_unpin(message, peer_info);
 		bus1_message_unref(message);
 		break;
 
