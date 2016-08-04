@@ -150,6 +150,20 @@ To be defined.
 The bus1 peer file descriptor supports the following operations:
       </para>
       <variablelist>
+        <varlistentry> <!-- FOPS OPEN -->
+          <term>
+            <citerefentry>
+              <refentrytitle>open</refentrytitle>
+              <manvolnum>2</manvolnum>
+            </citerefentry>
+          </term>
+          <listitem>
+            <para>
+TBD
+            </para>
+          </listitem>
+        </varlistentry> <!-- FOPS OPEN -->
+
         <varlistentry> <!-- FOPS POLL -->
           <term>
             <citerefentry>
