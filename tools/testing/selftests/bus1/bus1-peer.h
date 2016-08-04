@@ -37,8 +37,6 @@ extern "C" {
 
 struct bus1_peer;
 
-#define BUS1_PEER_POOL_SIZE (32ULL * 1024ULL * 1024ULL)
-
 int bus1_peer_new_from_fd(struct bus1_peer **peerp, int fd);
 int bus1_peer_new_from_path(struct bus1_peer **peerp, const char *path);
 struct bus1_peer *bus1_peer_free(struct bus1_peer *peer);
