@@ -33,204 +33,345 @@
     </funcsynopsis>
   </refsynopsisdiv>
 
-  <refsect1>
+  <refsect1> <!-- DESCRIPTION -->
     <title>Description</title>
     <para>
-      bus1 is an inter-process communication bus system controlled by the
-      kernel. It provides user-space with an API to create peers and send
-      unicast and multicast messages between them. It does not enforce any
-      layout on the transmitted data, but only provides the transport layer used
-      for message interchange between peers.
+The Bus1 Kernel Message Bus defines and implements a distributed object model.
+It allows local processes to send messages to objects owned by remote processes,
+as well as share their own objects with others. Object ownership is static and
+cannot be transferred. Access to remote objects is prohibited, unless it was
+explicitly granted. Processes can transmit messages to a remote object via the
+message bus, transferring a data payload, object access rights, file
+descriptors, or other auxiliary data.
     </para>
     <para>
-      This set of man-pages gives a comprehensive overview of the kernel-level
-      API, with all ioctl commands, associated structs and bit masks. However,
-      most people will not use this API level directly, but rather let one of
-      the high-level abstraction libraries help them integrate bus functionality
-      into their applications.
+To participate on the message bus, a peer context must be created. Peer contexts
+are kernel objects, identified by a file descriptor. They are not bound to any
+process, but can be shared freely. The peer context provides a message queue to
+store all incoming messages, a registry for all locally owned objects, and
+tracks access rights to remote objects. A peer context never serves as
+routing entity, but merely as anchor for peer-owned resources. Any message on
+the bus is always destined at an object, and the bus takes care to transfer a
+message into the message queue of the peer context that owns this object.
     </para>
     <para>
-      bus1 provides a character device at <filename>/dev/bus1</filename>. Any
-      advanced operations are done via <function>ioctl()</function> on this
-      file.
+The message bus manages object access based on capability-based security. That
+is, by default only the owner of an object is granted access rights. No other
+peer can access the object, nor are they aware of the existance of the
+object. However, access rights can be transmitted as auxiliary data with any
+message, effectively granting them to the receiver of the message. This even
+works transitively, that is, any peer that was granted access to an object
+can pass on those rights, even if they do not own the object. But mind that no
+access rights can ever be revoked, besides the owner destroying the object.
     </para>
-
-  </refsect1>
-
-  <refsect1>
-    <title>Terminology</title>
 
     <refsect2>
-      <title>Peer</title>
+      <title>Nodes and Handles</title>
       <para>
-        A peer is a client on the bus that can send or receive messages. A peer
-        is represented by a file-descriptor created by opening
-        <filename>/dev/bus1</filename> or by cloning an existing peer. See
-        <citerefentry>
-          <refentrytitle>bus1.peer</refentrytitle>
-          <manvolnum>7</manvolnum>
-        </citerefentry>
-        for more details.
+Each peer context comes with a registry of owned objects, which in bus1
+terminology are called <emphasis>nodes</emphasis>. A peer is always the
+exclusive owner of all nodes created by them. Ownership cannot be transferred.
+Furthermore, initially, the node owner is the only peer with access
+to a newly created node. The message bus manages access rights to nodes as a set
+of <emphasis>handles</emphasis> on each peer. For each node a peer has access
+to, whether it is a local or remote node, the message bus keeps a handle on the
+peer. Those handles are local to each peer, but can be transmitted as auxiliary
+data with any message, effectively allocating a new handle to the same node in
+the destination peer. This works transitively, and each peer with access rights
+can pass them on further, or deliberately drop them again. As long as a peer has
+access rights to a node it can send messages to it. However, a node owner can,
+at any time, decide to destroy a node. This causes all further message
+transactions to this node to fail, and all peers holding access rights to the
+node (i.e., they own a handle for that node) are notified of the destruction.
+      </para>
+      <para>
+Handles are the only way to refer to nodes, both local nodes or remote nodes.
+For each handle allocated on a peer, a 64bit ID is assigned to identify this
+particular handle on this particular peer. This ID is only valid locally on this
+peer. It cannot be used by remote peers to address this handle (in other words,
+the ID namespace is tied to each peer and does not define global entities).
+Furthermore, an assigned ID is never reused, even if a handle is dropped. The
+kernel keeps a user-reference count for each handle. Everytime a handle is
+exposed to a peer, the user-reference count of that handle is incremented by
+one. This is <emphasis>never</emphasis> done asynchronously, but only
+synchronously when an ioctl is called <emphasis>by the affected peer</emphasis>.
+Therefore, a peer can reliable deduce the current user-reference count of all
+its handles, regardless of any ongoing message transaction. References can be
+explicitly dropped by a peer. Once the counter of a handle hits zero, it is
+destroyed, its ID becomes invalid, and will not be reused again. Note that a
+peer can never have multiple <emphasis>different</emphasis> handles to the same
+node, but the kernel always coalesces them into a single handle, using the
+user-reference counter to track it. However, if a handle is fully released, but
+the peer later acquires a handle to the same node again, its ID will be
+different (remember: IDs are never reused). A concept of soft-references is not
+supported.
+      </para>
+      <para>
+When allocating a new node, the node owner implicitly also gets a handle to that
+node. As long as the node is valid, the kernel will pin a single user-reference
+to the owner's handle. This guarantees that a node owner always retains access
+to their node, until they explicitly destroy it (which will also implicitly
+release that pinned user-reference on the handle). Otherwise, a handle to a
+local node behaves just like any other handle, that is, user-references are
+acquired and released according to its use. However, whenever the overall sum of
+all user-references on all handles to a node drops to 1 (which implies that only
+the pinned reference of the owner is left), a notification is queued on the node
+owner. If the counter is incremented again, any such notification is flushed, if
+not already dequeued.
       </para>
     </refsect2>
 
     <refsect2>
-      <title>Node</title>
+      <title>Message Transactions</title>
       <para>
-        A node is a representation of a generic object owend by a peer. A peer
-        may own several nodes and their primary function is to be the recipient
-        of messages. See
-        <citerefentry>
-          <refentrytitle>bus1.node</refentrytitle>
-          <manvolnum>7</manvolnum>
-        </citerefentry>
-        for more details.
+<!--
+  XXX: * Unicasts, multicasts
+       * memory data, auxiliary data, metadata
+       * quotas
+       * single-copy, pool-slice
+  -->
+To be defined.
       </para>
     </refsect2>
 
     <refsect2>
-      <title>Handle</title>
+      <title>Global Ordering</title>
       <para>
-        A handle is a reference to a node. A peer may hold several handles, both
-        to nodes owned by itself and nodes owned by other peers. The destination
-        of a message is always a handle, meaning the message will be delivered
-        to the owner of the node the handle is referencing. A handle is local to
-        its holder, but a copy of a handle may be passed from one peer to
-        another along with a message. See
-        <citerefentry>
-          <refentrytitle>bus1.node</refentrytitle>
-          <manvolnum>7</manvolnum>
-        </citerefentry>
-        for more details.
+<!--
+  XXX: Causal ordering, side-channels, unicast/multicast
+  -->
+To be defined.
       </para>
     </refsect2>
 
     <refsect2>
-      <title>Pool</title>
+      <title>Operating on a bus1 file descriptor</title>
       <para>
-        Each peer allocates a piece of shmem-backed memory that is used to
-        receive messages. It is never used for sending. In order to access that
-        memory, an application must <function>mmap()</function> it into its
-        address space. See
-        <citerefentry>
-          <refentrytitle>bus1.pool</refentrytitle>
-          <manvolnum>7</manvolnum>
-        </citerefentry>
-        for more details.
+The bus1 peer file descriptor supports the following operations:
       </para>
+      <variablelist>
+        <varlistentry> <!-- FOPS POLL -->
+          <term>
+            <citerefentry>
+              <refentrytitle>poll</refentrytitle>
+              <manvolnum>2</manvolnum>
+            </citerefentry>
+          </term>
+          <term>
+            <citerefentry>
+              <refentrytitle>select</refentrytitle>
+              <manvolnum>2</manvolnum>
+            </citerefentry>
+          </term>
+          <term>(and similar)</term>
+          <listitem>
+            <para>
+The file descriptor supports
+<citerefentry>
+  <refentrytitle>poll</refentrytitle><manvolnum>2</manvolnum>
+</citerefentry>
+(and analogously
+<citerefentry>
+  <refentrytitle>epoll</refentrytitle><manvolnum>7</manvolnum>
+</citerefentry>) and
+<citerefentry>
+  <refentrytitle>select</refentrytitle><manvolnum>2</manvolnum>
+</citerefentry>, as follows:
+            </para>
+
+            <itemizedlist>
+              <listitem>
+                <para>
+The file descriptor is readable (the <varname>readfds</varname> argument of
+<citerefentry>
+  <refentrytitle>select</refentrytitle><manvolnum>2</manvolnum>
+</citerefentry>;
+the <constant>POLLIN</constant> flag of
+<citerefentry>
+  <refentrytitle>poll</refentrytitle><manvolnum>2</manvolnum>
+</citerefentry>)
+if one or more messages are ready to be dequeued.
+                </para>
+              </listitem>
+
+              <listitem>
+                <para>
+The file descriptor is writable (the <varname>writefds</varname> argument of
+<citerefentry>
+  <refentrytitle>select</refentrytitle><manvolnum>2</manvolnum>
+</citerefentry>;
+the <constant>POLLOUT</constant> flag of
+<citerefentry>
+  <refentrytitle>poll</refentrytitle><manvolnum>2</manvolnum>
+</citerefentry>)
+if the peer has not been shut down, yet (i.e., the peer can be used to send
+messages).
+                </para>
+              </listitem>
+
+              <listitem>
+                <para>
+The file descriptor signals a hang-up (overloaded on the
+<varname>readfds</varname> argument of
+<citerefentry>
+  <refentrytitle>select</refentrytitle><manvolnum>2</manvolnum>
+</citerefentry>;
+the <constant>POLLHUP</constant> flag of
+<citerefentry>
+  <refentrytitle>poll</refentrytitle><manvolnum>2</manvolnum>
+</citerefentry>)
+if the peer has been shut down. Note that currently peer shutdown cannot be
+triggered explicitly, but only by releasing all file descriptors to the peer.
+Hence, you will not see a hang-up under normal operation.
+                </para>
+              </listitem>
+            </itemizedlist>
+
+            <para>
+The bus1 peer file descriptor also supports the other file descriptor
+multiplexing APIs:
+<citerefentry>
+  <refentrytitle>pselect</refentrytitle><manvolnum>2</manvolnum>
+</citerefentry>, and
+<citerefentry>
+  <refentrytitle>ppoll</refentrytitle><manvolnum>2</manvolnum>
+</citerefentry>.
+            </para>
+          </listitem>
+        </varlistentry> <!-- FOPS POLL -->
+
+        <varlistentry> <!-- FOPS MMAP -->
+          <term>
+            <citerefentry>
+              <refentrytitle>mmap</refentrytitle>
+              <manvolnum>2</manvolnum>
+            </citerefentry>
+          </term>
+          <listitem>
+            <para>
+A call to
+<citerefentry>
+  <refentrytitle>mmap</refentrytitle><manvolnum>2</manvolnum>
+</citerefentry>
+installs a memory mapping to the message pool of the peer into the caller's
+address-space. No writable mappings are allowed. Furthermore, the pool has no
+fixed size, but grows dynamically with the demands of the peer.
+            </para>
+          </listitem>
+        </varlistentry> <!-- FOPS MMAP -->
+
+        <varlistentry> <!-- FOPS IOCTL -->
+          <term>
+            <citerefentry>
+              <refentrytitle>ioctl</refentrytitle>
+              <manvolnum>2</manvolnum>
+            </citerefentry>
+          </term>
+          <listitem>
+            <para>
+The following bus1-specific commands are supported:
+            </para>
+            <variablelist>
+              <varlistentry>
+                <term><constant>BUS1_CMD_PEER_RESET</constant></term>
+                <listitem>
+                  <para>
+TBD
+                  </para>
+                </listitem>
+              </varlistentry>
+
+              <varlistentry>
+                <term><constant>BUS1_CMD_HANDLE_TRANSFER</constant></term>
+                <listitem>
+                  <para>
+TBD
+                  </para>
+                </listitem>
+              </varlistentry>
+
+              <varlistentry>
+                <term><constant>BUS1_CMD_HANDLE_RELEASE</constant></term>
+                <listitem>
+                  <para>
+TBD
+                  </para>
+                </listitem>
+              </varlistentry>
+
+              <varlistentry>
+                <term><constant>BUS1_CMD_NODE_DESTROY</constant></term>
+                <listitem>
+                  <para>
+TBD
+                  </para>
+                </listitem>
+              </varlistentry>
+
+              <varlistentry>
+                <term><constant>BUS1_CMD_SLICE_RELEASE</constant></term>
+                <listitem>
+                  <para>
+TBD
+                  </para>
+                </listitem>
+              </varlistentry>
+
+              <varlistentry>
+                <term><constant>BUS1_CMD_SEND</constant></term>
+                <listitem>
+                  <para>
+TBD
+                  </para>
+                </listitem>
+              </varlistentry>
+
+              <varlistentry>
+                <term><constant>BUS1_CMD_RECV</constant></term>
+                <listitem>
+                  <para>
+TBD
+                  </para>
+                </listitem>
+              </varlistentry>
+            </variablelist>
+          </listitem>
+        </varlistentry> <!-- FOPS IOCTL -->
+
+        <varlistentry> <!-- FOPS CLOSE -->
+          <term>
+            <citerefentry>
+              <refentrytitle>close</refentrytitle>
+              <manvolnum>2</manvolnum>
+            </citerefentry>
+          </term>
+          <listitem>
+            <para>
+A call to
+<citerefentry>
+  <refentrytitle>close</refentrytitle><manvolnum>2</manvolnum>
+</citerefentry>
+releases the passed file descriptor. When all file descriptors associated with
+the same peer context have been closed, the peer is shut down. This destroys all
+nodes of that peer, releases all handles, flushes its queue and pool, and
+deallocates all related resources. Messages that have been sent by the peer and
+are still queued on destination queues, are unaffected by this.
+            </para>
+          </listitem>
+        </varlistentry> <!-- FOPS CLOSE -->
+      </variablelist>
     </refsect2>
+  </refsect1> <!-- DESCRIPTION -->
 
-    <refsect2>
-      <title>Message</title>
-      <para>
-        Peers can exchange messages with other peers by addressing the peers
-        by handles to their nodes. A message consists of a logical byte stream
-        of arbitrary size. Messages can carry additional file descriptors or
-        handles to nodes to be passed from one peer to another, just like
-        passing file descriptors over UNIX domain sockets. See
-        <citerefentry>
-          <refentrytitle>bus1.message</refentrytitle>
-          <manvolnum>7</manvolnum>
-        </citerefentry>
-        for more details.
-      </para>
-    </refsect2>
-
-  </refsect1>
-
-  <refsect1>
-    <title>The ioctl interface</title>
-
-    <para>
-       As stated in the 'synopsis' section above, application developers are
-       strongly encouraged to use bus1 through a the high-level abstraction
-       library, rather than using the low-level API directly.
-    </para>
-
-    <para>
-      bus1 on the kernel level exposes its functions exclusively through
-      <citerefentry>
-        <refentrytitle>ioctl</refentrytitle>
-        <manvolnum>2</manvolnum>
-      </citerefentry>,
-      employed on file descriptors returned by
-      <citerefentry>
-        <refentrytitle>open</refentrytitle>
-        <manvolnum>2</manvolnum>
-      </citerefentry>
-      on <filename>/dev/bus1</filename> or by the
-      <constant>BUS1_CMD_PEER_CLONE</constant> ioctl described below.
-    </para>
-
-    <para>
-      Following is a list of all the ioctls, along with the command structs they
-      must be used with.
-    </para>
-
-    <informaltable frame="none">
-      <tgroup cols="2" colsep="1">
-        <thead>
-          <row>
-            <entry>command</entry>
-            <entry>transported struct</entry>
-          </row>
-        </thead>
-        <tbody>
-          <row>
-            <entry><constant>BUS1_CMD_PEER_INIT</constant></entry>
-            <entry><type>struct bus1_cmd_peer_init *</type></entry>
-          </row>
-          <row>
-            <entry><constant>BUS1_CMD_PEER_QUERY</constant></entry>
-            <entry><type>struct bus1_cmd_peer_init *</type></entry>
-          </row>
-          <row>
-            <entry><constant>BUS1_CMD_PEER_RESET</constant></entry>
-            <entry><type>struct bus1_cmd_peer_reset *</type></entry>
-          </row>
-          <row>
-            <entry><constant>BUS1_CMD_PEER_CLONE</constant></entry>
-            <entry><type>struct bus1_cmd_peer_clone *</type></entry>
-          </row>
-          <row>
-            <entry><constant>BUS1_CMD_NODE_DESTROY</constant></entry>
-            <entry><type>__u64</type></entry>
-          </row>
-          <row>
-            <entry><constant>BUS1_CMD_HANDLE_RELEASE</constant></entry>
-            <entry><type>__u64</type></entry>
-          </row>
-          <row>
-            <entry><constant>BUS1_CMD_SLICE_RELEASE</constant></entry>
-            <entry><type>__u64</type></entry>
-          </row>
-          <row>
-            <entry><constant>BUS1_CMD_SEND</constant></entry>
-            <entry><type>struct bus1_cmd_send *</type></entry>
-          </row>
-          <row>
-            <entry><constant>BUS1_CMD_RECV</constant></entry>
-            <entry><type>struct bus1_cmd_recv *</type></entry>
-          </row>
-        </tbody>
-      </tgroup>
-    </informaltable>
-
-    <para>
-      These ioctls, along with the structs they transport, are explained in
-      detail in the other documents linked to in the "See Also" section below.
-    </para>
-  </refsect1>
-
-  <refsect1>
+  <refsect1> <!-- RETURN VALUE -->
     <title>Return value</title>
     <para>
 All bus1 operations return zero on success. On failure, a negative error code is
 returned.
     </para>
-  </refsect1>
+  </refsect1> <!-- RETURN VALUE -->
 
-  <refsect1>
+  <refsect1> <!-- ERRORS -->
     <title>Errors</title>
     <para>
 These are all standard errors generated by the bus layer. See the description
@@ -328,9 +469,9 @@ Local peer was already shut down.
         </para></listitem>
       </varlistentry>
     </variablelist>
-  </refsect1>
+  </refsect1> <!-- ERRORS -->
 
-  <refsect1>
+  <refsect1> <!-- SEE ALSO -->
     <title>See Also</title>
     <simplelist type="inline">
       <member>
@@ -358,6 +499,6 @@ Local peer was already shut down.
         </citerefentry>
       </member>
     </simplelist>
-  </refsect1>
+  </refsect1> <!-- SEE ALSO -->
 
 </refentry>
