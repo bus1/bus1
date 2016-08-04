@@ -276,7 +276,21 @@ The following bus1-specific commands are supported:
                 <term><constant>BUS1_CMD_PEER_RESET</constant></term>
                 <listitem>
                   <para>
-TBD
+This command resets a peer context to its initial state. It does not take an
+argument, so the <varname>arg</varname> parameter of the call to
+<citerefentry>
+  <refentrytitle>ioctl</refentrytitle>
+  <manvolnum>2</manvolnum>
+</citerefentry>
+must be 0. All nodes owned by this peer context are destroyed atomically,
+followed by a release of all owned handles. Lastly, all remaining slices are
+flushed from the pool. Only the node destruction is atomic. The remaining
+cleanup is not. This means, if another command is executed in parallel, it
+might be partially affected by the ongoing reset.
+                  </para>
+                  <para>
+Any node marked as persistent, as well as the seed message, are preserved and
+will survive a reset operation.
                   </para>
                 </listitem>
               </varlistentry>
@@ -285,7 +299,14 @@ TBD
                 <term><constant>BUS1_CMD_HANDLE_TRANSFER</constant></term>
                 <listitem>
                   <para>
-TBD
+<programlisting>
+struct bus1_cmd_handle_transfer {
+        __u64 flags;
+        __u64 src_handle;
+        __u64 dst_fd;
+        __u64 dst_handle;
+};
+</programlisting>
                   </para>
                 </listitem>
               </varlistentry>
@@ -321,7 +342,19 @@ TBD
                 <term><constant>BUS1_CMD_SEND</constant></term>
                 <listitem>
                   <para>
-TBD
+<programlisting>
+struct bus1_cmd_send {
+        __u64 flags;
+        __u64 ptr_destinations;
+        __u64 n_destinations;
+        __u64 ptr_vecs;
+        __u64 n_vecs;
+        __u64 ptr_handles;
+        __u64 n_handles;
+        __u64 ptr_fds;
+        __u64 n_fds;
+};
+</programlisting>
                   </para>
                 </listitem>
               </varlistentry>
@@ -330,7 +363,24 @@ TBD
                 <term><constant>BUS1_CMD_RECV</constant></term>
                 <listitem>
                   <para>
-TBD
+<programlisting>
+struct bus1_cmd_recv {
+        __u64 flags;
+        __u64 n_dropped;
+        struct {
+                __u64 type;
+                __u64 destination;
+                __u32 uid;
+                __u32 gid;
+                __u32 pid;
+                __u32 tid;
+                __u64 offset;
+                __u64 n_bytes;
+                __u64 n_handles;
+                __u64 n_fds;
+        } msg;
+};
+</programlisting>
                   </para>
                 </listitem>
               </varlistentry>
