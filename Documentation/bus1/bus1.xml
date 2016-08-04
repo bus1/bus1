@@ -27,8 +27,14 @@
     <refpurpose>Kernel Message Bus</refpurpose>
   </refnamediv>
 
+  <refsynopsisdiv>
+    <funcsynopsis>
+      <funcsynopsisinfo>#include &lt;linux/bus1.h&gt;</funcsynopsisinfo>
+    </funcsynopsis>
+  </refsynopsisdiv>
+
   <refsect1>
-    <title>Synopsis</title>
+    <title>Description</title>
     <para>
       bus1 is an inter-process communication bus system controlled by the
       kernel. It provides user-space with an API to create peers and send
@@ -43,10 +49,6 @@
       the high-level abstraction libraries help them integrate bus functionality
       into their applications.
     </para>
-  </refsect1>
-
-  <refsect1>
-    <title>Description</title>
     <para>
       bus1 provides a character device at <filename>/dev/bus1</filename>. Any
       advanced operations are done via <function>ioctl()</function> on this
