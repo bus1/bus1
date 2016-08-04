@@ -79,7 +79,7 @@ static unsigned int bus1_fop_poll(struct file *file,
 	rcu_read_lock();
 	peer_info = rcu_dereference(peer->info);
 	if (!peer_info || bus1_active_is_deactivated(&peer->active)) {
-		mask = POLLERR | POLLHUP;
+		mask = POLLHUP;
 	} else {
 		mask = POLLOUT | POLLWRNORM;
 		if (bus1_queue_is_readable(&peer_info->queue))
