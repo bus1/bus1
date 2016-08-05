@@ -285,18 +285,30 @@ int bus1_peer_disconnect(struct bus1_peer *peer)
 				 bus1_peer_cleanup, NULL))
 		return -ESHUTDOWN;
 
+	/* signal hang-up */
+	wake_up_interruptible(&peer->waitq);
+
 	return 0;
 }
 
 static int bus1_peer_ioctl_reset(struct bus1_peer *peer, unsigned long arg)
 {
 	struct bus1_peer_info *peer_info = bus1_peer_dereference(peer);
+	u64 flags;
 
-	if (unlikely(arg))
+	BUILD_BUG_ON(_IOC_SIZE(BUS1_CMD_PEER_RESET) != sizeof(flags));
+
+	if (get_user(flags, (const u64 __user *)arg))
+		return -EFAULT;
+	if (unlikely(flags & ~BUS1_RESET_FLAG_DISCONNECT))
 		return -EINVAL;
 
-	/* flush everything, but keep persistent nodes */
-	bus1_peer_info_reset(peer_info, false);
+	if (flags & BUS1_RESET_FLAG_DISCONNECT)
+		/* disconnect peer, flush all, no further operations allowed */
+		return bus1_peer_disconnect(peer);
+	else
+		/* flush everything, but keep persistent nodes */
+		bus1_peer_info_reset(peer_info, false);
 
 	return 0;
 }
