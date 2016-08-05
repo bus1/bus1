@@ -141,10 +141,40 @@ To be defined.
     <refsect2>
       <title>Global Ordering</title>
       <para>
-<!--
-  XXX: Causal ordering, side-channels, unicast/multicast
-  -->
-To be defined.
+Despite there being no global synchronization, all events on the bus, such as
+sending or receiving of messages, release of handles or destruction of nodes,
+behave as if they were globally ordered. That is, for any two events it is
+always possible to consider one to have happened before the other in such a way
+that it is consistent with all the effects observed on the bus.
+      </para>
+      <para>
+For instance, if two events occurr on one peer (say the sending of a message,
+and the destruction of a node), and they are observed on another peer (by
+receiving the message and receiving a destruction notification for the node), we
+are guaranteed that the order the events occurred in and the order they were
+observed in is the same.
+      </para>
+      <para>
+One could consider a further example involving three peers, if a message is sent
+from one peer to two others, and after receiving the message the first recipient
+sends a further message to the second recipient, it is guaranteed that the
+original message is received before the subsequent one.
+      </para>
+      <para>
+This principle of causality is also respected in the pressence of side-channel
+communication. That is, if one event may have triggered another, even if on
+different, disconnected, peers, we are guaranteed that the events are ordered
+accordingly. To be precise, if one event (such as receiving a message) completed
+before another (such as sending a message) was started, then they are ordered
+accordingly.
+      </para>
+      <para>
+Also in the case where there can be no causal relationship, are we guaranteed
+a global order. In case two events happend concurrently, there can never be any
+inconsistency in which occurred before the other. By way of example, consider
+two peers sending one message each to two different peers, we are guaranteed
+that both the recipient peers receive the two messages in the same order, even
+though the order may be arbitrary.
       </para>
     </refsect2>
 
