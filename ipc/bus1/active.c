@@ -356,7 +356,7 @@ bool bus1_active_cleanup(struct bus1_active *active,
  * bus1_active_lockdep_acquire().
  *
  * Example: If you need to pin a huge amount of objects, you would acquire each
- *          of them individually via bus1_active_acquireq(). Then you would
+ *          of them individually via bus1_active_acquire(). Then you would
  *          perform state tracking, etc. on that object. Before you continue
  *          with the next, you call bus1_active_lockdep_released(), to pretend
  *          you released the lock (but you still retain your active reference).
