@@ -13,12 +13,13 @@
 /**
  * DOC: Handles
  *
- * The object system on a bus is based on nodes and handles. Any peer can
- * allocate new, local objects at any time. They automatically become the sole
- * owner of the object. Those objects can be passed as payload of messages. The
- * recipient will thus gain a reference to the object as well. Additionally, an
- * object can be the destination of a message, in which case the message is
- * always sent to the original creator (and thus the owner) of the object.
+ * The object system on a bus is based on 'nodes' and 'handles'. Any peer can
+ * allocate new, local objects at any time. The creator automatically becomes
+ * the sole owner of the object. References to objects can be passed as payload
+ * of messages. The recipient will then gain their own reference to the object
+ * as well. Additionally, an object can be the destination of a message, in
+ * which case the message is always sent to the original creator (and thus the
+ * owner) of the object.
  *
  * Internally, objects are called 'nodes'. A reference to an object is a
  * 'handle'. Whenever a new node is created, the owner implicitly gains an
@@ -27,47 +28,37 @@
  *
  * Whenever a handle is passed as payload of a message, the target peer will
  * gain a handle linked to the same underlying node. This works regardless
- * whether the sender is the owner of the underlying node, or not.
+ * of whether the sender is the owner of the underlying node, or not.
  *
  * Each peer can identify all its handles (both owned and un-owned) by a 64bit
  * integer. The namespace is local to each peer, and the numbers cannot be
  * compared with the numbers of other peers (in fact, they will be very likely
  * to clash, but might still have *different* underlying nodes). However, if a
  * peer receives a reference to the same node multiple times, the resulting
- * handle will be the same. The kernel keeps count how often each peer owns a
+ * handle will be the same. The kernel keeps count of how often each peer owns a
  * handle.
  *
- * If a peer no longer requires a specific handle, it must release it. If the
+ * If a peer no longer requires a specific handle, it can release it. If the
  * peer releases its last reference to a handle, the handle will be destroyed.
  *
- * The ID of an handle is (almost) never reused. That is, once a handle was
- * fully released, any new handle the peer receives will have a different ID.
- * The only scenario where an ID is reused, is if the peer gains a new handle
- * to an underlying node that it already owned a handle for earlier. This might
- * happen, for instance, if a message is inflight that carries a handle that
- * the peer was just about to release. Furthermore, the handle of the owner of
- * a node is internally pinned. As such, it is always reused if the owner gains
- * a handle to its own node again (this is required for explicit node
- * destruction).
- * Note that such ID-reuse is not guaranteed, though. If a peer used to own a
- * handle, dropped it and gains another one for the same underlying node, the
- * new ID might be completely different! The only guarantee here is: If the ID
- * is the same as a previously owned ID, then the underlying node is still the
- * same.
+ * The ID of an handle is never reused. That is, once a handle was fully
+ * released, any new handle the peer receives will have a different ID. Note,
+ * however, that the handle of the owner of a node is internally pinned. As
+ * such, it is always reused if the owner gains a handle to its own node again
+ * (this is required for explicit node destruction).
  *
- * Once all handles to a specific node have been released, the node is
- * unreferenced and is automatically destroyed. The owner of the node is
- * notified of this, so it can destroy any linked state. Note that the owner of
- * a node owns a handle themself, so it needs to release it as well to trigger
- * the destruction of the node.
- * Additionally, the owner of a node (and *only* the owner) can trigger
- * destruction of a node manually (even if other peers still own handles). In
- * this case, all peers that own a handle are notified by this.
+ * The owner of a node (and *only* the owner) can trigger the destruction of a
+ * node (even if other peers still own handles to it). In this case, all peers
+ * that own a handle are notified of this fact.
+ * Once all handles to a specific node have been released (except for the handle
+ * internally pinned in the node itself), the owner of the node is notified of
+ * this, so it can potentianlly destroy both any linked state and the node
+ * itself.
  *
  * Node destruction is fully synchronized with any transaction. That is, a node
  * and all its handles are valid in every message that is transmitted *before*
  * the notification of its destruction. Furthermore, no message after this
- * notification will carry the ID of such a destructed node.
+ * notification will carry the ID of such a destroyed node.
  * Note that message transactions are fully async. That is, there is no unique
  * point in time that a message is synchronized with another message. Hence,
  * whether a specific handle passed with a message is still valid or not,
