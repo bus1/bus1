@@ -27,14 +27,14 @@ static void bus1_queue_node_set_type(struct bus1_queue_node *node, u64 type)
 	BUILD_BUG_ON((_BUS1_QUEUE_NODE_N - 1) > (BUS1_QUEUE_TYPE_MASK >>
 							BUS1_QUEUE_TYPE_SHIFT));
 
-	WARN_ON(type & ~(BUS1_QUEUE_TYPE_MASK >> BUS1_QUEUE_TYPE_SHIFT));
+	BUS1_WARN_ON(type & ~(BUS1_QUEUE_TYPE_MASK >> BUS1_QUEUE_TYPE_SHIFT));
 	node->timestamp_and_type &= ~BUS1_QUEUE_TYPE_MASK;
 	node->timestamp_and_type |= type << BUS1_QUEUE_TYPE_SHIFT;
 }
 
 static void bus1_queue_node_set_timestamp(struct bus1_queue_node *node, u64 ts)
 {
-	WARN_ON(ts & BUS1_QUEUE_TYPE_MASK);
+	BUS1_WARN_ON(ts & BUS1_QUEUE_TYPE_MASK);
 	node->timestamp_and_type &= BUS1_QUEUE_TYPE_MASK;
 	node->timestamp_and_type |= ts;
 }
@@ -109,8 +109,8 @@ void bus1_queue_node_destroy(struct bus1_queue_node *node)
 	if (!node)
 		return;
 
-	WARN_ON(!RB_EMPTY_NODE(&node->rb));
-	WARN_ON(atomic_read(&node->ref.refcount) > 0);
+	BUS1_WARN_ON(!RB_EMPTY_NODE(&node->rb));
+	BUS1_WARN_ON(atomic_read(&node->ref.refcount) > 0);
 }
 
 /**
@@ -210,9 +210,9 @@ void bus1_queue_destroy(struct bus1_queue *queue)
 		return;
 
 	mutex_destroy(&queue->lock);
-	WARN_ON(!RB_EMPTY_ROOT(&queue->messages));
-	WARN_ON(queue->seed);
-	WARN_ON(rcu_access_pointer(queue->front));
+	BUS1_WARN_ON(!RB_EMPTY_ROOT(&queue->messages));
+	BUS1_WARN_ON(queue->seed);
+	BUS1_WARN_ON(rcu_access_pointer(queue->front));
 }
 
 /**
@@ -265,13 +265,13 @@ static void bus1_queue_add(struct bus1_queue *queue,
 	readable = bus1_queue_is_readable(queue);
 
 	/* provided timestamp must be valid */
-	if (WARN_ON(timestamp == 0 || timestamp > queue->clock + 1))
+	if (BUS1_WARN_ON(timestamp == 0 || timestamp > queue->clock + 1))
 		return;
 	/* if unstamped, it must be unlinked, and vice versa */
-	if (WARN_ON(!ts == !RB_EMPTY_NODE(&node->rb)))
+	if (BUS1_WARN_ON(!ts == !RB_EMPTY_NODE(&node->rb)))
 		return;
 	/* if stamped, it must be a valid staging timestamp from earlier */
-	if (ts != 0 && WARN_ON(!(ts & 1) || timestamp < ts))
+	if (ts != 0 && BUS1_WARN_ON(!(ts & 1) || timestamp < ts))
 		return;
 	/* nothing to do? */
 	if (ts == timestamp)
@@ -292,8 +292,8 @@ static void bus1_queue_add(struct bus1_queue *queue,
 		 * not order *before* it. We *must not* replace it as front.
 		 */
 		iter = container_of(front, struct bus1_queue_node, rb);
-		WARN_ON(node == iter);
-		WARN_ON(timestamp <= bus1_queue_node_get_timestamp(iter));
+		BUS1_WARN_ON(node == iter);
+		BUS1_WARN_ON(timestamp <= bus1_queue_node_get_timestamp(iter));
 	} else if (!RB_EMPTY_NODE(&node->rb) && !rb_prev(&node->rb)) {
 		/*
 		 * We are linked into the queue as staging entry *and* we are
@@ -370,8 +370,8 @@ u64 bus1_queue_stage(struct bus1_queue *queue,
 		     struct bus1_queue_node *node,
 		     u64 timestamp)
 {
-	WARN_ON(!RB_EMPTY_NODE(&node->rb));
-	WARN_ON(timestamp & 1);
+	BUS1_WARN_ON(!RB_EMPTY_NODE(&node->rb));
+	BUS1_WARN_ON(timestamp & 1);
 
 	timestamp = bus1_queue_sync(queue, timestamp);
 	bus1_queue_add(queue, node, timestamp + 1);
@@ -405,7 +405,7 @@ bool bus1_queue_commit_staged(struct bus1_queue *queue,
 			      struct bus1_queue_node *node,
 			      u64 timestamp)
 {
-	WARN_ON(timestamp & 1);
+	BUS1_WARN_ON(timestamp & 1);
 
 	mutex_lock(&queue->lock);
 	if (bus1_queue_node_is_queued(node)) {

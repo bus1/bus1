@@ -97,8 +97,8 @@ bus1_peer_info_free(struct bus1_peer_info *peer_info)
 	put_pid_ns(peer_info->pid_ns);
 	put_cred(peer_info->cred);
 
-	WARN_ON(!RB_EMPTY_ROOT(&peer_info->map_handles_by_node));
-	WARN_ON(!RB_EMPTY_ROOT(&peer_info->map_handles_by_id));
+	BUS1_WARN_ON(!RB_EMPTY_ROOT(&peer_info->map_handles_by_node));
+	BUS1_WARN_ON(!RB_EMPTY_ROOT(&peer_info->map_handles_by_id));
 
 	/*
 	 * Make sure the object is freed in a delayed-manner. Some
@@ -208,7 +208,7 @@ struct bus1_peer *bus1_peer_free(struct bus1_peer *peer)
 	if (!peer)
 		return NULL;
 
-	WARN_ON(rcu_access_pointer(peer->info));
+	BUS1_WARN_ON(rcu_access_pointer(peer->info));
 	debugfs_remove_recursive(peer->debugdir);
 	bus1_active_destroy(&peer->active);
 	kfree_rcu(peer, rcu);
@@ -231,7 +231,7 @@ int bus1_peer_connect(struct bus1_peer *peer)
 {
 	struct bus1_peer_info *peer_info;
 
-	if (WARN_ON(!bus1_active_is_new(&peer->active)))
+	if (BUS1_WARN_ON(!bus1_active_is_new(&peer->active)))
 		return -ENOTRECOVERABLE;
 
 	peer_info = bus1_peer_info_new(&peer->waitq);
@@ -339,7 +339,7 @@ static int bus1_peer_ioctl_handle_transfer(struct bus1_peer *src,
 		dst = src;
 	} else {
 		dst_file = bus1_import_fd(param.dst_fd, true);
-		if (WARN_ON(IS_ERR(dst_file)))
+		if (IS_ERR(dst_file))
 			return PTR_ERR(dst_file);
 
 		dst = dst_file->private_data;

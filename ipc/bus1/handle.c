@@ -157,9 +157,9 @@ static void bus1_node_free(struct kref *ref)
 {
 	struct bus1_node *node = container_of(ref, struct bus1_node, qnode.ref);
 
-	WARN_ON(rcu_access_pointer(node->owner.holder));
-	WARN_ON(!list_empty(&node->list_handles));
-	WARN_ON(test_bit(BUS1_NODE_BIT_ATTACHED, &node->flags) !=
+	BUS1_WARN_ON(rcu_access_pointer(node->owner.holder));
+	BUS1_WARN_ON(!list_empty(&node->list_handles));
+	BUS1_WARN_ON(test_bit(BUS1_NODE_BIT_ATTACHED, &node->flags) !=
 		test_bit(BUS1_NODE_BIT_DESTROYED, &node->flags));
 	bus1_queue_node_destroy(&node->qnode);
 	kfree_rcu(node, qnode.rcu);
@@ -186,11 +186,13 @@ static bool bus1_handle_was_attached(struct bus1_handle *handle)
 	return handle && atomic_read(&handle->n_inflight) >= 0;
 }
 
+#if defined(CONFIG_DEBUG)
 static bool bus1_handle_is_attached(struct bus1_handle *handle)
 {
 	/* Is this handle currently attached? */
 	return handle && atomic_read(&handle->n_inflight) > 0;
 }
+#endif
 
 static bool bus1_handle_had_userref(struct bus1_handle *handle)
 {
@@ -221,12 +223,12 @@ static void bus1_handle_init(struct bus1_handle *handle, struct bus1_node *node)
 
 static void bus1_handle_finish(struct bus1_handle *handle)
 {
-	WARN_ON(!list_empty(&handle->link_node));
-	WARN_ON(!RB_EMPTY_NODE(&handle->rb_node));
-	WARN_ON(!RB_EMPTY_NODE(&handle->rb_id));
-	WARN_ON(atomic_read(&handle->n_user) > -1);
-	WARN_ON(atomic_read(&handle->n_inflight) > 0);
-	WARN_ON(handle->holder);
+	BUS1_WARN_ON(!list_empty(&handle->link_node));
+	BUS1_WARN_ON(!RB_EMPTY_NODE(&handle->rb_node));
+	BUS1_WARN_ON(!RB_EMPTY_NODE(&handle->rb_id));
+	BUS1_WARN_ON(atomic_read(&handle->n_user) > -1);
+	BUS1_WARN_ON(atomic_read(&handle->n_inflight) > 0);
+	BUS1_WARN_ON(handle->holder);
 
 	bus1_queue_node_destroy(&handle->qnode);
 
@@ -380,9 +382,9 @@ static void bus1_handle_attach_internal(struct bus1_handle *handle,
 	struct bus1_peer_info *owner_info;
 	struct bus1_peer *owner;
 
-	WARN_ON(rcu_access_pointer(handle->holder));
-	WARN_ON(bus1_handle_was_attached(handle));
-	WARN_ON(bus1_node_is_destroyed(handle->node));
+	BUS1_WARN_ON(rcu_access_pointer(handle->holder));
+	BUS1_WARN_ON(bus1_handle_was_attached(handle));
+	BUS1_WARN_ON(bus1_node_is_destroyed(handle->node));
 
 	atomic_set(&handle->n_inflight, 1);
 	rcu_assign_pointer(handle->holder, peer);
@@ -390,11 +392,11 @@ static void bus1_handle_attach_internal(struct bus1_handle *handle,
 	bus1_handle_ref(handle);
 
 	/*
-	 * This WARN_ON and lockdep must be after the attach operation, since
+	 * This BUS1_WARN_ON and lockdep must be after the attach operation, since
 	 * otherwise the holder would be unset for owner attachments.
 	 */
 	owner = rcu_access_pointer(handle->node->owner.holder);
-	WARN_ON(!owner);
+	BUS1_WARN_ON(!owner);
 	owner_info = bus1_peer_dereference(owner);
 	lockdep_assert_held(&owner_info->lock);
 
@@ -405,8 +407,8 @@ static void bus1_handle_attach_internal(struct bus1_handle *handle,
 static void bus1_handle_attach_owner(struct bus1_handle *handle,
 				     struct bus1_peer *owner)
 {
-	WARN_ON(!bus1_handle_is_owner(handle));
-	WARN_ON(!list_empty(&handle->node->list_handles));
+	BUS1_WARN_ON(!bus1_handle_is_owner(handle));
+	BUS1_WARN_ON(!list_empty(&handle->node->list_handles));
 
 	/* nodes pin their owners until destroyed */
 	bus1_handle_ref(handle);
@@ -421,8 +423,8 @@ static bool bus1_handle_attach_holder(struct bus1_handle *handle,
 	if (bus1_node_is_destroyed(handle->node))
 		return false;
 
-	WARN_ON(!test_bit(BUS1_NODE_BIT_ATTACHED, &handle->node->flags));
-	WARN_ON(bus1_handle_is_owner(handle));
+	BUS1_WARN_ON(!test_bit(BUS1_NODE_BIT_ATTACHED, &handle->node->flags));
+	BUS1_WARN_ON(bus1_handle_is_owner(handle));
 	bus1_handle_attach_internal(handle, holder);
 
 	return true;
@@ -436,8 +438,8 @@ bus1_handle_install_internal(struct bus1_handle *handle,
 	struct rb_node *n, **slot;
 
 	lockdep_assert_held(&peer_info->lock);
-	WARN_ON(!bus1_handle_was_attached(handle));
-	WARN_ON(!RB_EMPTY_NODE(&handle->rb_node));
+	BUS1_WARN_ON(!bus1_handle_was_attached(handle));
+	BUS1_WARN_ON(!RB_EMPTY_NODE(&handle->rb_node));
 
 	/*
 	 * The holder of the handle is locked. Lock the seqcount and try
@@ -462,7 +464,7 @@ bus1_handle_install_internal(struct bus1_handle *handle,
 			 * well-known node faster than we did. Drop our node
 			 * and switch over to the other one.
 			 */
-			WARN_ON(iter->holder != handle->holder);
+			BUS1_WARN_ON(iter->holder != handle->holder);
 
 			old = handle;
 			handle = bus1_handle_ref(iter);
@@ -489,7 +491,7 @@ static void bus1_handle_install_owner(struct bus1_handle *handle)
 {
 	struct bus1_peer_info *peer_info;
 
-	WARN_ON(!bus1_handle_is_owner(handle));
+	BUS1_WARN_ON(!bus1_handle_is_owner(handle));
 	peer_info = bus1_peer_dereference(rcu_access_pointer(handle->holder));
 	WARN_ON(handle != bus1_handle_install_internal(handle, peer_info));
 }
@@ -499,7 +501,7 @@ bus1_handle_install_holder(struct bus1_handle *handle)
 {
 	struct bus1_peer_info *peer_info;
 
-	WARN_ON(bus1_handle_is_owner(handle));
+	BUS1_WARN_ON(bus1_handle_is_owner(handle));
 	peer_info = bus1_peer_dereference(rcu_access_pointer(handle->holder));
 	return bus1_handle_install_internal(handle, peer_info);
 }
@@ -508,7 +510,7 @@ static void bus1_handle_uninstall_internal(struct bus1_handle *handle,
 					   struct bus1_peer_info *peer_info)
 {
 	lockdep_assert_held(&peer_info->lock);
-	WARN_ON(atomic_read(&handle->n_inflight) > 0);
+	BUS1_WARN_ON(atomic_read(&handle->n_inflight) > 0);
 
 	rcu_assign_pointer(handle->holder, NULL);
 
@@ -528,9 +530,9 @@ static void bus1_handle_uninstall_internal(struct bus1_handle *handle,
 static void bus1_handle_uninstall_owner(struct bus1_handle *handle,
 					struct bus1_peer_info *peer_info)
 {
-	WARN_ON(!bus1_handle_is_owner(handle));
-	WARN_ON(!bus1_node_is_destroyed(handle->node));
-	WARN_ON(!list_empty(&handle->node->list_handles));
+	BUS1_WARN_ON(!bus1_handle_is_owner(handle));
+	BUS1_WARN_ON(!bus1_node_is_destroyed(handle->node));
+	BUS1_WARN_ON(!list_empty(&handle->node->list_handles));
 
 	/*
 	 * In case of owners, we always leave notifications queued. This
@@ -547,7 +549,7 @@ static void bus1_handle_uninstall_holder(struct bus1_handle *handle,
 					 struct bus1_peer_info *peer_info)
 {
 	lockdep_assert_held(&peer_info->lock);
-	WARN_ON(bus1_handle_is_owner(handle));
+	BUS1_WARN_ON(bus1_handle_is_owner(handle));
 
 	bus1_handle_uninstall_internal(handle, peer_info);
 
@@ -703,7 +705,7 @@ static void bus1_handle_detach_internal(struct bus1_handle *handle,
 static void bus1_handle_detach_owner(struct bus1_handle *handle,
 				     struct bus1_peer_info *peer_info)
 {
-	WARN_ON(!bus1_handle_is_owner(handle));
+	BUS1_WARN_ON(!bus1_handle_is_owner(handle));
 	bus1_handle_detach_internal(handle, peer_info);
 
 	/*
@@ -721,8 +723,8 @@ static void bus1_handle_detach_holder(struct bus1_handle *handle)
 	struct bus1_peer_info *owner_info;
 	struct bus1_peer *owner;
 
-	WARN_ON(bus1_handle_is_owner(handle));
-	WARN_ON(rcu_access_pointer(handle->holder));
+	BUS1_WARN_ON(bus1_handle_is_owner(handle));
+	BUS1_WARN_ON(rcu_access_pointer(handle->holder));
 
 	owner = bus1_handle_acquire_holder(&handle->node->owner, &owner_info);
 	if (owner) {
@@ -737,7 +739,7 @@ static struct bus1_handle *
 bus1_handle_acquire(struct bus1_handle *handle,
 		    struct bus1_peer_info *peer_info)
 {
-	if (!handle || WARN_ON(!bus1_handle_was_attached(handle)))
+	if (!handle || BUS1_WARN_ON(!bus1_handle_was_attached(handle)))
 		return NULL;
 
 	if (!atomic_add_unless(&handle->n_inflight, 1, 0)) {
@@ -807,7 +809,7 @@ bus1_handle_release_owner(struct bus1_handle *handle,
 	 * See bus1_handle_release(). This must be called only on owner handles
 	 * and guarantees that the peer-lock stays locked.
 	 */
-	WARN_ON(!bus1_handle_is_owner(handle));
+	BUS1_WARN_ON(!bus1_handle_is_owner(handle));
 	WARN_ON(bus1_handle_release_internal(handle, peer_info));
 	return NULL;
 }
@@ -883,7 +885,7 @@ static bool bus1_node_is_valid(struct bus1_node *node,
 	 * the equivalent write-side barrier.
 	 */
 
-	WARN_ON(timestamp & 1);
+	BUS1_WARN_ON(timestamp & 1);
 
 	if (!bus1_node_is_destroyed(node))
 		return true;
@@ -937,7 +939,7 @@ static u64 bus1_handle_prepare_publish(struct bus1_handle *handle,
 	 */
 
 	lockdep_assert_held(&peer_info->lock);
-	WARN_ON(!bus1_handle_is_owner(handle) &&
+	BUS1_WARN_ON(!bus1_handle_is_owner(handle) &&
 		!bus1_handle_is_attached(handle));
 
 	if (!bus1_node_is_valid(handle->node, timestamp, sender))
@@ -961,7 +963,7 @@ static u64 bus1_handle_publish(struct bus1_handle *handle,
 	struct bus1_handle *iter;
 
 	lockdep_assert_held(&peer_info->lock);
-	WARN_ON(!bus1_handle_is_attached(handle));
+	BUS1_WARN_ON(!bus1_handle_is_attached(handle));
 
 	if (!bus1_node_is_valid(handle->node, timestamp, sender))
 		return BUS1_HANDLE_INVALID;
@@ -982,7 +984,7 @@ static u64 bus1_handle_publish(struct bus1_handle *handle,
 			if (handle->id < iter->id) {
 				slot = &n->rb_left;
 			} else /* if (handle->id >= iter->id) */ {
-				WARN_ON(handle->id == iter->id);
+				BUS1_WARN_ON(handle->id == iter->id);
 				slot = &n->rb_right;
 			}
 		}
@@ -1399,7 +1401,7 @@ void bus1_handle_flush_all(struct bus1_peer_info *peer_info,
 					 &peer_info->map_handles_by_node);
 				RB_CLEAR_NODE(&h->rb_node); /* steal ref */
 				bus1_handle_uninstall_holder(h, peer_info);
-				WARN_ON(!RB_EMPTY_NODE(&h->qnode.rb));
+				BUS1_WARN_ON(!RB_EMPTY_NODE(&h->qnode.rb));
 				list_add(&h->qnode.link, &list_remote);
 			}
 		}
@@ -1486,7 +1488,7 @@ int bus1_handle_dest_import(struct bus1_handle_dest *dest,
 	struct bus1_peer *dst_peer;
 	u64 id;
 
-	if (WARN_ON(dest->handle || dest->raw_peer || dest->idp))
+	if (BUS1_WARN_ON(dest->handle || dest->raw_peer || dest->idp))
 		return -ENOTRECOVERABLE;
 
 	if (get_user(id, idp))
@@ -1580,11 +1582,11 @@ u64 bus1_handle_dest_export(struct bus1_handle_dest *dest,
 
 	lockdep_assert_held(&peer_info->lock);
 
-	if (WARN_ON(!dest->handle || !dest->raw_peer))
+	if (BUS1_WARN_ON(!dest->handle || !dest->raw_peer))
 		return BUS1_HANDLE_INVALID;
 
 	if (dest->idp) {
-		WARN_ON(!bus1_handle_is_owner(dest->handle));
+		BUS1_WARN_ON(!bus1_handle_is_owner(dest->handle));
 		if (commit)
 			id = bus1_handle_publish(dest->handle, peer_info,
 						 timestamp, sender);
@@ -1595,7 +1597,7 @@ u64 bus1_handle_dest_export(struct bus1_handle_dest *dest,
 	} else if (!bus1_node_is_valid(dest->handle->node, timestamp, sender)) {
 		id = BUS1_HANDLE_INVALID;
 	} else {
-		WARN_ON(dest->handle->node->owner.id == BUS1_HANDLE_INVALID);
+		BUS1_WARN_ON(dest->handle->node->owner.id == BUS1_HANDLE_INVALID);
 		id = dest->handle->node->owner.id;
 	}
 
@@ -1772,7 +1774,7 @@ static void bus1_handle_batch_destroy(struct bus1_handle_batch *batch)
 						BUS1_HANDLE_BATCH_SIZE);
 	}
 
-	WARN_ON(batch->n_handles > 0);
+	BUS1_WARN_ON(batch->n_handles > 0);
 	batch->n_entries = 0;
 }
 
@@ -1782,7 +1784,7 @@ static int bus1_handle_batch_import(struct bus1_handle_batch *batch,
 {
 	union bus1_handle_entry *block;
 
-	if (WARN_ON(n_ids != batch->n_entries || batch->n_handles > 0))
+	if (BUS1_WARN_ON(n_ids != batch->n_entries || batch->n_handles > 0))
 		return -ENOTRECOVERABLE;
 
 	BUILD_BUG_ON(sizeof(*block) != sizeof(*ids));
@@ -1977,7 +1979,7 @@ int bus1_handle_transfer_export(struct bus1_handle_transfer *transfer,
 	u64 id;
 
 	lockdep_assert_held(&peer_info->lock);
-	WARN_ON(n_ids != transfer->batch.n_handles);
+	BUS1_WARN_ON(n_ids != transfer->batch.n_handles);
 
 	if (transfer->n_new < 1)
 		return 0;
@@ -1985,7 +1987,7 @@ int bus1_handle_transfer_export(struct bus1_handle_transfer *transfer,
 	BUS1_HANDLE_BATCH_FOREACH_HANDLE(entry, pos, &transfer->batch) {
 		if (!entry->handle || bus1_handle_was_attached(entry->handle))
 			continue;
-		if (WARN_ON(!bus1_handle_is_owner(entry->handle)))
+		if (BUS1_WARN_ON(!bus1_handle_is_owner(entry->handle)))
 			continue;
 
 		++n_new;
@@ -2004,7 +2006,7 @@ int bus1_handle_transfer_export(struct bus1_handle_transfer *transfer,
 	BUS1_HANDLE_BATCH_FOREACH_HANDLE(entry, pos, &transfer->batch) {
 		if (!entry->handle || bus1_handle_was_attached(entry->handle))
 			continue;
-		if (WARN_ON(!bus1_handle_is_owner(entry->handle)))
+		if (BUS1_WARN_ON(!bus1_handle_is_owner(entry->handle)))
 			continue;
 
 		bus1_handle_attach_owner(entry->handle, peer);
@@ -2091,9 +2093,9 @@ int bus1_handle_inflight_import(struct bus1_handle_inflight *inflight,
 	r = bus1_handle_batch_preload(&inflight->batch);
 	if (r < 0)
 		return r;
-	if (WARN_ON(inflight->batch.n_handles > 0))
+	if (BUS1_WARN_ON(inflight->batch.n_handles > 0))
 		return -ENOTRECOVERABLE;
-	if (WARN_ON(inflight->batch.n_entries != transfer->batch.n_entries))
+	if (BUS1_WARN_ON(inflight->batch.n_entries != transfer->batch.n_entries))
 		return -ENOTRECOVERABLE;
 
 	to = BUS1_HANDLE_BATCH_FIRST(&inflight->batch, pos_to);
@@ -2170,7 +2172,7 @@ void bus1_handle_inflight_install(struct bus1_handle_inflight *inflight,
 			if (--inflight->n_new < 1)
 				break;
 		}
-		WARN_ON(inflight->n_new > 0);
+		BUS1_WARN_ON(inflight->n_new > 0);
 	}
 
 	if (n_installs > 0) {
@@ -2179,7 +2181,7 @@ void bus1_handle_inflight_install(struct bus1_handle_inflight *inflight,
 			h = e->handle;
 			if (!h || !RB_EMPTY_NODE(&h->rb_node))
 				continue;
-			if (WARN_ON(!bus1_handle_was_attached(h)))
+			if (BUS1_WARN_ON(!bus1_handle_was_attached(h)))
 				continue;
 
 			t = bus1_handle_install_holder(h);
@@ -2194,7 +2196,7 @@ void bus1_handle_inflight_install(struct bus1_handle_inflight *inflight,
 				break;
 		}
 		mutex_unlock(&dst_info->lock);
-		WARN_ON(n_installs > 0);
+		BUS1_WARN_ON(n_installs > 0);
 	}
 }
 
@@ -2239,7 +2241,7 @@ size_t bus1_handle_inflight_walk(struct bus1_handle_inflight *inflight,
 
 	lockdep_assert_held(&peer_info->lock);
 
-	if (WARN_ON(inflight->batch.n_handles != inflight->batch.n_entries))
+	if (BUS1_WARN_ON(inflight->batch.n_handles != inflight->batch.n_entries))
 		return 0;
 
 	n = bus1_handle_batch_walk(&inflight->batch, pos, block);
@@ -2282,7 +2284,7 @@ void bus1_handle_inflight_commit(struct bus1_handle_inflight *inflight,
 	size_t pos;
 
 	lockdep_assert_held(&peer_info->lock);
-	WARN_ON(inflight->batch.n_handles != inflight->batch.n_entries);
+	BUS1_WARN_ON(inflight->batch.n_handles != inflight->batch.n_entries);
 
 	BUS1_HANDLE_BATCH_FOREACH_HANDLE(e, pos, &inflight->batch) {
 		if (e->handle)

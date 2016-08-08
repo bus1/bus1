@@ -27,6 +27,12 @@
 struct dentry;
 struct iovec;
 
+#if defined(CONFIG_DEBUG)
+  #define BUS1_WARN_ON(cond)		WARN_ON(cond)
+#else
+  #define BUS1_WARN_ON(cond)		({false;})
+#endif
+
 int bus1_import_vecs(struct iovec *out_vecs,
 		     size_t *out_length,
 		     const void __user *vecs,

@@ -55,8 +55,8 @@ MODULE_PARM_DESC(user_fds_max, "Max number of fds for each user.");
  */
 void bus1_user_exit(void)
 {
-	WARN_ON(!idr_is_empty(&bus1_user_ida.idr));
-	WARN_ON(!idr_is_empty(&bus1_user_idr));
+	BUS1_WARN_ON(!idr_is_empty(&bus1_user_ida.idr));
+	BUS1_WARN_ON(!idr_is_empty(&bus1_user_idr));
 	ida_destroy(&bus1_user_ida);
 	idr_destroy(&bus1_user_idr);
 	idr_init(&bus1_user_idr);
@@ -91,13 +91,13 @@ static void bus1_user_free(struct kref *ref)
 {
 	struct bus1_user *user = container_of(ref, struct bus1_user, ref);
 
-	WARN_ON(atomic_read(&user->n_inflight_fds) !=
+	BUS1_WARN_ON(atomic_read(&user->n_inflight_fds) !=
 					atomic_read(&user->max_fds));
-	WARN_ON(atomic_read(&user->n_inflight_bytes) !=
+	BUS1_WARN_ON(atomic_read(&user->n_inflight_bytes) !=
 					atomic_read(&user->max_bytes));
-	WARN_ON(atomic_read(&user->n_handles) !=
+	BUS1_WARN_ON(atomic_read(&user->n_handles) !=
 					atomic_read(&user->max_handles));
-	WARN_ON(atomic_read(&user->n_slices) !=
+	BUS1_WARN_ON(atomic_read(&user->n_slices) !=
 					atomic_read(&user->max_slices));
 
 	/* if already dropped, it's set to invalid */
@@ -130,7 +130,7 @@ struct bus1_user *bus1_user_ref_by_uid(kuid_t uid)
 	struct bus1_user *user, *old_user;
 	int r;
 
-	if (WARN_ON(!uid_valid(uid)))
+	if (BUS1_WARN_ON(!uid_valid(uid)))
 		return ERR_PTR(-ENOTRECOVERABLE);
 
 	/* try to get the user without taking a lock */
@@ -436,10 +436,10 @@ void bus1_user_quota_discharge(struct bus1_peer_info *peer_info,
 	if (WARN_ON(IS_ERR_OR_NULL(stats)))
 		return;
 
-	WARN_ON(stats->n_slices < 1);
-	WARN_ON(stats->n_handles < n_handles);
-	WARN_ON(stats->n_bytes < n_bytes);
-	WARN_ON(stats->n_fds < n_fds);
+	BUS1_WARN_ON(stats->n_slices < 1);
+	BUS1_WARN_ON(stats->n_handles < n_handles);
+	BUS1_WARN_ON(stats->n_bytes < n_bytes);
+	BUS1_WARN_ON(stats->n_fds < n_fds);
 
 	stats->n_slices -= 1;
 	stats->n_handles -= n_handles;
@@ -477,10 +477,10 @@ void bus1_user_quota_commit(struct bus1_peer_info *peer_info,
 	if (WARN_ON(IS_ERR_OR_NULL(stats)))
 		return;
 
-	WARN_ON(stats->n_slices < 1);
-	WARN_ON(stats->n_handles < n_handles);
-	WARN_ON(stats->n_bytes < n_bytes);
-	WARN_ON(stats->n_fds < n_fds);
+	BUS1_WARN_ON(stats->n_slices < 1);
+	BUS1_WARN_ON(stats->n_handles < n_handles);
+	BUS1_WARN_ON(stats->n_bytes < n_bytes);
+	BUS1_WARN_ON(stats->n_fds < n_fds);
 
 	stats->n_slices -= 1;
 	stats->n_handles -= n_handles;

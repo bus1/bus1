@@ -42,6 +42,7 @@
 #include <linux/kernel.h>
 #include <linux/rbtree.h>
 #include <linux/types.h>
+#include "util.h"
 
 struct file;
 struct iovec;
@@ -137,7 +138,7 @@ ssize_t bus1_pool_write_kvec(struct bus1_pool *pool,
  */
 static inline bool bus1_pool_slice_is_public(struct bus1_pool_slice *slice)
 {
-	WARN_ON(!slice->ref_kernel);
+	BUS1_WARN_ON(!slice->ref_kernel);
 	return slice->ref_user;
 }
 

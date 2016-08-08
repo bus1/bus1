@@ -97,11 +97,11 @@ static void bus1_message_free(struct kref *ref)
 						    qnode.ref);
 	size_t i;
 
-	WARN_ON(message->slice);
-	WARN_ON(message->transaction.dest.raw_peer);
-	WARN_ON(message->transaction.dest.handle);
-	WARN_ON(message->transaction.next);
-	WARN_ON(atomic_read(&message->n_pins) > 0);
+	BUS1_WARN_ON(message->slice);
+	BUS1_WARN_ON(message->transaction.dest.raw_peer);
+	BUS1_WARN_ON(message->transaction.dest.handle);
+	BUS1_WARN_ON(message->transaction.next);
+	BUS1_WARN_ON(atomic_read(&message->n_pins) > 0);
 
 	for (i = 0; i < message->n_files; ++i)
 		bus1_fput(message->files[i]);
@@ -149,7 +149,7 @@ int bus1_message_allocate(struct bus1_message *message,
 	size_t slice_size;
 	int r;
 
-	if (WARN_ON(atomic_read(&message->n_pins) > 0 || message->slice))
+	if (BUS1_WARN_ON(atomic_read(&message->n_pins) > 0 || message->slice))
 		return -ENOTRECOVERABLE;
 
 	/* cannot overflow as all of those are limited */
@@ -273,7 +273,7 @@ int bus1_message_install(struct bus1_message *message,
 
 	lockdep_assert_held(&peer_info->lock);
 
-	if (WARN_ON(!message->slice))
+	if (BUS1_WARN_ON(!message->slice))
 		return -ENOTRECOVERABLE;
 
 	/*
@@ -304,7 +304,7 @@ int bus1_message_install(struct bus1_message *message,
 						peer_info, &pos, &n_handles,
 						&iter, ids, ts,
 						message->qnode.sender)) > 0) {
-			WARN_ON(n > n_ids);
+			BUS1_WARN_ON(n > n_ids);
 
 			vec.iov_base = ids;
 			vec.iov_len = n * sizeof(u64);
@@ -349,7 +349,7 @@ int bus1_message_install(struct bus1_message *message,
 	/* account handles */
 	if (n_handles > 0) {
 		if (!peek) {
-			WARN_ON(n_handles > message->n_accounted_handles);
+			BUS1_WARN_ON(n_handles > message->n_accounted_handles);
 			atomic_add(message->n_accounted_handles - n_handles,
 				   &peer_info->user->n_handles);
 			message->n_accounted_handles = 0;

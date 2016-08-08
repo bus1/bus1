@@ -75,7 +75,7 @@ void bus1_active_destroy(struct bus1_active *active)
 	int v;
 
 	v = atomic_read(&active->count);
-	WARN_ON(v != BUS1_ACTIVE_NEW && v != BUS1_ACTIVE_DONE);
+	BUS1_WARN_ON(v != BUS1_ACTIVE_NEW && v != BUS1_ACTIVE_DONE);
 }
 
 /**
@@ -202,7 +202,7 @@ bool bus1_active_deactivate(struct bus1_active *active)
  */
 void bus1_active_drain(struct bus1_active *active, wait_queue_head_t *waitq)
 {
-	if (WARN_ON(!bus1_active_is_deactivated(active)))
+	if (BUS1_WARN_ON(!bus1_active_is_deactivated(active)))
 		return;
 
 #ifdef CONFIG_DEBUG_LOCK_ALLOC
@@ -270,7 +270,7 @@ bool bus1_active_cleanup(struct bus1_active *active,
 {
 	int v;
 
-	if (WARN_ON(!bus1_active_is_drained(active)))
+	if (BUS1_WARN_ON(!bus1_active_is_drained(active)))
 		return false;
 
 #ifdef CONFIG_DEBUG_LOCK_ALLOC

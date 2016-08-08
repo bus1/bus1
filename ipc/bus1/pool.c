@@ -243,7 +243,7 @@ void bus1_pool_destroy(struct bus1_pool *pool)
 	while ((slice = list_first_entry_or_null(&pool->slices,
 						 struct bus1_pool_slice,
 						 entry))) {
-		WARN_ON(slice->ref_kernel);
+		BUS1_WARN_ON(slice->ref_kernel);
 		list_del(&slice->entry);
 		bus1_pool_slice_free(slice);
 	}
@@ -325,7 +325,7 @@ static void bus1_pool_free(struct bus1_pool *pool,
 	struct bus1_pool_slice *ps;
 
 	/* don't free the slice if either has a reference */
-	if (slice->ref_kernel || slice->ref_user || WARN_ON(slice->free))
+	if (slice->ref_kernel || slice->ref_user || BUS1_WARN_ON(slice->free))
 		return;
 
 	/*
@@ -381,7 +381,7 @@ static void bus1_pool_free(struct bus1_pool *pool,
 struct bus1_pool_slice *
 bus1_pool_release_kernel(struct bus1_pool *pool, struct bus1_pool_slice *slice)
 {
-	if (!slice || WARN_ON(!slice->ref_kernel))
+	if (!slice || BUS1_WARN_ON(!slice->ref_kernel))
 		return NULL;
 
 	bus1_pool_assert_held(pool);
@@ -409,7 +409,7 @@ void bus1_pool_publish(struct bus1_pool *pool, struct bus1_pool_slice *slice)
 	bus1_pool_assert_held(pool);
 
 	/* kernel must own a ref to @slice to publish it */
-	WARN_ON(!slice->ref_kernel);
+	BUS1_WARN_ON(!slice->ref_kernel);
 	slice->ref_user = true;
 }
 
