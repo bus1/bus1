@@ -13,15 +13,15 @@
 /**
  * DOC: Bus1 Overview
  *
- * The bus1.ko module is a local IPC technology which provides a decentralized
- * infrastructure to share objects between local peers. The main building
- * blocks are nodes and handles. Nodes represent objects of a local peer,
- * while handles represent descriptors that point to a node. Nodes can be
- * created and destroyed by any peer, and they will always remain owned by
- * their respective creator. Handles, on the other hand, are used to refer to
- * nodes and can be passed around with messages as auxiliary data. Whenever a
- * handle is transferred, the receiver will get its own handle allocated,
- * pointing to the same node as the original handle.
+ * bus1 is a local IPC system, which provides a decentralized infrastructure to
+ * share objects between local peers. The main building blocks are nodes and
+ * handles. Nodes represent objects of a local peer, while handles represent
+ * descriptors that point to a node. Nodes can be created and destroyed by any
+ * peer, and they will always remain owned by their respective creator. Handles,
+ * on the other hand, are used to refer to nodes and can be passed around with
+ * messages as auxiliary data. Whenever a handle is transferred, the receiver
+ * will get its own handle allocated, pointing to the same node as the original
+ * handle.
  *
  * Any peer can send messages directed at one of their handles. This will
  * transfer the message to the owner of the node the handle points to. If a
@@ -35,12 +35,11 @@
  * destruction.
  *
  * Unlike nodes and handles, peers cannot be addressed directly. In fact, peers
- * are completely disconnected entities in bus1.ko. A peer is merely an anchor
- * of a set of nodes and handles, including an incoming message queue for any
- * of those. Whether multiple nodes are all part of the same set (and as such
- * the same peer), or part of different sets, does not affect the remote view
- * of those. Peers solely exist as management entity and command dispatcher to
- * local processes.
+ * are completely disconnected entities. A peer is merely an anchor of a set of
+ * nodes and handles, including an incoming message queue for any of those.
+ * Whether multiple nodes are all part of the same peer, or part of different
+ * peers does not affect the remote view of those. Peers solely exist as
+ * management entity and command dispatcher to local processes.
  *
  * The set of actors on a system is completely decentralized. There is no
  * global component involved that provides a central registry or discovery
@@ -55,7 +54,7 @@
  *
  * Most of the bus1 objects form a hierarchy, as such, their locks must be
  * ordered. Not all orders are explicitly defined (e.g., they might define
- * orthogonal hierarchies), but this list tries to give a rough overview:
+ * orthogonal hierarchies), but this list gives a rough overview:
  *
  *   bus1_peer.active
  *     bus1_user_lock
