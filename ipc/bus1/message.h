@@ -22,6 +22,7 @@
 #include <uapi/linux/bus1.h>
 #include "handle.h"
 #include "queue.h"
+#include "util.h"
 
 struct bus1_message;
 struct bus1_peer;
@@ -98,9 +99,8 @@ struct bus1_message *bus1_message_unpin(struct bus1_message *message,
 static inline struct bus1_message *
 bus1_message_from_node(struct bus1_queue_node *node)
 {
-	unsigned int type = bus1_queue_node_get_type(node);
-
-	if (WARN_ON(type != BUS1_QUEUE_NODE_MESSAGE_NORMAL))
+	if (BUS1_WARN_ON(bus1_queue_node_get_type(node) !=
+			 BUS1_QUEUE_NODE_MESSAGE_NORMAL))
 		return NULL;
 
 	return container_of(node, struct bus1_message, qnode);
