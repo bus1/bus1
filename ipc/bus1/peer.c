@@ -671,9 +671,6 @@ static int bus1_peer_ioctl_recv(struct bus1_peer *peer, unsigned long arg)
  * This handles the given ioctl (cmd+arg) on the passed peer. The caller must
  * hold an active reference to @peer.
  *
- * This only handles the runtime ioctls. Setup and teardown must be called
- * directly.
- *
  * Multiple ioctls can be called in parallel just fine. No locking is needed.
  *
  * Return: 0 on success, negative error code on failure.
