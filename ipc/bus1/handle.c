@@ -957,7 +957,8 @@ static u64 bus1_handle_prepare_publish(struct bus1_handle *handle,
 static u64 bus1_handle_publish(struct bus1_handle *handle,
 			       struct bus1_peer_info *peer_info,
 			       u64 timestamp,
-			       unsigned long sender)
+			       unsigned long sender,
+			       bool userref)
 {
 	struct rb_node *n, **slot;
 	struct bus1_handle *iter;
@@ -995,8 +996,10 @@ static u64 bus1_handle_publish(struct bus1_handle *handle,
 	write_seqcount_end(&peer_info->seqcount);
 
 	/* publish the ref to user-space; this pins an inflight ref */
-	WARN_ON(atomic_inc_return(&handle->n_user) != 0);
-	WARN_ON(atomic_inc_return(&handle->n_inflight) < 2);
+	if (userref) {
+		WARN_ON(atomic_inc_return(&handle->n_user) != 0);
+		WARN_ON(atomic_inc_return(&handle->n_inflight) < 2);
+	}
 
 	return handle->id;
 }
@@ -1144,8 +1147,8 @@ int bus1_handle_pair(struct bus1_peer *peer,
 			goto exit;
 		}
 	} else {
-		/* account new node+handle on @peer_info */
-		if (!bus1_atomic_sub_if_ge(&peer_info->user->n_handles, 2, 2)) {
+		/* account new node on @peer_info */
+		if (!bus1_atomic_sub_if_ge(&peer_info->user->n_handles, 1, 1)) {
 			atomic_inc(&clone_info->user->n_handles);
 			r = -EDQUOT;
 			goto exit;
@@ -1157,7 +1160,8 @@ int bus1_handle_pair(struct bus1_peer *peer,
 		bus1_handle_install_owner(peer_handle);
 
 		WARN_ON(!bus1_handle_attach_holder(clone_handle, clone));
-		*peer_idp = bus1_handle_publish(peer_handle, peer_info, 0, 0);
+		*peer_idp = bus1_handle_publish(peer_handle, peer_info, 0, 0,
+						false);
 
 		/* release the inflight-ref acquired via attach() and unlock */
 		bus1_handle_release_unlock(peer_handle, peer_info);
@@ -1171,7 +1175,7 @@ int bus1_handle_pair(struct bus1_peer *peer,
 	mutex_lock(&clone_info->lock);
 	t = clone_handle;
 	clone_handle = bus1_handle_install_holder(t);
-	*clone_idp = bus1_handle_publish(clone_handle, clone_info, 0, 0);
+	*clone_idp = bus1_handle_publish(clone_handle, clone_info, 0, 0, true);
 	/* release the inflight-ref acquired via attach() and unlock */
 	bus1_handle_release_unlock(clone_handle, clone_info);
 
@@ -1192,7 +1196,7 @@ exit:
 /**
  * bus1_handle_release_by_id() - release a user handle
  * @peer_info:		peer to operate on
- * @idp:		pointer to handle ID
+ * @id:			handle ID
  * @n_handlesp:		output-var to store number of released handles, or NULL
  *
  * This releases a *user* visible reference to the handle with the given ID.
@@ -1206,7 +1210,7 @@ exit:
  * Return: >=0 on success, negative error code on failure.
  */
 int bus1_handle_release_by_id(struct bus1_peer *peer,
-			      u64 *idp,
+			      u64 id,
 			      size_t *n_handlesp)
 {
 	struct bus1_peer_info *peer_info = bus1_peer_dereference(peer);
@@ -1214,59 +1218,31 @@ int bus1_handle_release_by_id(struct bus1_peer *peer,
 	size_t n_handles = 0;
 	int r, n_user;
 
-	if (*idp & BUS1_NODE_FLAG_ALLOCATE) {
-		/*
-		 * Handle accounting counts both, valid user-referenced handles
-		 * and live nodes. This call creates a new live-node including
-		 * a user-reference, but drops the latter immediately and leaves
-		 * the node around live. Therefore, the accounting net-change of
-		 * this is +1.
-		 */
-		if (atomic_dec_if_positive(&peer_info->user->n_handles) < 0)
-			return -EDQUOT;
+	handle = bus1_handle_find_by_id(peer_info, id);
+	if (!handle)
+		return -ENXIO;
 
-		handle = bus1_handle_new_owner(*idp);
-		if (IS_ERR(handle)) {
-			atomic_inc(&peer_info->user->n_handles);
-			return PTR_ERR(handle);
-		}
-
-		mutex_lock(&peer_info->lock);
-		bus1_handle_attach_owner(handle, peer);
-		bus1_handle_install_owner(handle);
-		*idp = bus1_handle_publish(handle, peer_info, 0, 0);
-		WARN_ON(atomic_dec_return(&handle->n_user) != -1);
-		WARN_ON(atomic_dec_return(&handle->n_inflight) < 1);
-		bus1_handle_release_unlock(handle, peer_info);
-
-		r = 1;
+	/* returns "old_value - 1", regardless whether it succeeded */
+	n_user = atomic_dec_if_positive(&handle->n_user);
+	if (n_user >= 0) {
+		/* DEC happened, but didn't drop to -1 */
+		r = 0;
+	} else if (n_user < -1) {
+		/* DEC did not happen, no ref owned */
+		r = -ENXIO;
 	} else {
-		handle = bus1_handle_find_by_id(peer_info, *idp);
-		if (!handle)
-			return -ENXIO;
-
-		/* returns "old_value - 1", regardless whether it succeeded */
-		n_user = atomic_dec_if_positive(&handle->n_user);
-		if (n_user >= 0) {
-			/* DEC happened, but didn't drop to -1 */
-			r = 0;
-		} else if (n_user < -1) {
-			/* DEC did not happen, no ref owned */
+		/* DEC did not happen, try again locked */
+		mutex_lock(&peer_info->lock);
+		if (atomic_read(&handle->n_user) < 0) {
+			mutex_unlock(&peer_info->lock);
 			r = -ENXIO;
+		} else if (atomic_dec_return(&handle->n_user) > -1) {
+			mutex_unlock(&peer_info->lock);
+			r = 0;
 		} else {
-			/* DEC did not happen, try again locked */
-			mutex_lock(&peer_info->lock);
-			if (atomic_read(&handle->n_user) < 0) {
-				mutex_unlock(&peer_info->lock);
-				r = -ENXIO;
-			} else if (atomic_dec_return(&handle->n_user) > -1) {
-				mutex_unlock(&peer_info->lock);
-				r = 0;
-			} else {
-				++n_handles;
-				bus1_handle_release_unlock(handle, peer_info);
-				r = 0;
-			}
+			++n_handles;
+			bus1_handle_release_unlock(handle, peer_info);
+			r = 0;
 		}
 	}
 
@@ -1303,16 +1279,6 @@ int bus1_node_destroy_by_id(struct bus1_peer *peer,
 	int r;
 
 	if (*idp & BUS1_NODE_FLAG_ALLOCATE) {
-		/*
-		 * Handle accounting counts both, valid user-referenced handles
-		 * and live nodes. This call creates a new live-node and
-		 * immediately destroys it, but leaves a user-reference behind
-		 * (DESTROY never releases user references). Therefore, the
-		 * accounting net-change of this is +1.
-		 */
-		if (atomic_dec_if_positive(&peer_info->user->n_handles) < 0)
-			return -EDQUOT;
-
 		handle = bus1_handle_new_owner(*idp);
 		if (IS_ERR(handle)) {
 			atomic_inc(&peer_info->user->n_handles);
@@ -1322,7 +1288,7 @@ int bus1_node_destroy_by_id(struct bus1_peer *peer,
 		mutex_lock(&peer_info->lock);
 		bus1_handle_attach_owner(handle, peer);
 		bus1_handle_install_owner(handle);
-		*idp = bus1_handle_publish(handle, peer_info, 0, 0);
+		*idp = bus1_handle_publish(handle, peer_info, 0, 0, false);
 		bus1_node_destroy(handle->node, peer_info);
 		bus1_handle_release_unlock(handle, peer_info);
 
@@ -1563,10 +1529,8 @@ int bus1_handle_dest_import(struct bus1_handle_dest *dest,
  * @commit:		whether to commit the node
  *
  * If a node was created as the destination of a transaction, we have to publish
- * a single user reference to the node and provide it back to the caller. This
- * function acquires the ID and optionally publishes the user-ref for it. Either
- * way the ID is returned, and it is up to the caller to copy it back to
- * userspace.
+ * a its handle ID back to the caller. This function acquires the ID, and it is
+ * up to the caller to copy it back to userspace.
  *
  * The caller must hold the peer lock of @peer_info.
  *
@@ -1589,7 +1553,7 @@ u64 bus1_handle_dest_export(struct bus1_handle_dest *dest,
 		BUS1_WARN_ON(!bus1_handle_is_owner(dest->handle));
 		if (commit)
 			id = bus1_handle_publish(dest->handle, peer_info,
-						 timestamp, sender);
+						 timestamp, sender, false);
 		else
 			id = bus1_handle_prepare_publish(dest->handle,
 							 peer_info, timestamp,
@@ -1960,9 +1924,8 @@ int bus1_handle_transfer_import(struct bus1_handle_transfer *transfer,
  * @n_ids:		number of IDs
  *
  * For every node that is created as part of an handle transfer, we have to
- * publish a single user reference to the node and provide it back to the
- * caller. This function both publishes those user-refs *and* directly copies
- * them over into the user-provided buffers.
+ * publish the handle ID back to the caller. This function acquires the hande
+ * IDs *and* directly copies them over into the user-provided buffers.
  *
  * The caller must hold the peer lock of @peer_info.
  *
@@ -1999,7 +1962,7 @@ int bus1_handle_transfer_export(struct bus1_handle_transfer *transfer,
 		}
 	}
 
-	n_new *= 2; /* account for node+handle */
+	/* account for new nodes */
 	if (!bus1_atomic_sub_if_ge(&peer_info->user->n_handles, n_new, n_new))
 		return -EDQUOT;
 
@@ -2011,7 +1974,7 @@ int bus1_handle_transfer_export(struct bus1_handle_transfer *transfer,
 
 		bus1_handle_attach_owner(entry->handle, peer);
 		bus1_handle_install_owner(entry->handle);
-		bus1_handle_publish(entry->handle, peer_info, 0, 0);
+		bus1_handle_publish(entry->handle, peer_info, 0, 0, false);
 	}
 
 	transfer->n_new = 0;
@@ -2289,6 +2252,6 @@ void bus1_handle_inflight_commit(struct bus1_handle_inflight *inflight,
 	BUS1_HANDLE_BATCH_FOREACH_HANDLE(e, pos, &inflight->batch) {
 		if (e->handle)
 			bus1_handle_publish(e->handle, peer_info, timestamp,
-					    sender);
+					    sender, true);
 	}
 }

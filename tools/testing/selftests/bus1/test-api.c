@@ -120,14 +120,6 @@ static void test_api_handle(void)
 	assert(r < 0);
 	assert(r == -ENXIO);
 
-	/* verify clone-handle can release its handle exactly once */
-
-	r = bus1_peer_handle_release(c2, handle);
-	assert(r >= 0);
-	r = bus1_peer_handle_release(c2, handle);
-	assert(r < 0);
-	assert(r == -ENXIO);
-
 	/* verify that no notification has been queued, yet */
 
 	recv = (struct bus1_cmd_recv){};
@@ -136,11 +128,11 @@ static void test_api_handle(void)
 	r = bus1_peer_recv(c2, &recv);
 	assert(r == -EAGAIN);
 
-	/* verify that the owner can release its handle exactly once */
+	/* verify clone-handle can release its handle exactly once */
 
-	r = bus1_peer_handle_release(c1, handle);
+	r = bus1_peer_handle_release(c2, handle);
 	assert(r >= 0);
-	r = bus1_peer_handle_release(c1, handle);
+	r = bus1_peer_handle_release(c2, handle);
 	assert(r < 0);
 	assert(r == -ENXIO);
 
@@ -150,12 +142,19 @@ static void test_api_handle(void)
 	r = bus1_peer_recv(c1, &recv);
 	assert(r >= 0);
 	assert(recv.msg.type == BUS1_MSG_NODE_RELEASE);
+	assert(recv.msg.destination == node);
+
+	/* verify that the owner does not have a userref to its handle */
+
+	r = bus1_peer_handle_release(c1, node);
+	assert(r < 0);
+	assert(r == -ENXIO);
 
 	/* verify that the owner can destroy its handle exactly once */
 
-	r = bus1_peer_node_destroy(c1, handle);
+	r = bus1_peer_node_destroy(c1, node);
 	assert(r >= 0);
-	r = bus1_peer_node_destroy(c1, handle);
+	r = bus1_peer_node_destroy(c1, node);
 	assert(r < 0);
 	assert(r == -ENXIO);
 
@@ -165,6 +164,7 @@ static void test_api_handle(void)
 	r = bus1_peer_recv(c1, &recv);
 	assert(r >= 0);
 	assert(recv.msg.type == BUS1_MSG_NODE_DESTROY);
+	assert(recv.msg.destination == node);
 
 	/* verify that both queues are empty (no unexpected notifications) */
 

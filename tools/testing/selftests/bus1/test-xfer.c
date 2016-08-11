@@ -40,13 +40,14 @@ static void test_xfer_multicast(void)
 	int r;
 
 	/*
-	 * We create a root peer @c1 with 2 nodes, each of which is imported
-	 * into one clone each. We now create a node in each clone and send a
-	 * handle back to @c1. Those nodes are called @node20 and @node30. Once
-	 * done, we multicast from @c1 to those new nodes, thus reaching the
-	 * queues of @c2 and @c3. This multicast carries all so far known
-	 * handles, and also allocates new nodes on-the-fly. Finally, we verify
-	 * each client got what we expected.
+	 * We create three peers @c1, @c2 and @c3. @c1 has two nodes, each of
+	 * which is imported into one of the two other peers. We now create a
+	 * node in each child peer and send a handle back to @c1. Those nodes
+	 * are called @node20 and @node30. Once done, we multicast from @c1 to
+	 * those new nodes, thus reaching the queues of @c2 and @c3. This
+	 * multicast carries all so far known handles, and also allocates new
+	 * nodes on-the-fly. Finally, we verify each client got what we
+	 * expected.
 	 */
 
 	/* create three peers and pass a handle from the second and third
@@ -210,79 +211,95 @@ static void test_xfer_multicast(void)
 
 	r = bus1_peer_node_destroy(c1, node2);
 	assert(r >= 0);
-	r = bus1_peer_handle_release(c1, node2);
-	assert(r >= 0);
+	r = bus1_peer_node_destroy(c1, node2);
+	assert(r < 0);
+	assert(r == -ENXIO);
 	r = bus1_peer_handle_release(c1, node2);
 	assert(r < 0);
+	assert(r == -ENXIO);
 
 	r = bus1_peer_node_destroy(c1, node3);
 	assert(r >= 0);
-	r = bus1_peer_handle_release(c1, node3);
-	assert(r >= 0);
+	r = bus1_peer_node_destroy(c1, node3);
+	assert(r < 0);
+	assert(r == -ENXIO);
 	r = bus1_peer_handle_release(c1, node3);
 	assert(r < 0);
+	assert(r == -ENXIO);
 
 	r = bus1_peer_node_destroy(c1, handle20);
 	assert(r < 0);
+	assert(r == -ENXIO);
 	r = bus1_peer_handle_release(c1, handle20);
 	assert(r >= 0);
 	r = bus1_peer_handle_release(c1, handle20);
 	assert(r < 0);
+	assert(r == -ENXIO);
 
 	r = bus1_peer_node_destroy(c1, handle30);
 	assert(r < 0);
+	assert(r == -ENXIO);
 	r = bus1_peer_handle_release(c1, handle30);
 	assert(r >= 0);
 	r = bus1_peer_handle_release(c1, handle30);
 	assert(r < 0);
+	assert(r == -ENXIO);
 
 	/*
 	 * ..and c2 owns:
 	 *  - 2x handle2
-	 *  - 2x node20
+	 *  - 1x node20
 	 */
 
 	r = bus1_peer_node_destroy(c2, handle2);
 	assert(r < 0);
+	assert(r == -ENXIO);
 	r = bus1_peer_handle_release(c2, handle2);
 	assert(r >= 0);
 	r = bus1_peer_handle_release(c2, handle2);
 	assert(r >= 0);
 	r = bus1_peer_handle_release(c2, handle2);
 	assert(r < 0);
+	assert(r == -ENXIO);
 
 	r = bus1_peer_node_destroy(c2, node20);
 	assert(r >= 0);
-	r = bus1_peer_handle_release(c2, node20);
-	assert(r >= 0);
+	r = bus1_peer_node_destroy(c2, node20);
+	assert(r < 0);
+	assert(r == -ENXIO);
 	r = bus1_peer_handle_release(c2, node20);
 	assert(r >= 0);
 	r = bus1_peer_handle_release(c2, node20);
 	assert(r < 0);
+	assert(r == -ENXIO);
 
 	/*
 	 * ..and c3 owns:
 	 *  - 2x handle3
-	 *  - 2x node30
+	 *  - 1x node30
 	 */
 
 	r = bus1_peer_node_destroy(c3, handle3);
 	assert(r < 0);
+	assert(r == -ENXIO);
 	r = bus1_peer_handle_release(c3, handle3);
 	assert(r >= 0);
 	r = bus1_peer_handle_release(c3, handle3);
 	assert(r >= 0);
 	r = bus1_peer_handle_release(c3, handle3);
 	assert(r < 0);
+	assert(r == -ENXIO);
 
 	r = bus1_peer_node_destroy(c3, node30);
 	assert(r >= 0);
-	r = bus1_peer_handle_release(c3, node30);
-	assert(r >= 0);
+	r = bus1_peer_node_destroy(c3, node30);
+	assert(r < 0);
+	assert(r == -ENXIO);
 	r = bus1_peer_handle_release(c3, node30);
 	assert(r >= 0);
 	r = bus1_peer_handle_release(c3, node30);
 	assert(r < 0);
+	assert(r == -ENXIO);
 
 	/*
 	 * Drop peers. There are foreign handles left (e.g., copy of handle3 in
@@ -297,8 +314,109 @@ static void test_xfer_multicast(void)
 	bus1_peer_free(c1);
 }
 
+static void test_xfer_release_notification(void)
+{
+	struct bus1_cmd_recv recv;
+	struct bus1_peer *c1, *c2;
+	uint64_t node, handle;
+	int r;
+
+	r = bus1_peer_new_from_path(&c1, test_path);
+	assert(r >= 0);
+	r = bus1_peer_new_from_path(&c2, test_path);
+	assert(r >= 0);
+
+	node = BUS1_NODE_FLAG_MANAGED | BUS1_NODE_FLAG_ALLOCATE;
+	handle = BUS1_HANDLE_INVALID;
+	r = bus1_peer_handle_transfer(c1, c2, &node, &handle);
+	assert(r >= 0);
+
+	r = bus1_peer_handle_release(c2, handle);
+	assert(r >= 0);
+	r = bus1_peer_handle_release(c2, handle);
+	assert(r < 0);
+	assert(r == -ENXIO);
+	r = bus1_peer_handle_release(c1, node);
+	assert(r < 0);
+	assert(r == -ENXIO);
+
+	recv = (struct bus1_cmd_recv){};
+	r = bus1_peer_recv(c1, &recv);
+	assert(r >= 0);
+	assert(recv.msg.type == BUS1_MSG_NODE_RELEASE);
+	assert(recv.msg.destination == node);
+
+	r = bus1_peer_node_destroy(c1, node);
+	assert(r >= 0);
+
+	recv = (struct bus1_cmd_recv){};
+	r = bus1_peer_recv(c1, &recv);
+	assert(r >= 0);
+	assert(recv.msg.type == BUS1_MSG_NODE_DESTROY);
+	assert(recv.msg.destination == node);
+
+	recv = (struct bus1_cmd_recv){};
+	r = bus1_peer_recv(c1, &recv);
+	assert(r < 0);
+	assert(r == -EAGAIN);
+	recv = (struct bus1_cmd_recv){};
+	r = bus1_peer_recv(c2, &recv);
+	assert(r < 0);
+	assert(r == -EAGAIN);
+
+	bus1_peer_free(c2);
+	bus1_peer_free(c1);
+}
+
+static void test_xfer_destroy_notification(void)
+{
+	struct bus1_cmd_recv recv;
+	struct bus1_peer *c1, *c2;
+	uint64_t node, handle;
+	int r;
+
+	r = bus1_peer_new_from_path(&c1, test_path);
+	assert(r >= 0);
+	r = bus1_peer_new_from_path(&c2, test_path);
+	assert(r >= 0);
+
+	node = BUS1_NODE_FLAG_MANAGED | BUS1_NODE_FLAG_ALLOCATE;
+	handle = BUS1_HANDLE_INVALID;
+	r = bus1_peer_handle_transfer(c1, c2, &node, &handle);
+	assert(r >= 0);
+
+	r = bus1_peer_node_destroy(c1, node);
+	assert(r >= 0);
+
+	recv = (struct bus1_cmd_recv){};
+	r = bus1_peer_recv(c2, &recv);
+	assert(r >= 0);
+	assert(recv.msg.type == BUS1_MSG_NODE_DESTROY);
+	assert(recv.msg.destination == handle);
+
+	recv = (struct bus1_cmd_recv){};
+	r = bus1_peer_recv(c1, &recv);
+	assert(r >= 0);
+	assert(recv.msg.type == BUS1_MSG_NODE_DESTROY);
+	assert(recv.msg.destination == node);
+
+	recv = (struct bus1_cmd_recv){};
+	r = bus1_peer_recv(c1, &recv);
+	assert(r < 0);
+	assert(r == -EAGAIN);
+	recv = (struct bus1_cmd_recv){};
+	r = bus1_peer_recv(c2, &recv);
+	assert(r < 0);
+	assert(r == -EAGAIN);
+
+	bus1_peer_free(c2);
+	bus1_peer_free(c1);
+}
+
 int test_xfer(void)
 {
 	test_xfer_multicast();
+	test_xfer_destroy_notification();
+	test_xfer_release_notification();
 	return TEST_OK;
 }
