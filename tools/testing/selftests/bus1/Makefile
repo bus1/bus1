@@ -4,9 +4,9 @@ OBJS =				\
 	bus1-peer.o		\
 	test.o			\
 	test-api.o		\
-	test-io.o		\
 	test-peer.o		\
-	test-xfer.o
+	test-xfer.o		\
+	test-io.o
 
 CFLAGS += -Wall -I../../../../usr/include/
 

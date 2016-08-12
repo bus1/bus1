@@ -49,9 +49,9 @@ int test_xfer(void);
 
 static const struct test tests[] = {
 	{ .name = "api", .main = test_api },
-	{ .name = "io", .main = test_io },
 	{ .name = "peer", .main = test_peer },
 	{ .name = "xfer", .main = test_xfer },
+	{ .name = "io", .main = test_io },
 };
 
 int c_sys_clone(unsigned long flags, void *child_stack);
