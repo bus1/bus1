@@ -37,6 +37,12 @@ struct bus1_cmd_handle_transfer {
 	__u64 dst_handle;
 } __attribute__((__aligned__(8)));
 
+struct bus1_cmd_nodes_destroy {
+	__u64 flags;
+	__u64 ptr_nodes;
+	__u64 n_nodes;
+} __attribute__((__aligned__(8)));
+
 enum {
 	BUS1_SEND_FLAG_CONTINUE		= 1ULL <<  0,
 	BUS1_SEND_FLAG_SEED		= 1ULL <<  1,
@@ -91,8 +97,8 @@ enum {
 					__u64),
 	BUS1_CMD_HANDLE_TRANSFER	= _IOWR(BUS1_IOCTL_MAGIC, 0x11,
 					struct bus1_cmd_handle_transfer),
-	BUS1_CMD_NODE_DESTROY		= _IOWR(BUS1_IOCTL_MAGIC, 0x20,
-					__u64),
+	BUS1_CMD_NODES_DESTROY		= _IOWR(BUS1_IOCTL_MAGIC, 0x20,
+					struct bus1_cmd_nodes_destroy),
 	BUS1_CMD_SLICE_RELEASE		= _IOWR(BUS1_IOCTL_MAGIC, 0x30,
 					__u64),
 	BUS1_CMD_SEND			= _IOWR(BUS1_IOCTL_MAGIC, 0x40,

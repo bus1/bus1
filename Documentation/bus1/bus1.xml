@@ -388,11 +388,20 @@ argument.
               </varlistentry>
 
               <varlistentry>
-                <term><constant>BUS1_CMD_NODE_DESTROY</constant></term>
+                <term><constant>BUS1_CMD_NODES_DESTROY</constant></term>
                 <listitem>
                   <para>
-This command destroys a node. It takes a handle ID as argument. The referenced
-handle must be the owner handle of a local node.
+This command destroys a node. It takes the following structure as argument:
+<programlisting>
+struct bus1_cmd_nodes_destroy {
+        __u64 flags;
+        __u64 ptr_nodes;
+        __u64 n_nodes;
+};
+</programlisting>
+<varname>flags</varname> must always be set to 0, <varname>ptr_nodes</varname>
+must be a pointer to a hanlde ID of an owner handle of a local node, and
+<varname>n_nodes</varname> must be set to 1.
                   </para>
                 </listitem>
               </varlistentry>

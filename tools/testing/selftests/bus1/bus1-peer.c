@@ -192,10 +192,17 @@ _public_ int bus1_peer_handle_transfer(struct bus1_peer *src,
 _public_ int bus1_peer_node_destroy(struct bus1_peer *peer,
 				    uint64_t handle)
 {
-	static_assert(_IOC_SIZE(BUS1_CMD_NODE_DESTROY) == sizeof(handle),
+	struct bus1_cmd_nodes_destroy nodes_destroy;
+
+	nodes_destroy.flags = 0;
+	nodes_destroy.ptr_nodes = (uintptr_t)&handle;
+	nodes_destroy.n_nodes = 1;
+
+	static_assert(_IOC_SIZE(BUS1_CMD_NODES_DESTROY) ==
+		      sizeof(nodes_destroy),
 		      "ioctl is called with invalid argument size");
 
-	return bus1_peer_ioctl(peer, BUS1_CMD_NODE_DESTROY, &handle);
+	return bus1_peer_ioctl(peer, BUS1_CMD_NODES_DESTROY, &nodes_destroy);
 }
 
 _public_ int bus1_peer_handle_release(struct bus1_peer *peer,
