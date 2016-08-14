@@ -391,7 +391,8 @@ argument.
                 <term><constant>BUS1_CMD_NODES_DESTROY</constant></term>
                 <listitem>
                   <para>
-This command destroys a node. It takes the following structure as argument:
+This command destroys a set of nodes. It takes the following structure as
+argument:
 <programlisting>
 struct bus1_cmd_nodes_destroy {
         __u64 flags;
@@ -400,8 +401,8 @@ struct bus1_cmd_nodes_destroy {
 };
 </programlisting>
 <varname>flags</varname> must always be set to 0, <varname>ptr_nodes</varname>
-must be a pointer to a hanlde ID of an owner handle of a local node, and
-<varname>n_nodes</varname> must be set to 1.
+must be a pointer to an array of handle IDs of owner handles of local nodes, and
+<varname>n_nodes</varname> must be the size of the array.
                   </para>
                 </listitem>
               </varlistentry>

@@ -34,7 +34,10 @@ static void test_xfer_multicast(void)
 	struct bus1_peer *c1, *c2, *c3;
 	uint64_t node2, node3, node20, node30;
 	uint64_t handle2, handle3, handle20, handle30;
-	uint64_t array_dest[2], array_handles[6];
+	uint64_t array_dest[2], array_handles[6], array_nodes[2];
+	struct bus1_cmd_nodes_destroy destroy = {
+		.ptr_nodes = (uintptr_t)array_nodes,
+	};
 	const uint64_t *p;
 	const uint8_t *slice;
 	int r;
@@ -209,25 +212,26 @@ static void test_xfer_multicast(void)
 	 *  - 1x handle30
 	 */
 
-	r = bus1_peer_node_destroy(c1, node2);
+	array_nodes[0] = node2;
+	array_nodes[1] = node3;
+	destroy.n_nodes = 2;
+
+	r = bus1_peer_nodes_destroy(c1, &destroy);
 	assert(r >= 0);
-	r = bus1_peer_node_destroy(c1, node2);
+	r = bus1_peer_nodes_destroy(c1, &destroy);
 	assert(r < 0);
 	assert(r == -ENXIO);
 	r = bus1_peer_handle_release(c1, node2);
-	assert(r < 0);
-	assert(r == -ENXIO);
-
-	r = bus1_peer_node_destroy(c1, node3);
-	assert(r >= 0);
-	r = bus1_peer_node_destroy(c1, node3);
 	assert(r < 0);
 	assert(r == -ENXIO);
 	r = bus1_peer_handle_release(c1, node3);
 	assert(r < 0);
 	assert(r == -ENXIO);
 
-	r = bus1_peer_node_destroy(c1, handle20);
+	destroy.n_nodes = 1;
+
+	array_nodes[0] = handle20;
+	r = bus1_peer_nodes_destroy(c1, &destroy);
 	assert(r < 0);
 	assert(r == -ENXIO);
 	r = bus1_peer_handle_release(c1, handle20);
@@ -236,7 +240,8 @@ static void test_xfer_multicast(void)
 	assert(r < 0);
 	assert(r == -ENXIO);
 
-	r = bus1_peer_node_destroy(c1, handle30);
+	array_nodes[0] = handle30;
+	r = bus1_peer_nodes_destroy(c1, &destroy);
 	assert(r < 0);
 	assert(r == -ENXIO);
 	r = bus1_peer_handle_release(c1, handle30);
@@ -251,7 +256,8 @@ static void test_xfer_multicast(void)
 	 *  - 1x node20
 	 */
 
-	r = bus1_peer_node_destroy(c2, handle2);
+	array_nodes[0] = handle2;
+	r = bus1_peer_nodes_destroy(c2, &destroy);
 	assert(r < 0);
 	assert(r == -ENXIO);
 	r = bus1_peer_handle_release(c2, handle2);
@@ -262,9 +268,10 @@ static void test_xfer_multicast(void)
 	assert(r < 0);
 	assert(r == -ENXIO);
 
-	r = bus1_peer_node_destroy(c2, node20);
+	array_nodes[0] = node20;
+	r = bus1_peer_nodes_destroy(c2, &destroy);
 	assert(r >= 0);
-	r = bus1_peer_node_destroy(c2, node20);
+	r = bus1_peer_nodes_destroy(c2, &destroy);
 	assert(r < 0);
 	assert(r == -ENXIO);
 	r = bus1_peer_handle_release(c2, node20);
@@ -279,7 +286,8 @@ static void test_xfer_multicast(void)
 	 *  - 1x node30
 	 */
 
-	r = bus1_peer_node_destroy(c3, handle3);
+	array_nodes[0] = handle3;
+	r = bus1_peer_nodes_destroy(c3, &destroy);
 	assert(r < 0);
 	assert(r == -ENXIO);
 	r = bus1_peer_handle_release(c3, handle3);
@@ -290,9 +298,10 @@ static void test_xfer_multicast(void)
 	assert(r < 0);
 	assert(r == -ENXIO);
 
-	r = bus1_peer_node_destroy(c3, node30);
+	array_nodes[0] = node30;
+	r = bus1_peer_nodes_destroy(c3, &destroy);
 	assert(r >= 0);
-	r = bus1_peer_node_destroy(c3, node30);
+	r = bus1_peer_nodes_destroy(c3, &destroy);
 	assert(r < 0);
 	assert(r == -ENXIO);
 	r = bus1_peer_handle_release(c3, node30);
@@ -317,6 +326,7 @@ static void test_xfer_multicast(void)
 static void test_xfer_release_notification(void)
 {
 	struct bus1_cmd_recv recv;
+	struct bus1_cmd_nodes_destroy destroy;
 	struct bus1_peer *c1, *c2;
 	uint64_t node, handle;
 	int r;
@@ -346,7 +356,11 @@ static void test_xfer_release_notification(void)
 	assert(recv.msg.type == BUS1_MSG_NODE_RELEASE);
 	assert(recv.msg.destination == node);
 
-	r = bus1_peer_node_destroy(c1, node);
+	destroy = (struct bus1_cmd_nodes_destroy){
+		.ptr_nodes = (uintptr_t)&node,
+		.n_nodes = 1,
+	};
+	r = bus1_peer_nodes_destroy(c1, &destroy);
 	assert(r >= 0);
 
 	recv = (struct bus1_cmd_recv){};
@@ -373,6 +387,10 @@ static void test_xfer_destroy_notification(void)
 	struct bus1_cmd_recv recv;
 	struct bus1_peer *c1, *c2;
 	uint64_t node, handle;
+	struct bus1_cmd_nodes_destroy destroy = {
+		.ptr_nodes = (uintptr_t)&node,
+		.n_nodes = 1,
+	};
 	int r;
 
 	r = bus1_peer_new_from_path(&c1, test_path);
@@ -385,7 +403,7 @@ static void test_xfer_destroy_notification(void)
 	r = bus1_peer_handle_transfer(c1, c2, &node, &handle);
 	assert(r >= 0);
 
-	r = bus1_peer_node_destroy(c1, node);
+	r = bus1_peer_nodes_destroy(c1, &destroy);
 	assert(r >= 0);
 
 	recv = (struct bus1_cmd_recv){};
