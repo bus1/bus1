@@ -6,9 +6,10 @@ OBJS =				\
 	test-api.o		\
 	test-peer.o		\
 	test-xfer.o		\
+	test-hive.o		\
 	test-io.o
 
-CFLAGS += -Wall -I../../../../usr/include/
+CFLAGS += -Wall -lpthread -I../../../../usr/include/
 
 all: $(TEST_PROGS)
 

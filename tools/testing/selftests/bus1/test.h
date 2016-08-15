@@ -43,14 +43,16 @@ struct test {
 };
 
 int test_api(void);
-int test_io(void);
 int test_peer(void);
 int test_xfer(void);
+int test_hive(void);
+int test_io(void);
 
 static const struct test tests[] = {
 	{ .name = "api", .main = test_api },
 	{ .name = "peer", .main = test_peer },
 	{ .name = "xfer", .main = test_xfer },
+	{ .name = "hive", .main = test_hive },
 	{ .name = "io", .main = test_io },
 };
 
