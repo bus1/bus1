@@ -14,6 +14,8 @@
 #include <time.h>
 #include "test.h"
 
+#define MAX_DESTINATIONS (256)
+
 static int client_send(struct bus1_peer *client, uint64_t *destinations,
 		       size_t n_destinations, void *data, size_t len)
 {
@@ -268,12 +270,14 @@ static uint64_t test_iterate(unsigned int iterations,
 			     unsigned int n_destinations,
 			     size_t n_bytes)
 {
-	struct bus1_peer *parent, *children[n_destinations];
-	uint64_t child_handles[n_destinations];
+	struct bus1_peer *parent, *children[MAX_DESTINATIONS];
+	uint64_t child_handles[MAX_DESTINATIONS];
 	char payload[n_bytes];
 	unsigned int i;
 	uint64_t node, time_start, time_end;
 	int r;
+
+	assert(n_destinations <= MAX_DESTINATIONS);
 
 	/* create parent */
 	r = bus1_peer_new_from_path(&parent, test_path);
@@ -283,7 +287,7 @@ static uint64_t test_iterate(unsigned int iterations,
 	assert(r >= 0);
 
 	/* create children */
-	for (i = 0; i < n_destinations; i++) {
+	for (i = 0; i < MAX_DESTINATIONS; i++) {
 		uint64_t parent_handle, aux;
 		struct bus1_cmd_send send;
 		struct bus1_cmd_recv recv;
@@ -340,7 +344,7 @@ static uint64_t test_iterate(unsigned int iterations,
 	/* cleanup */
 	parent = bus1_peer_free(parent);
 
-	for (i = 0; i < n_destinations; i++)
+	for (i = 0; i < MAX_DESTINATIONS; i++)
 		children[i] = bus1_peer_free(children[i]);
 
 	return (time_end - time_start) / iterations;
