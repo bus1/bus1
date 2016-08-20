@@ -9,7 +9,8 @@ OBJS =				\
 	test-hive.o		\
 	test-io.o
 
-CFLAGS += -Wall -lpthread -I../../../../usr/include/
+CFLAGS += -Wall -I../../../../usr/include/
+LDLIBS += -lpthread
 
 all: $(TEST_PROGS)
 
