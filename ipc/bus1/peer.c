@@ -314,7 +314,6 @@ static int bus1_peer_ioctl_reset(struct bus1_peer *peer, unsigned long arg)
 }
 
 static int bus1_peer_ioctl_handle_transfer(struct bus1_peer *src,
-					   struct file *src_file,
 					   unsigned long arg)
 {
 	struct bus1_cmd_handle_transfer __user *uparam = (void __user *) arg;
@@ -681,7 +680,6 @@ static int bus1_peer_ioctl_recv(struct bus1_peer *peer, unsigned long arg)
 /**
  * bus1_peer_ioctl() - handle peer ioctl
  * @peer:		peer to work on
- * @peer_file:		underlying file of @peer
  * @cmd:		ioctl command
  * @arg:		ioctl argument
  *
@@ -693,7 +691,6 @@ static int bus1_peer_ioctl_recv(struct bus1_peer *peer, unsigned long arg)
  * Return: 0 on success, negative error code on failure.
  */
 int bus1_peer_ioctl(struct bus1_peer *peer,
-		    struct file *peer_file,
 		    unsigned int cmd,
 		    unsigned long arg)
 {
@@ -703,7 +700,7 @@ int bus1_peer_ioctl(struct bus1_peer *peer,
 	case BUS1_CMD_PEER_RESET:
 		return bus1_peer_ioctl_reset(peer, arg);
 	case BUS1_CMD_HANDLE_TRANSFER:
-		return bus1_peer_ioctl_handle_transfer(peer, peer_file, arg);
+		return bus1_peer_ioctl_handle_transfer(peer, arg);
 	case BUS1_CMD_NODES_DESTROY:
 		return bus1_peer_ioctl_nodes_destroy(peer, arg);
 	case BUS1_CMD_HANDLE_RELEASE:
