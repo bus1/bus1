@@ -221,7 +221,7 @@ struct bus1_peer *bus1_peer_free(struct bus1_peer *peer)
  * @peer:		peer to operate on
  *
  * This connects a peer. It first creates the linked peer_info object and then
- * markes the peer as active.
+ * marks the peer as active.
  *
  * The caller must make sure this function is called only once.
  *
@@ -390,7 +390,7 @@ static int bus1_peer_ioctl_nodes_destroy(struct bus1_peer *peer,
 
 	ptr_nodes = (u64 __user *)(unsigned long)param.ptr_nodes;
 
-	/* XXX: make atomic and dissalow partial failures */
+	/* XXX: make atomic and disallow partial failures */
 	for (i = 0; i < param.n_nodes; ++i) {
 		/* returns >= 0 on success, and > 0 in case @id was modified */
 		r = bus1_node_destroy_by_id(peer, ptr_nodes + i, &n_handles);
