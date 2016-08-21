@@ -15,7 +15,7 @@
  * The bus1-peer object is a small, direct wrapper of the bus1 kernel API. It
  * allows direct access to all bus1 peer features, but additionally provides
  * a limited set of helpers to avoid dealing with API extensions, peer pools,
- * and ioctl calling convetions.
+ * and ioctl calling conventions.
  *
  * The bus1-peer API is designed for threaded access. Apart from constructors
  * and destructors, any function can be called in parallel from multiple
