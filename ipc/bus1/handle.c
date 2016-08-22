@@ -1187,6 +1187,7 @@ int bus1_handle_pair(struct bus1_peer *src,
 	if (dst_handle != t) {
 		bus1_handle_release(t, dst_info);
 		bus1_handle_unref(t);
+		atomic_inc(&dst_info->user->n_handles);
 	}
 
 	r = 0;
