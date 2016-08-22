@@ -1066,47 +1066,47 @@ bus1_handle_find_by_node(struct bus1_peer_info *peer_info,
 }
 
 /**
- * bus1_handle_pair() - import handle manually into a peer
- * @peer:	node owner
- * @clone:	peer to import handle to
- * @peer_idp:	ID of node to create handle for
- * @clone_idp:	output for newly created handle ID
+ * bus1_handle_pair() - transfer handle manually from one peer to another
+ * @src:	holder of handle to transfer
+ * @dst:	peer to import handle to
+ * @src_idp:	ID of handle to transfer
+ * @dst_idp:	output for newly created handle ID
  *
- * This imports a handle into the peer @clone and returns its new ID via
- * @clone_idp. The node that is linked to must be given via @peer_idp (and
- * @peer must be its owner). If BUS1_NODE_FLAG_ALLOCATE is given, a new node is
- * allocated in @peer and returned in @peer_idp.
+ * This imports a handle into the peer @dst and returns its new ID via @dst_idp.
+ * The handle to be transferred must be given via @src_idp (and @src must be its
+ * holder). If BUS1_NODE_FLAG_ALLOCATE is given, a new node is allocated in
+ * @src and returned in @src_idp.
  *
  * Return: 0 on success, negative error code on failure.
  */
-int bus1_handle_pair(struct bus1_peer *peer,
-		     struct bus1_peer *clone,
-		     u64 *peer_idp,
-		     u64 *clone_idp)
+int bus1_handle_pair(struct bus1_peer *src,
+		     struct bus1_peer *dst,
+		     u64 *src_idp,
+		     u64 *dst_idp)
 {
-	struct bus1_peer_info *peer_info = bus1_peer_dereference(peer);
-	struct bus1_peer_info *clone_info = bus1_peer_dereference(clone);
+	struct bus1_peer_info *src_info = bus1_peer_dereference(src);
+	struct bus1_peer_info *dst_info = bus1_peer_dereference(dst);
 	struct bus1_peer_info *owner_info;
-	struct bus1_handle *peer_handle = NULL, *clone_handle = NULL, *t;
+	struct bus1_handle *src_handle = NULL, *dst_handle = NULL, *t;
 	struct bus1_peer *owner = NULL;
 	int r;
 
-	if (*peer_idp & BUS1_NODE_FLAG_ALLOCATE) {
-		peer_handle = bus1_handle_new_owner(*peer_idp);
-		if (IS_ERR(peer_handle))
-			return PTR_ERR(peer_handle);
+	if (*src_idp & BUS1_NODE_FLAG_ALLOCATE) {
+		src_handle = bus1_handle_new_owner(*src_idp);
+		if (IS_ERR(src_handle))
+			return PTR_ERR(src_handle);
 	} else {
-		peer_handle = bus1_handle_find_by_id(peer_info, *peer_idp);
-		if (!peer_handle)
+		src_handle = bus1_handle_find_by_id(src_info, *src_idp);
+		if (!src_handle)
 			return -ENXIO;
 
-		if (!bus1_handle_had_userref(peer_handle)) {
+		if (!bus1_handle_had_userref(src_handle)) {
 			r = -ENXIO;
 			goto exit;
 		}
 
 		rcu_read_lock();
-		owner = rcu_dereference(peer_handle->node->owner.holder);
+		owner = rcu_dereference(src_handle->node->owner.holder);
 		owner = bus1_peer_acquire(owner);
 		rcu_read_unlock();
 
@@ -1118,77 +1118,82 @@ int bus1_handle_pair(struct bus1_peer *peer,
 		owner_info = bus1_peer_dereference(owner);
 	}
 
-	clone_handle = bus1_handle_new_holder(peer_handle->node);
-	if (IS_ERR(clone_handle)) {
-		r = PTR_ERR(clone_handle);
-		clone_handle = NULL;
+	/*
+	 * XXX: try to find an existing handle rather than unconditionally
+	 * allocate a temporary one.
+	 */
+	dst_handle = bus1_handle_new_holder(src_handle->node);
+	if (IS_ERR(dst_handle)) {
+		r = PTR_ERR(dst_handle);
+		dst_handle = NULL;
 		goto exit;
 	}
 
-	/* account new handle on @clone_info */
-	if (atomic_dec_if_positive(&clone_info->user->n_handles) < 0) {
+	/* account new handle on @dst_info */
+	if (atomic_dec_if_positive(&dst_info->user->n_handles) < 0) {
 		r = -EDQUOT;
 		goto exit;
 	}
 
 	/*
 	 * Now that we imported (or allocated) the original node, and allocated
-	 * a fresh handle for the clone, we must attach it. If the node is new,
-	 * we also attach, install, and publish it here. The attach operation
-	 * on an existing node is the only operation that can fail (racing
-	 * destruction). Hence, if it succeeded, nothing below can fail.
+	 * a fresh handle for the destination, we must attach it. If the node is
+	 * new, we also attach, install, and publish it here. The attach
+	 * operation on an existing node is the only operation that can fail
+	 * (racing destruction). Hence, if it succeeded, nothing below can fail.
 	 */
 	if (owner) {
 		mutex_lock(&owner_info->lock);
-		r = bus1_handle_attach_holder(clone_handle, clone) ? 0 : -ENXIO;
+		r = bus1_handle_attach_holder(dst_handle, dst) ? 0 : -ENXIO;
 		mutex_unlock(&owner_info->lock);
 		if (r < 0) {
-			atomic_inc(&clone_info->user->n_handles);
+			atomic_inc(&dst_info->user->n_handles);
 			goto exit;
 		}
 	} else {
-		/* account new node on @peer_info */
-		if (atomic_dec_if_positive(&peer_info->user->n_handles) < 0) {
-			atomic_inc(&clone_info->user->n_handles);
+		/* account new node on @src_info */
+		if (atomic_dec_if_positive(&src_info->user->n_handles) < 0) {
+			atomic_inc(&dst_info->user->n_handles);
 			r = -EDQUOT;
 			goto exit;
 		}
 
-		mutex_lock(&peer_info->lock);
+		mutex_lock(&src_info->lock);
 
-		bus1_handle_attach_owner(peer_handle, peer);
-		bus1_handle_install_owner(peer_handle);
+		bus1_handle_attach_owner(src_handle, src);
+		bus1_handle_install_owner(src_handle);
 
-		WARN_ON(!bus1_handle_attach_holder(clone_handle, clone));
-		*peer_idp = bus1_handle_publish(peer_handle, peer_info, 0, 0,
+		WARN_ON(!bus1_handle_attach_holder(dst_handle, dst));
+		*src_idp = bus1_handle_publish(src_handle, src_info, 0, 0,
 						false);
 
 		/* release the inflight-ref acquired via attach() and unlock */
-		bus1_handle_release_unlock(peer_handle, peer_info);
+		bus1_handle_release_unlock(src_handle, src_info);
 	}
 
 	/*
 	 * Now that the handle is fully attached we must install it in the
-	 * peer. This might race another install, in which case we switch to
-	 * the alternative and release our own temporary handle.
+	 * destination peer. A handle may already exist, as we did not check for
+	 * this above, in which case we switch to the alternative, release
+	 * our own temporary handle and undo the quota charge.
 	 */
-	mutex_lock(&clone_info->lock);
-	t = clone_handle;
-	clone_handle = bus1_handle_install_holder(t);
-	*clone_idp = bus1_handle_publish(clone_handle, clone_info, 0, 0, true);
+	mutex_lock(&dst_info->lock);
+	t = dst_handle;
+	dst_handle = bus1_handle_install_holder(t);
+	*dst_idp = bus1_handle_publish(dst_handle, dst_info, 0, 0, true);
 	/* release the inflight-ref acquired via attach() and unlock */
-	bus1_handle_release_unlock(clone_handle, clone_info);
+	bus1_handle_release_unlock(dst_handle, dst_info);
 
-	if (clone_handle != t) {
-		bus1_handle_release(t, clone_info);
+	if (dst_handle != t) {
+		bus1_handle_release(t, dst_info);
 		bus1_handle_unref(t);
 	}
 
 	r = 0;
 
 exit:
-	bus1_handle_unref(clone_handle);
-	bus1_handle_unref(peer_handle);
+	bus1_handle_unref(dst_handle);
+	bus1_handle_unref(src_handle);
 	bus1_peer_release(owner);
 	return r;
 }
