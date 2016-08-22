@@ -1089,12 +1089,22 @@ int bus1_handle_pair(struct bus1_peer *src,
 	struct bus1_peer_info *owner_info;
 	struct bus1_handle *src_handle = NULL, *dst_handle = NULL, *t;
 	struct bus1_peer *owner = NULL;
+	bool accounted_handle = false, accounted_node = false;
 	int r;
 
 	if (*src_idp & BUS1_NODE_FLAG_ALLOCATE) {
+		/* account new node on @src_info */
+		if (atomic_dec_if_positive(&src_info->user->n_handles) < 0)
+			return -EDQUOT;
+
+		accounted_node = true;
+
 		src_handle = bus1_handle_new_owner(*src_idp);
-		if (IS_ERR(src_handle))
-			return PTR_ERR(src_handle);
+		if (IS_ERR(src_handle)) {
+			r = PTR_ERR(src_handle);
+			src_handle = NULL;
+			goto exit;
+		}
 	} else {
 		src_handle = bus1_handle_find_by_id(src_info, *src_idp);
 		if (!src_handle)
@@ -1116,17 +1126,22 @@ int bus1_handle_pair(struct bus1_peer *src,
 		}
 
 		owner_info = bus1_peer_dereference(owner);
-	}
 
-	/*
-	 * XXX: try to find an existing handle rather than unconditionally
-	 * allocate a temporary one.
-	 */
-	dst_handle = bus1_handle_new_holder(src_handle->node);
-	if (IS_ERR(dst_handle)) {
-		r = PTR_ERR(dst_handle);
-		dst_handle = NULL;
-		goto exit;
+		dst_handle = bus1_handle_find_by_node(dst_info,
+						      src_handle->node);
+		if (dst_handle) {
+			if (bus1_handle_acquire(dst_handle, dst_info)) {
+				mutex_lock(&dst_info->lock);
+				*dst_idp = bus1_handle_publish(dst_handle,
+							       dst_info, 0, 0,
+							       true);
+				mutex_unlock(&dst_info->lock);
+				r = 0;
+				goto exit;
+			} else {
+				dst_handle = bus1_handle_unref(dst_handle);
+			}
+		}
 	}
 
 	/* account new handle on @dst_info */
@@ -1135,35 +1150,34 @@ int bus1_handle_pair(struct bus1_peer *src,
 		goto exit;
 	}
 
-	/*
-	 * Now that we imported (or allocated) the original node, and allocated
-	 * a fresh handle for the destination, we must attach it. If the node is
-	 * new, we also attach, install, and publish it here. The attach
-	 * operation on an existing node is the only operation that can fail
-	 * (racing destruction). Hence, if it succeeded, nothing below can fail.
-	 */
+	accounted_handle = true;
+
+	dst_handle = bus1_handle_new_holder(src_handle->node);
+	if (IS_ERR(dst_handle)) {
+		r = PTR_ERR(dst_handle);
+		dst_handle = NULL;
+		goto exit;
+	}
+
 	if (owner) {
+		/* handle is to existing node, lock owner and attach */
 		mutex_lock(&owner_info->lock);
 		r = bus1_handle_attach_holder(dst_handle, dst) ? 0 : -ENXIO;
 		mutex_unlock(&owner_info->lock);
-		if (r < 0) {
-			atomic_inc(&dst_info->user->n_handles);
+		if (r < 0)
 			goto exit;
-		}
 	} else {
-		/* account new node on @src_info */
-		if (atomic_dec_if_positive(&src_info->user->n_handles) < 0) {
-			atomic_inc(&dst_info->user->n_handles);
-			r = -EDQUOT;
-			goto exit;
-		}
-
+		/*
+		 * Now that we allocated the original node, and allocated a
+		 * fresh handle for the destination, the handle must be attach
+		 * and the node must be attached, installed, and published.
+		 */
 		mutex_lock(&src_info->lock);
 
 		bus1_handle_attach_owner(src_handle, src);
 		bus1_handle_install_owner(src_handle);
-
 		WARN_ON(!bus1_handle_attach_holder(dst_handle, dst));
+
 		*src_idp = bus1_handle_publish(src_handle, src_info, 0, 0,
 						false);
 
@@ -1173,9 +1187,9 @@ int bus1_handle_pair(struct bus1_peer *src,
 
 	/*
 	 * Now that the handle is fully attached we must install it in the
-	 * destination peer. A handle may already exist, as we did not check for
-	 * this above, in which case we switch to the alternative, release
-	 * our own temporary handle and undo the quota charge.
+	 * destination peer. This might race another install, in which case we
+	 * switch to the alternative, release our own temporary handle and undo
+	 * the quota charge.
 	 */
 	mutex_lock(&dst_info->lock);
 	t = dst_handle;
@@ -1193,6 +1207,10 @@ int bus1_handle_pair(struct bus1_peer *src,
 	r = 0;
 
 exit:
+	if (accounted_node)
+		atomic_inc(&src_info->user->n_handles);
+	if (accounted_handle)
+		atomic_inc(&dst_info->user->n_handles);
 	bus1_handle_unref(dst_handle);
 	bus1_handle_unref(src_handle);
 	bus1_peer_release(owner);
