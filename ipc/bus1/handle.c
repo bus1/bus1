@@ -1148,7 +1148,7 @@ int bus1_handle_pair(struct bus1_peer *peer,
 		}
 	} else {
 		/* account new node on @peer_info */
-		if (!bus1_atomic_sub_if_ge(&peer_info->user->n_handles, 1, 1)) {
+		if (atomic_dec_if_positive(&peer_info->user->n_handles) < 0) {
 			atomic_inc(&clone_info->user->n_handles);
 			r = -EDQUOT;
 			goto exit;
