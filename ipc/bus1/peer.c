@@ -391,24 +391,21 @@ static int bus1_peer_ioctl_nodes_destroy(struct bus1_peer *peer,
 
 	/* XXX: make atomic and disallow partial failures */
 	for (i = 0; i < param.n_nodes; ++i) {
-		/* returns >= 0 on success, and > 0 in case @id was modified */
-		r = bus1_node_destroy_by_id(peer, ptr_nodes + i, &n_handles);
-		if (r < 0)
-			break;
+		int k;
 
-		if (r > 0 && put_user(ptr_nodes[i],
-				      (u64 __user *)param.ptr_nodes) + i) {
+		/* returns >= 0 on success, and > 0 in case @id was modified */
+		k = bus1_node_destroy_by_id(peer, ptr_nodes + i, &n_handles);
+		if (k < 0)
+			r = k;
+
+		if (k > 0 && put_user(ptr_nodes[i],
+				      (u64 __user *)param.ptr_nodes) + i)
 			r = -EFAULT;
-			break;
-		}
 	}
 
 	atomic_add(n_handles, &peer_info->user->n_handles);
 
-	if (r < 0)
-		return r;
-	else
-		return 0;
+	return r;
 }
 
 static int bus1_peer_ioctl_handle_release(struct bus1_peer *peer,
