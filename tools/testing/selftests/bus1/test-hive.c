@@ -58,7 +58,7 @@ int test_hive(void)
 		assert(r >= 0);
 	}
 
-	for (i = i; i < N_CHILDREN; i ++) {
+	for (; i < N_CHILDREN; i ++) {
 		unsigned int j;
 
 		for (j = 0; j < N_SIBLINGS; j ++) {
