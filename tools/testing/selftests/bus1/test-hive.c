@@ -20,7 +20,8 @@ struct bus1_child {
 	uint64_t siblings[N_SIBLINGS];
 };
 
-static void *child_thread(void *p) {
+static void *child_thread(void *p)
+{
 	struct bus1_child *child = p;
 
 	assert(child);
