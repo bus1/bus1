@@ -99,7 +99,11 @@ int test_hive(void)
 		struct bus1_cmd_recv recv = {};
 
 		r = bus1_peer_recv(parent, &recv);
-		assert(r >= 0);
+		assert(r >= 0 || r == -EAGAIN);
+
+		if (r == -EAGAIN)
+			continue;
+
 		assert(recv.msg.type == BUS1_MSG_NODE_DESTROY);
 
 		-- n_children;
