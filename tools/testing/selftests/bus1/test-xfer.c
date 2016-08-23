@@ -53,8 +53,10 @@ static void test_xfer_multicast(void)
 	 * expected.
 	 */
 
-	/* create three peers and pass a handle from the second and third
-	 * to the first */
+	/*
+	 * Create three peers and pass a handle from the second and third
+	 * to the first.
+	 */
 
 	r = bus1_peer_new_from_path(&c1, test_path);
 	assert(r >= 0);
