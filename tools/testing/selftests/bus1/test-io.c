@@ -353,6 +353,7 @@ static uint64_t test_iterate(unsigned int iterations,
 int test_io(void)
 {
 	unsigned long base;
+	unsigned int i;
 
 	test_basic();
 
@@ -370,7 +371,7 @@ int test_io(void)
 	fprintf(stderr, "it took %lu ns + %lu ns for one destination\n", base,
 		test_iterate(100000, 1, 1024) - base);
 
-	for (unsigned int i = 1; i < 9; ++i) {
+	for (i = 1; i < 9; ++i) {
 		unsigned int dests = 1UL << i;
 
 		fprintf(stderr, "it took %lu ns + %lu ns per destination for %u destinations\n",
