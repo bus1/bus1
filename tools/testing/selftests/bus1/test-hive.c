@@ -43,7 +43,7 @@ int test_hive(void)
 	r = bus1_peer_new_from_path(&parent, test_path);
 	assert(r >= 0);
 
-	for (i = 0; i < N_CHILDREN; i ++) {
+	for (i = 0; i < N_CHILDREN; i++) {
 		uint64_t node =
 			BUS1_NODE_FLAG_MANAGED | BUS1_NODE_FLAG_ALLOCATE;
 
@@ -58,10 +58,10 @@ int test_hive(void)
 		assert(r >= 0);
 	}
 
-	for (i = 0; i < N_CHILDREN; i ++) {
+	for (i = 0; i < N_CHILDREN; i++) {
 		unsigned int j;
 
-		for (j = 0; j < N_SIBLINGS; j ++) {
+		for (j = 0; j < N_SIBLINGS; j++) {
 			unsigned int k = (i + j + 1) % N_CHILDREN;
 
 			children[i].siblings[j] = BUS1_HANDLE_INVALID;
@@ -76,7 +76,7 @@ int test_hive(void)
 		}
 	}
 
-	for (i = 0; i < N_CHILDREN; i ++) {
+	for (i = 0; i < N_CHILDREN; i++) {
 		pthread_attr_t a;
 		pthread_t t;
 
@@ -89,7 +89,7 @@ int test_hive(void)
 		r = pthread_create(&t, &a, child_thread, &children[i]);
 		assert(r == 0);
 
-		++ n_children;
+		++n_children;
 
 		r = pthread_attr_destroy(&a);
 		assert(r == 0);
@@ -106,7 +106,7 @@ int test_hive(void)
 
 		assert(recv.msg.type == BUS1_MSG_NODE_DESTROY);
 
-		-- n_children;
+		--n_children;
 	}
 
 	bus1_peer_free(parent);
