@@ -31,7 +31,6 @@
 
 enum {
 	TEST_OK,
-	TEST_FAIL,
 	TEST_SKIP,
 };
 
