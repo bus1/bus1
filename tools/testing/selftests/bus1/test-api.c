@@ -103,7 +103,7 @@ static void test_api_handle(void)
 	};
 	int r;
 
-	/* create two peers and import a hanlde from one to the other */
+	/* create two peers and import a handle from one to the other */
 
 	r = bus1_peer_new_from_path(&c1, test_path);
 	assert(r >= 0);
