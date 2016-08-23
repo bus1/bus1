@@ -10,7 +10,6 @@
 #define _GNU_SOURCE
 #include <pthread.h>
 #include <stdlib.h>
-#include <sys/prctl.h>
 #include "test.h"
 
 #define N_CHILDREN (1000)
