@@ -248,7 +248,7 @@ static void test_api_seed(void)
 
 	assert(recv.msg.n_bytes == strlen(payload) + 1);
 	assert(strncmp(slice, payload, recv.msg.n_bytes) == 0);
-	handle_id = *(uint64_t*)((uint8_t*)slice + ((recv.msg.n_bytes + 7) & ~(7ULL)));
+	handle_id = *(uint64_t *)((uint8_t *)slice + ((recv.msg.n_bytes + 7) & ~(7ULL)));
 	assert(handle_id != 0);
 	assert(handle_id != BUS1_HANDLE_INVALID);
 	assert(!(handle_id & BUS1_NODE_FLAG_ALLOCATE));
