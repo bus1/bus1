@@ -306,9 +306,9 @@ static int bus1_peer_ioctl_reset(struct bus1_peer *peer, unsigned long arg)
 	if (flags & BUS1_RESET_FLAG_DISCONNECT)
 		/* disconnect peer, flush all, no further operations allowed */
 		return bus1_peer_disconnect(peer);
-	else
-		/* flush everything, but keep persistent nodes */
-		bus1_peer_info_reset(peer_info, false);
+
+	/* flush everything, but keep persistent nodes */
+	bus1_peer_info_reset(peer_info, false);
 
 	return 0;
 }
