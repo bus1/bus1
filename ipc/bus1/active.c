@@ -124,6 +124,7 @@ bool bus1_active_is_active(struct bus1_active *active)
 bool bus1_active_is_deactivated(struct bus1_active *active)
 {
 	int v = atomic_read(&active->count);
+
 	return v > BUS1_ACTIVE_NEW && v < 0;
 }
 
@@ -140,6 +141,7 @@ bool bus1_active_is_deactivated(struct bus1_active *active)
 bool bus1_active_is_drained(struct bus1_active *active)
 {
 	int v = atomic_read(&active->count);
+
 	return v > BUS1_ACTIVE_NEW && v <= BUS1_ACTIVE_BIAS;
 }
 
@@ -265,7 +267,7 @@ void bus1_active_drain(struct bus1_active *active, wait_queue_head_t *waitq)
  */
 bool bus1_active_cleanup(struct bus1_active *active,
 			 wait_queue_head_t *waitq,
-			 void (*cleanup) (struct bus1_active *, void *),
+			 void (*cleanup)(struct bus1_active *, void *),
 			 void *userdata)
 {
 	int v;
