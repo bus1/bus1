@@ -194,12 +194,14 @@ static bool bus1_handle_is_attached(struct bus1_handle *handle)
 }
 #endif
 
-static bool bus1_handle_had_userref(struct bus1_handle *handle)
+static bool bus1_handle_has_userref(struct bus1_handle *handle)
 {
 	/*
 	 * Is the user allowed to use this handle? Must be called on a handle
-	 * retrieved via ID lookup. The check is intentionally racy, since we
-	 * do not need atomicity here.
+	 * retrieved via ID lookup before using it. However, we do not need to
+	 * care about TOCTOU races: it is sufficient that the handle had a
+	 * userref at some point during the ioctl call to consider the handle
+	 * valid.
 	 */
 	return bus1_handle_is_owner(handle) ||
 	       atomic_read(&handle->n_user) >= 0;
@@ -1110,7 +1112,7 @@ int bus1_handle_pair(struct bus1_peer *src,
 		if (!src_handle)
 			return -ENXIO;
 
-		if (!bus1_handle_had_userref(src_handle)) {
+		if (!bus1_handle_has_userref(src_handle)) {
 			r = -ENXIO;
 			goto exit;
 		}
@@ -1523,7 +1525,7 @@ int bus1_handle_dest_import(struct bus1_handle_dest *dest,
 		 * we also atomically acquired the inflight reference. The fact
 		 * that it is not atomic, does not matter.
 		 */
-		if (!bus1_handle_had_userref(handle)) {
+		if (!bus1_handle_has_userref(handle)) {
 			bus1_handle_unref(handle);
 			return -ENXIO;
 		}
@@ -1927,7 +1929,7 @@ int bus1_handle_transfer_import(struct bus1_handle_transfer *transfer,
 		} else {
 			handle = bus1_handle_find_by_id(peer_info, entry->id);
 			if (!handle ||
-			    !bus1_handle_had_userref(handle) ||
+			    !bus1_handle_has_userref(handle) ||
 			    !bus1_handle_acquire(handle, peer_info)) {
 				handle = bus1_handle_unref(handle);
 				return -ENXIO;
