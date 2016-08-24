@@ -21,10 +21,6 @@
 #define BUS1_OFFSET_INVALID		((__u64)-1)
 
 enum {
-	BUS1_RESET_FLAG_DISCONNECT	= 1ULL << 0,
-};
-
-enum {
 	BUS1_NODE_FLAG_MANAGED		= 1ULL <<  0,
 	BUS1_NODE_FLAG_ALLOCATE		= 1ULL <<  1,
 	BUS1_NODE_FLAG_PERSISTENT	= 1ULL <<  2,
@@ -91,7 +87,9 @@ struct bus1_cmd_recv {
 } __attribute__((__aligned__(8)));
 
 enum {
-	BUS1_CMD_PEER_RESET		= _IOWR(BUS1_IOCTL_MAGIC, 0x00,
+	BUS1_CMD_PEER_DISCONNECT	= _IOWR(BUS1_IOCTL_MAGIC, 0x00,
+					__u64),
+	BUS1_CMD_PEER_RESET		= _IOWR(BUS1_IOCTL_MAGIC, 0x01,
 					__u64),
 	BUS1_CMD_HANDLE_RELEASE		= _IOWR(BUS1_IOCTL_MAGIC, 0x10,
 					__u64),

@@ -47,6 +47,7 @@ const void *bus1_peer_get_pool(struct bus1_peer *peer);
 
 int bus1_peer_ioctl(struct bus1_peer *peer, unsigned int cmd, void *arg);
 int bus1_peer_mmap(struct bus1_peer *peer);
+int bus1_peer_disconnect(struct bus1_peer *peer);
 int bus1_peer_reset(struct bus1_peer *peer);
 int bus1_peer_handle_transfer(struct bus1_peer *src,
 			      struct bus1_peer *dst,

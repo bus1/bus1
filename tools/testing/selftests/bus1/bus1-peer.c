@@ -155,6 +155,11 @@ _public_ int bus1_peer_mmap(struct bus1_peer *peer)
 	return 0;
 }
 
+_public_ int bus1_peer_disconnect(struct bus1_peer *peer)
+{
+	return bus1_peer_ioctl(peer, BUS1_CMD_PEER_DISCONNECT, NULL);
+}
+
 _public_ int bus1_peer_reset(struct bus1_peer *peer)
 {
 	return bus1_peer_ioctl(peer, BUS1_CMD_PEER_RESET, NULL);

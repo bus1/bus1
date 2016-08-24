@@ -125,6 +125,13 @@ static long bus1_fop_ioctl(struct file *file,
 	struct bus1_peer *peer = file->private_data;
 	int r;
 
+	if (cmd == BUS1_CMD_PEER_DISCONNECT) {
+		if (unlikely(arg))
+			return -EINVAL;
+
+		return bus1_peer_disconnect(peer);
+	}
+
 	if (!bus1_peer_acquire(peer))
 		return -ESHUTDOWN;
 

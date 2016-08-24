@@ -294,21 +294,12 @@ int bus1_peer_disconnect(struct bus1_peer *peer)
 static int bus1_peer_ioctl_reset(struct bus1_peer *peer, unsigned long arg)
 {
 	struct bus1_peer_info *peer_info = bus1_peer_dereference(peer);
-	u64 flags;
 
-	BUILD_BUG_ON(_IOC_SIZE(BUS1_CMD_PEER_RESET) != sizeof(flags));
-
-	if (get_user(flags, (const u64 __user *)arg))
-		return -EFAULT;
-	if (unlikely(flags & ~BUS1_RESET_FLAG_DISCONNECT))
+	if (unlikely(arg))
 		return -EINVAL;
 
-	if (flags & BUS1_RESET_FLAG_DISCONNECT)
-		/* disconnect peer, flush all, no further operations allowed */
-		return bus1_peer_disconnect(peer);
-	else
-		/* flush everything, but keep persistent nodes */
-		bus1_peer_info_reset(peer_info, false);
+	/* flush everything, but keep persistent nodes */
+	bus1_peer_info_reset(peer_info, false);
 
 	return 0;
 }
@@ -682,6 +673,9 @@ static int bus1_peer_ioctl_recv(struct bus1_peer *peer, unsigned long arg)
  *
  * This handles the given ioctl (cmd+arg) on the passed peer. The caller must
  * hold an active reference to @peer.
+ *
+ * This only handles the runtime ioctls. Setup and teardown must be called
+ * directly.
  *
  * Multiple ioctls can be called in parallel just fine. No locking is needed.
  *

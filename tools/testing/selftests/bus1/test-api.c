@@ -64,7 +64,21 @@ static void test_api_connect(void)
 	r = bus1_peer_new_from_path(&c1, test_path);
 	assert(r >= 0);
 
+	r = bus1_peer_reset(c1);
+	assert(r >= 0);
+
 	/* disconnect and reconnect @c1 */
+
+	r = bus1_peer_disconnect(c1);
+	assert(r >= 0);
+
+	r = bus1_peer_disconnect(c1);
+	assert(r < 0);
+	assert(r == -ESHUTDOWN);
+
+	r = bus1_peer_reset(c1);
+	assert(r < 0);
+	assert(r == -ESHUTDOWN);
 
 	c1 = bus1_peer_free(c1);
 	assert(!c1);
