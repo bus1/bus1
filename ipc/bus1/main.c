@@ -99,8 +99,10 @@ static int bus1_fop_mmap(struct file *file, struct vm_area_struct *vma)
 
 	if (!bus1_peer_acquire(peer))
 		return -ESHUTDOWN;
-	if (vma->vm_flags & VM_WRITE)
+	if (vma->vm_flags & VM_WRITE) {
+		bus1_peer_release(peer);
 		return -EPERM; /* deny write access to the pool */
+	}
 
 	pool = &bus1_peer_dereference(peer)->pool;
 
