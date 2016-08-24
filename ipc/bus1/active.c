@@ -124,6 +124,7 @@ bool bus1_active_is_active(struct bus1_active *active)
 bool bus1_active_is_deactivated(struct bus1_active *active)
 {
 	int v = atomic_read(&active->count);
+
 	return v > BUS1_ACTIVE_NEW && v < 0;
 }
 
@@ -140,6 +141,7 @@ bool bus1_active_is_deactivated(struct bus1_active *active)
 bool bus1_active_is_drained(struct bus1_active *active)
 {
 	int v = atomic_read(&active->count);
+
 	return v > BUS1_ACTIVE_NEW && v <= BUS1_ACTIVE_BIAS;
 }
 
