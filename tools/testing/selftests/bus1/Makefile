@@ -4,10 +4,10 @@ OBJS =				\
 	bus1-peer.o		\
 	test.o			\
 	test-api.o		\
-	test-peer.o		\
-	test-xfer.o		\
 	test-hive.o		\
-	test-io.o
+	test-io.o		\
+	test-peer.o		\
+	test-xfer.o
 
 CFLAGS += -Wall -I../../../../usr/include/
 LDLIBS += -lpthread
