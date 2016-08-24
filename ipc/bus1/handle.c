@@ -1487,7 +1487,7 @@ int bus1_handle_dest_import(struct bus1_handle_dest *dest,
 		return -EFAULT;
 
 	if (id & BUS1_NODE_FLAG_ALLOCATE) {
-		if (bus1_peer_acquire(peer))
+		if (!bus1_peer_acquire(peer))
 			return -ESHUTDOWN;
 
 		/* account node+userref */
