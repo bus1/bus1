@@ -41,8 +41,8 @@
  * @holder:		holder of this node
  * @link_node:		link into the node
  *
- * Handle objects represent an accessor to nodes. A handle is always owned by a
- * specific peer, and by that peer only. The peer-lock (or queue-lock
+ * Handle objects represent an accessor to nodes. A handle is always held by a
+ * specific peer, and by that peer only. The peer-lock (or queue-lock,
  * respectively) protects access to this handle. Effectively, handles represent
  * a connection between two peers (between the holder of the handle and the
  * owner of its linked node). Such connections can exist both ways, hence, both
@@ -50,13 +50,13 @@
  *
  * @ref and @n_inflight must be accessed atomically, @node is set statically
  * and pinned for the entire lifetime of the object. @n_user, @rb_id, @rb_node,
- * @id, and @holder are protected by peer-lock of the holding peer. @link_node
- * is protected by the peer-lock of the node-owner (handle->node->owner.holder,
- * which *might* be NULL if racing a node destruction).
+ * @id, and @holder are protected by the peer-lock of the holding peer.
+ * @link_node is protected by the peer-lock of the node-owner
+ * (handle->node->owner.holder, which *might* be NULL if racing a node
+ * destruction).
  *
- * Handles always pin the node they're connected to, and the node can be
- * accessed freely at all times. During handle setup, two independent steps are
- * required:
+ * Handles always pin the node they're linked to, and the node can be accessed
+ * freely at all times. During handle setup, two independent steps are required:
  *
  *   1) Attach:
  *      The handle must be attached to the node so a node-owner can enumerate
@@ -71,19 +71,19 @@
  * peer locks of their holders. However, during teardown of a handle, the holder
  * must be cleared to NULL, which means racing accesses might be unable to
  * dereference the peer. Hence, if we detect this case, we treat the handle as
- * disconnected and rely on the context to clean the handle up properly.
- * The holder of a handle is set *before* ATTACH and cleared during UNINSTALL.
- * That is, we expect a handle to have the holder set before it is made visible
- * to any other context, but we immediately clear it at the first part of
+ * disconnected and rely on the context to clean the handle up properly. The
+ * holder of a handle is set *before* ATTACH and cleared during UNINSTALL. That
+ * is, we expect a handle to have the holder set before it is made visible to
+ * any other context, but we immediately clear it at the first part of
  * destruction.
  *
- * The 2 connections of a handle (to node, and to holder) can be dropped
- * independently. The holder of a handle always has full control over its
- * lifetime. That means, only if the holder releases its last reference, or if
- * they disconnect, they will cause an uninstall of the handle. As long as a
+ * The two connections of a handle (to its node, and to its holder) can be
+ * dropped independently. The holder of a handle always has full control over
+ * its lifetime. That means, only if the holder releases its last reference, or
+ * if they disconnect, they will cause an uninstall of the handle. As long as a
  * holder has a reference, the handle will stay alive (but there's no guarantee
  * that its linked node is still live).
- * At the same time, the owner of a node is under full control of the node
+ * At the same time, the owner of a node is has full control over the node
  * lifetime. They can destroy the node at any time, causing a detach operation
  * of all linked handles (note that all handle->node pointers stay valid, but
  * the handle->link_node links are cleared).
@@ -857,7 +857,7 @@ static bool bus1_node_is_valid(struct bus1_node *node,
 	 *
 	 * Two scenarios are supported:
 	 *
-	 *   1) A message is destined at @node, in which case the message must
+	 *   1) A message is destined for @node, in which case the message must
 	 *      have been staged on the message queue of the node owner, as well
 	 *      as a commit timestamp must have been acquired on the owner's
 	 *      clock.
@@ -1553,8 +1553,8 @@ int bus1_handle_dest_import(struct bus1_handle_dest *dest,
  * @commit:		whether to commit the node
  *
  * If a node was created as the destination of a transaction, we have to publish
- * a its handle ID back to the caller. This function acquires the ID, and it is
- * up to the caller to copy it back to userspace.
+ * its handle ID back to the caller. This function acquires the ID, and it is up
+ * to the caller to copy it back to userspace.
  *
  * The caller must hold the peer lock of @peer_info.
  *
@@ -1585,7 +1585,8 @@ u64 bus1_handle_dest_export(struct bus1_handle_dest *dest,
 	} else if (!bus1_node_is_valid(dest->handle->node, timestamp, sender)) {
 		id = BUS1_HANDLE_INVALID;
 	} else {
-		BUS1_WARN_ON(dest->handle->node->owner.id == BUS1_HANDLE_INVALID);
+		BUS1_WARN_ON(dest->handle->node->owner.id ==
+			     BUS1_HANDLE_INVALID);
 		id = dest->handle->node->owner.id;
 	}
 
@@ -2255,7 +2256,7 @@ size_t bus1_handle_inflight_walk(struct bus1_handle_inflight *inflight,
  * @seq:		sequence number of transaction
  *
  * This commits a fully installed inflight context, given the timestamp of a
- * transaction. This will make sure to only transfer the actual handle if it is
+ * transaction. This will make sure to only transfer the actual handles if it is
  * ordered *before* the handle destruction.
  *
  * This must be called after a successful walk via bus1_handle_inflight_walk().
