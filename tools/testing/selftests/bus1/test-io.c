@@ -114,7 +114,7 @@ static void test_basic(void)
 	assert(recv.msg.n_fds == 0);
 	assert(recv.msg.n_handles == 1);
 
-	child_handles[0] = *(uint64_t*) bus1_peer_slice_from_offset(parent,
+	child_handles[0] = *(uint64_t *) bus1_peer_slice_from_offset(parent,
 							recv.msg.offset);
 
 	r = bus1_peer_slice_release(parent, recv.msg.offset);
@@ -154,7 +154,7 @@ static void test_basic(void)
 	assert(recv.msg.n_fds == 0);
 	assert(recv.msg.n_handles == 1);
 
-	child_handles[1] = *(uint64_t*) bus1_peer_slice_from_offset(parent,
+	child_handles[1] = *(uint64_t *) bus1_peer_slice_from_offset(parent,
 							recv.msg.offset);
 
 	r = bus1_peer_slice_release(parent, recv.msg.offset);
@@ -164,7 +164,7 @@ static void test_basic(void)
 	r = client_send(parent, child_handles, 2, payload, strlen(payload) + 1);
 	assert(r >= 0);
 
-	r = client_recv(child1, (const void**)&reply_payload, &reply_len);
+	r = client_recv(child1, (const void **)&reply_payload, &reply_len);
 	assert(r >= 0);
 
 	assert(reply_len == strlen(payload) + 1);
@@ -173,7 +173,7 @@ static void test_basic(void)
 	r = client_slice_release(child1, reply_payload);
 	assert(r >= 0);
 
-	r = client_recv(child2, (const void**)&reply_payload, &reply_len);
+	r = client_recv(child2, (const void **)&reply_payload, &reply_len);
 	assert(r >= 0);
 
 	assert(reply_len == strlen(payload) + 1);
@@ -257,7 +257,7 @@ static void test_one(struct bus1_peer *parent,
 	/* receive */
 	for (i = 0; i < n_destinations; i++) {
 		r = client_recv(children[i],
-				(const void**)&reply_payload,
+				(const void **)&reply_payload,
 				&reply_len);
 		assert(r >= 0);
 
@@ -326,7 +326,7 @@ static uint64_t test_iterate(unsigned int iterations,
 		assert(recv.msg.n_fds == 0);
 		assert(recv.msg.n_handles == 1);
 
-		child_handles[i] = *(uint64_t*) bus1_peer_slice_from_offset(parent,
+		child_handles[i] = *(uint64_t *) bus1_peer_slice_from_offset(parent,
 								recv.msg.offset);
 
 		r = bus1_peer_slice_release(parent, recv.msg.offset);
