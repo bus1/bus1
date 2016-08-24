@@ -112,7 +112,7 @@ static void test_api_handle(void)
 	struct bus1_cmd_recv recv;
 	struct bus1_peer *c1, *c2;
 	uint64_t node, handle;
-	struct bus1_cmd_nodes_destroy destroy = {
+	struct bus1_cmd_node_destroy destroy = {
 		.n_nodes = 1,
 	};
 	int r;
@@ -134,7 +134,7 @@ static void test_api_handle(void)
 	/* verify clone-handle has no DESTROY access */
 
 	destroy.ptr_nodes = (uintptr_t)&handle;
-	r = bus1_peer_nodes_destroy(c2, &destroy);
+	r = bus1_peer_node_destroy(c2, &destroy);
 	assert(r < 0);
 	assert(r == -ENXIO);
 
@@ -171,9 +171,9 @@ static void test_api_handle(void)
 	/* verify that the owner can destroy its handle exactly once */
 
 	destroy.ptr_nodes = (uintptr_t)&node;
-	r = bus1_peer_nodes_destroy(c1, &destroy);
+	r = bus1_peer_node_destroy(c1, &destroy);
 	assert(r >= 0);
-	r = bus1_peer_nodes_destroy(c1, &destroy);
+	r = bus1_peer_node_destroy(c1, &destroy);
 	assert(r < 0);
 	assert(r == -ENXIO);
 

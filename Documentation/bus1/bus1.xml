@@ -388,13 +388,13 @@ argument.
               </varlistentry>
 
               <varlistentry>
-                <term><constant>BUS1_CMD_NODES_DESTROY</constant></term>
+                <term><constant>BUS1_CMD_NODE_DESTROY</constant></term>
                 <listitem>
                   <para>
 This command destroys a set of nodes. It takes the following structure as
 argument:
 <programlisting>
-struct bus1_cmd_nodes_destroy {
+struct bus1_cmd_node_destroy {
         __u64 flags;
         __u64 ptr_nodes;
         __u64 n_nodes;

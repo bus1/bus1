@@ -356,17 +356,17 @@ out:
 	return r;
 }
 
-static int bus1_peer_ioctl_nodes_destroy(struct bus1_peer *peer,
-					 unsigned long arg)
+static int bus1_peer_ioctl_node_destroy(struct bus1_peer *peer,
+					unsigned long arg)
 {
-	struct bus1_cmd_nodes_destroy param;
+	struct bus1_cmd_node_destroy param;
 	struct bus1_peer_info *peer_info = bus1_peer_dereference(peer);
 	u64 __user *ptr_nodes;
 	size_t n_handles = 0;
 	unsigned int i;
 	int r = 0;
 
-	BUILD_BUG_ON(_IOC_SIZE(BUS1_CMD_NODES_DESTROY) != sizeof(param));
+	BUILD_BUG_ON(_IOC_SIZE(BUS1_CMD_NODE_DESTROY) != sizeof(param));
 
 	if (copy_from_user(&param, (void __user *)arg, sizeof(param)))
 		return -EFAULT;
@@ -692,8 +692,8 @@ int bus1_peer_ioctl(struct bus1_peer *peer,
 		return bus1_peer_ioctl_reset(peer, arg);
 	case BUS1_CMD_HANDLE_TRANSFER:
 		return bus1_peer_ioctl_handle_transfer(peer, arg);
-	case BUS1_CMD_NODES_DESTROY:
-		return bus1_peer_ioctl_nodes_destroy(peer, arg);
+	case BUS1_CMD_NODE_DESTROY:
+		return bus1_peer_ioctl_node_destroy(peer, arg);
 	case BUS1_CMD_HANDLE_RELEASE:
 		return bus1_peer_ioctl_handle_release(peer, arg);
 	case BUS1_CMD_SLICE_RELEASE:

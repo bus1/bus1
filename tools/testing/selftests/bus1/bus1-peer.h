@@ -70,13 +70,13 @@ static inline void bus1_peer_freep(struct bus1_peer **peer)
 		bus1_peer_free(*peer);
 }
 
-static inline int bus1_peer_nodes_destroy(struct bus1_peer *peer,
-					struct bus1_cmd_nodes_destroy *destroy)
+static inline int bus1_peer_node_destroy(struct bus1_peer *peer,
+					 struct bus1_cmd_node_destroy *destroy)
 {
-	static_assert(_IOC_SIZE(BUS1_CMD_NODES_DESTROY) == sizeof(*destroy),
+	static_assert(_IOC_SIZE(BUS1_CMD_NODE_DESTROY) == sizeof(*destroy),
 		      "ioctl is called with invalid argument size");
 
-	return bus1_peer_ioctl(peer, BUS1_CMD_NODES_DESTROY, destroy);
+	return bus1_peer_ioctl(peer, BUS1_CMD_NODE_DESTROY, destroy);
 }
 
 static inline int bus1_peer_send(struct bus1_peer *peer,
