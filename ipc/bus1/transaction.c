@@ -280,12 +280,12 @@ bus1_transaction_instantiate_message(struct bus1_transaction *transaction,
 	if (r < 0) {
 		/*
 		 * If BUS1_SEND_FLAG_CONTINUE is specified, target errors are
-		 * ignored. That is, any error that is caused by the *target*,
+		 * not fatal. That is, any error that is caused by the *target*,
 		 * rather than the sender, will not cause an abort of the
-		 * transaction. Instead, we keep the erroneous message and will
-		 * signal the target during commit.
+		 * transaction.
 		 */
-		if (transaction->param->flags & BUS1_SEND_FLAG_CONTINUE)
+		if ((transaction->param->flags & BUS1_SEND_FLAG_CONTINUE) &&
+		    (r == -EXFULL || r == -EDQUOT))
 			r = 0;
 		goto error;
 	}
@@ -329,13 +329,14 @@ error:
 static struct bus1_message *
 bus1_transaction_instantiate(struct bus1_transaction *transaction,
 			     struct bus1_handle_dest *dest,
-			     u64 __user *idp)
+			     u64 __user *idp,
+			     u64 __user *errorp)
 {
 	struct bus1_peer_info *peer_info = NULL;
 	struct bus1_message *message;
 	int r;
 
-	r = bus1_handle_dest_import(dest, transaction->peer, idp);
+	r = bus1_handle_dest_import(dest, transaction->peer, idp, errorp);
 	if (r < 0)
 		return ERR_PTR(r);
 
@@ -351,6 +352,7 @@ bus1_transaction_instantiate(struct bus1_transaction *transaction,
  * bus1_transaction_instantiate_for_id() - instantiate a message
  * @transaction:	transaction to work with
  * @idp:		user-space pointer with destination ID
+ * @errorp:		user-space pointer with destination errno
  *
  * Instantiate the message from the given transaction for the handle id
  * in @idp. A new pool-slice is allocated, a queue entry is created and the
@@ -361,7 +363,7 @@ bus1_transaction_instantiate(struct bus1_transaction *transaction,
  * Return: 0 on success, negative error code on failure.
  */
 int bus1_transaction_instantiate_for_id(struct bus1_transaction *transaction,
-					u64 __user *idp)
+					u64 __user *idp, u64 __user *errorp)
 {
 	struct bus1_handle_dest dest;
 	struct bus1_message *message;
@@ -369,7 +371,7 @@ int bus1_transaction_instantiate_for_id(struct bus1_transaction *transaction,
 
 	bus1_handle_dest_init(&dest);
 
-	message = bus1_transaction_instantiate(transaction, &dest, idp);
+	message = bus1_transaction_instantiate(transaction, &dest, idp, errorp);
 	if (IS_ERR(message)) {
 		r = PTR_ERR(message);
 		goto error;
@@ -386,10 +388,10 @@ error:
 	return r;
 }
 
-void bus1_transaction_commit_one(struct bus1_transaction *transaction,
-				 struct bus1_message *message,
-				 struct bus1_handle_dest *dest,
-				 u64 timestamp)
+static void bus1_transaction_commit_one(struct bus1_transaction *transaction,
+					struct bus1_message *message,
+					struct bus1_handle_dest *dest,
+					u64 timestamp)
 {
 	struct bus1_peer_info *peer_info;
 	u64 id;
@@ -415,8 +417,7 @@ void bus1_transaction_commit_one(struct bus1_transaction *transaction,
 	if (id == BUS1_HANDLE_INVALID) {
 		/*
 		 * The destination node is no longer valid, and the CONTINUE
-		 * flag was set. Silently drop the message without infroming the
-		 * sender nor the receiver.
+		 * flag was set. Drop the message.
 		 */
 		bus1_queue_remove(&peer_info->queue, &message->qnode);
 		bus1_message_unpin(message, peer_info);
@@ -469,8 +470,8 @@ int bus1_transaction_commit(struct bus1_transaction *transaction)
 	struct bus1_handle_dest dest;
 	struct bus1_peer *peer;
 	u64 id, timestamp;
-	u64 __user *idp;
-	int r;
+	u64 __user *idp, *errorp;
+	int r = 0;
 
 	list = transaction->entries;
 	timestamp = 0;
@@ -514,8 +515,11 @@ int bus1_transaction_commit(struct bus1_transaction *transaction)
 	 * timestamp than the final one for this transaction.
 	 */
 	for (message = list; message; message = message->transaction.next) {
+		int error = message->error;
+
 		peer = message->transaction.dest.raw_peer;
 		idp = message->transaction.dest.idp;
+		errorp = message->transaction.dest.errorp;
 		bus1_active_lockdep_acquired(&peer->active);
 		peer_info = bus1_peer_dereference(peer);
 
@@ -528,17 +532,25 @@ int bus1_transaction_commit(struct bus1_transaction *transaction)
 					peer_info, timestamp,
 					message->qnode.sender, false);
 		mutex_unlock(&peer_info->lock);
-		if (id != BUS1_HANDLE_INVALID ||
-		    transaction->param->flags & BUS1_SEND_FLAG_CONTINUE)
-			r = (idp && put_user(id, idp)) ? -EFAULT : 0;
-		else
-			r = -EHOSTUNREACH;
 
 		bus1_active_lockdep_released(&peer->active);
 
-		if (r < 0)
-			return r;
+		if (id != BUS1_HANDLE_INVALID) {
+			if (idp && put_user(id, idp))
+				return -EFAULT;
+		} else {
+			error = EHOSTUNREACH;
+		}
+
+		if (errorp && put_user(error, errorp))
+			return -EFAULT;
+
+		if (error && r != -EHOSTUNREACH)
+			r = -error;
 	}
+
+	if (r < 0 && !(transaction->param->flags & BUS1_SEND_FLAG_CONTINUE))
+		return r;
 
 	if (param->n_handles) {
 		idp = (u64 __user *)(unsigned long)param->ptr_handles;

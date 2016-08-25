@@ -1429,6 +1429,7 @@ void bus1_handle_dest_init(struct bus1_handle_dest *dest)
 	dest->handle = NULL;
 	dest->raw_peer = NULL;
 	dest->idp = NULL;
+	dest->errorp = NULL;
 }
 
 /**
@@ -1460,7 +1461,8 @@ void bus1_handle_dest_destroy(struct bus1_handle_dest *dest,
  * bus1_handle_dest_import() - import destination handle
  * @dest:		destination context
  * @peer:		peer to import handles of
- * @idp:		user-space handle ID
+ * @idp:		user-space handle ID pointer
+ * @errorp:		user-space errno pointer
  *
  * This imports a handle-ID from user-space (provided as @idp) into the
  * destination handle context. It then resolves it to the actual bus1_handle
@@ -1472,19 +1474,24 @@ void bus1_handle_dest_destroy(struct bus1_handle_dest *dest,
  */
 int bus1_handle_dest_import(struct bus1_handle_dest *dest,
 			    struct bus1_peer *peer,
-			    u64 __user *idp)
+			    u64 __user *idp,
+			    u64 __user *errorp)
 {
 	struct bus1_peer_info *peer_info = bus1_peer_dereference(peer);
 	struct bus1_peer_info *dst_peer_info;
 	struct bus1_handle *handle;
 	struct bus1_peer *dst_peer;
-	u64 id;
+	u64 id, error = 0;
 
-	if (BUS1_WARN_ON(dest->handle || dest->raw_peer || dest->idp))
+	if (BUS1_WARN_ON(dest->handle || dest->raw_peer || dest->idp ||
+	    dest->errorp))
 		return -ENOTRECOVERABLE;
 
 	if (get_user(id, idp))
+	if (errorp && get_user(error, errorp))
 		return -EFAULT;
+	if (error)
+		return -EINVAL;
 
 	if (id & BUS1_NODE_FLAG_ALLOCATE) {
 		if (!bus1_peer_acquire(peer))
@@ -1512,6 +1519,7 @@ int bus1_handle_dest_import(struct bus1_handle_dest *dest,
 		dest->handle = handle;
 		dest->raw_peer = peer;
 		dest->idp = idp;
+		dest->errorp = errorp;
 		bus1_active_lockdep_released(&peer->active);
 	} else {
 		handle = bus1_handle_find_by_id(peer_info, id);
@@ -1541,6 +1549,7 @@ int bus1_handle_dest_import(struct bus1_handle_dest *dest,
 		dest->handle = handle;
 		dest->raw_peer = dst_peer;
 		dest->idp = NULL;
+		dest->errorp = errorp;
 		bus1_active_lockdep_released(&dst_peer->active);
 	}
 

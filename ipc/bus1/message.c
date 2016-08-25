@@ -70,6 +70,7 @@ struct bus1_message *bus1_message_new(size_t n_bytes,
 	message->n_bytes = n_bytes; /* does *not* match slice->size! */
 	message->n_files = n_files;
 	message->n_accounted_handles = 0;
+	message->error = 0;
 	bus1_handle_inflight_init(&message->handles, n_handles);
 	memset(message->files, 0, n_files * sizeof(*message->files));
 
@@ -184,6 +185,8 @@ int bus1_message_allocate(struct bus1_message *message,
 
 exit:
 	mutex_unlock(&peer_info->lock);
+	if (r == -EDQUOT || r == -EXFULL)
+		message->error = r;
 	return r;
 }
 

@@ -46,6 +46,7 @@ struct bus1_user;
  * @n_bytes:			number of user-bytes transmitted
  * @n_files:			number of files transmitted
  * @n_accounted_handles:	number of accounted handles
+ * @error:			error code for message delivery
  * @handles:			passed handles
  */
 struct bus1_message {
@@ -68,6 +69,7 @@ struct bus1_message {
 	size_t n_bytes;
 	size_t n_files;
 	size_t n_accounted_handles;
+	int error;
 	struct bus1_handle_inflight handles;
 	/* handles must be last */
 };

@@ -47,6 +47,7 @@ enum {
 struct bus1_cmd_send {
 	__u64 flags;
 	__u64 ptr_destinations;
+	__u64 ptr_errors;
 	__u64 n_destinations;
 	__u64 ptr_vecs;
 	__u64 n_vecs;

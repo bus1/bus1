@@ -449,7 +449,7 @@ static int bus1_peer_ioctl_send(struct bus1_peer *peer, unsigned long arg)
 	/* Use a stack-allocated buffer for the transaction object if it fits */
 	u8 buf[512];
 	struct bus1_cmd_send param;
-	u64 __user *ptr_dest;
+	u64 __user *ptr_dest, *ptr_err;
 	size_t i;
 	int r;
 
@@ -469,6 +469,8 @@ static int bus1_peer_ioctl_send(struct bus1_peer *peer, unsigned long arg)
 	/* 32bit pointer validity checks */
 	if (unlikely(param.ptr_destinations !=
 		     (u64)(unsigned long)param.ptr_destinations) ||
+	    unlikely(param.ptr_errors !=
+		     (u64)(unsigned long)param.ptr_errors) ||
 	    unlikely(param.ptr_vecs !=
 		     (u64)(unsigned long)param.ptr_vecs) ||
 	    unlikely(param.ptr_handles !=
@@ -478,6 +480,7 @@ static int bus1_peer_ioctl_send(struct bus1_peer *peer, unsigned long arg)
 		return -EFAULT;
 
 	ptr_dest = (u64 __user *)(unsigned long)param.ptr_destinations;
+	ptr_err = (u64 __user *)(unsigned long)param.ptr_errors;
 
 	transaction = bus1_transaction_new_from_user(buf, sizeof(buf), peer,
 						     &param);
@@ -497,7 +500,10 @@ static int bus1_peer_ioctl_send(struct bus1_peer *peer, unsigned long arg)
 	} else {
 		for (i = 0; i < param.n_destinations; ++i) {
 			r = bus1_transaction_instantiate_for_id(transaction,
-								ptr_dest + i);
+								ptr_dest + i,
+								ptr_err ?
+								ptr_err + i :
+								NULL);
 			if (r < 0)
 				goto exit;
 		}
