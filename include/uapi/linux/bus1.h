@@ -72,7 +72,6 @@ enum {
 
 struct bus1_cmd_recv {
 	__u64 flags;
-	__u64 n_dropped;
 	struct {
 		__u64 type;
 		__u64 destination;

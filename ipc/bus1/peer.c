@@ -602,11 +602,6 @@ bus1_peer_queue_peek(struct bus1_peer_info *peer_info,
 			bus1_queue_remove(&peer_info->queue, node);
 	}
 
-	if (drop)
-		param->n_dropped = bus1_queue_flush_dropped(&peer_info->queue);
-	else
-		param->n_dropped = bus1_queue_peek_dropped(&peer_info->queue);
-
 	return node;
 }
 
@@ -657,14 +652,13 @@ static int bus1_peer_ioctl_recv(struct bus1_peer *peer, unsigned long arg)
 	if (unlikely(param.flags & ~(BUS1_RECV_FLAG_PEEK |
 				     BUS1_RECV_FLAG_SEED |
 				     BUS1_RECV_FLAG_INSTALL_FDS) ||
-		     param.n_dropped != 0 ||
 		     param.msg.type != BUS1_MSG_NONE))
 		return -EINVAL;
 
 	r = bus1_peer_dequeue(peer_info, &param);
 	if (r < 0)
 		return r;
-	if (!param.n_dropped && param.msg.type == BUS1_MSG_NONE)
+	if (param.msg.type == BUS1_MSG_NONE)
 		return -EAGAIN;
 
 	return copy_to_user((void __user *)arg,

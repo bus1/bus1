@@ -47,7 +47,6 @@ static int client_recv(struct bus1_peer *client,
 	if (r < 0)
 		return r;
 
-	assert(recv.n_dropped == 0);
 	assert(recv.msg.type == BUS1_MSG_DATA);
 
 	*datap = bus1_peer_slice_from_offset(client, recv.msg.offset);
@@ -108,7 +107,6 @@ static void test_basic(void)
 	recv = (struct bus1_cmd_recv){};
 	r = bus1_peer_recv(parent, &recv);
 	assert(r >= 0);
-	assert(recv.n_dropped == 0);
 	assert(recv.msg.type == BUS1_MSG_DATA);
 	assert(recv.msg.n_bytes == 0);
 	assert(recv.msg.n_fds == 0);
@@ -148,7 +146,6 @@ static void test_basic(void)
 	recv = (struct bus1_cmd_recv){};
 	r = bus1_peer_recv(parent, &recv);
 	assert(r >= 0);
-	assert(recv.n_dropped == 0);
 	assert(recv.msg.type == BUS1_MSG_DATA);
 	assert(recv.msg.n_bytes == 0);
 	assert(recv.msg.n_fds == 0);
@@ -320,7 +317,6 @@ static uint64_t test_iterate(unsigned int iterations,
 		recv = (struct bus1_cmd_recv){};
 		r = bus1_peer_recv(parent, &recv);
 		assert(r >= 0);
-		assert(recv.n_dropped == 0);
 		assert(recv.msg.type == BUS1_MSG_DATA);
 		assert(recv.msg.n_bytes == 0);
 		assert(recv.msg.n_fds == 0);

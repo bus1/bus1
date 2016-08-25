@@ -131,7 +131,6 @@ struct bus1_queue_node {
  * @seed:		seed message
  * @messages:		queued messages
  * @lock:		data lock
- * @n_dropped:		number of dropped messages since last report
  */
 struct bus1_queue {
 	u64 clock;
@@ -140,7 +139,6 @@ struct bus1_queue {
 	struct bus1_queue_node *seed;
 	struct rb_root messages;
 	struct mutex lock;
-	atomic_t n_dropped;
 };
 
 /* nodes */
@@ -169,7 +167,6 @@ bool bus1_queue_commit_staged(struct bus1_queue *queue,
 void bus1_queue_commit_unstaged(struct bus1_queue *queue,
 				struct bus1_queue_node *node);
 void bus1_queue_remove(struct bus1_queue *queue, struct bus1_queue_node *node);
-void bus1_queue_drop(struct bus1_queue *queue, struct bus1_queue_node *node);
 struct bus1_queue_node *bus1_queue_peek(struct bus1_queue *queue, bool seed);
 
 /**
@@ -213,16 +210,6 @@ static inline u64 bus1_queue_sync(struct bus1_queue *queue, u64 timestamp)
 	return queue->clock;
 }
 
-static inline u64 bus1_queue_peek_dropped(struct bus1_queue *queue)
-{
-	return atomic_read(&queue->n_dropped);
-}
-
-static inline u64 bus1_queue_flush_dropped(struct bus1_queue *queue)
-{
-	return atomic_xchg(&queue->n_dropped, 0);
-}
-
 /**
  * bus1_queue_is_readable() - check whether a queue is readable
  * @queue:	queue to operate on
@@ -244,8 +231,7 @@ static inline u64 bus1_queue_flush_dropped(struct bus1_queue *queue)
  */
 static inline bool bus1_queue_is_readable(struct bus1_queue *queue)
 {
-	return rcu_access_pointer(queue->front) ||
-	       atomic_read(&queue->n_dropped) > 0;
+	return rcu_access_pointer(queue->front);
 }
 
 /**

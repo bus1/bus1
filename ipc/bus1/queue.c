@@ -188,7 +188,6 @@ void bus1_queue_init(struct bus1_queue *queue, wait_queue_head_t *waitq)
 	queue->seed = NULL;
 	queue->messages = RB_ROOT;
 	mutex_init(&queue->lock);
-	atomic_set(&queue->n_dropped, 0);
 }
 
 /**
@@ -510,13 +509,6 @@ void bus1_queue_remove(struct bus1_queue *queue, struct bus1_queue_node *node)
 
 exit:
 	mutex_unlock(&queue->lock);
-}
-
-void bus1_queue_drop(struct bus1_queue *queue, struct bus1_queue_node *node)
-{
-	bus1_queue_remove(queue, node);
-	if (atomic_inc_return(&queue->n_dropped) == 1)
-		wake_up_interruptible(queue->waitq);
 }
 
 /**

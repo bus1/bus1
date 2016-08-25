@@ -405,7 +405,7 @@ static void bus1_transaction_commit_one(struct bus1_transaction *transaction,
 		 * without informing the sender. The count of dropped messages
 		 * is increased in the receiving queue.
 		 */
-		bus1_queue_drop(&peer_info->queue, &message->qnode);
+		bus1_queue_remove(&peer_info->queue, &message->qnode);
 		bus1_message_unref(message);
 		return;
 	}

@@ -484,7 +484,6 @@ This command receives a message. It takes the following structure as argument:
 <programlisting>
 struct bus1_cmd_recv {
         __u64 flags;
-        __u64 n_dropped;
         struct {
                 __u64 type;
                 __u64 destination;
@@ -509,21 +508,15 @@ when using the last flag from more than one process on the same message as file
 descriptor numbers are per-process and not per-peer.
                   </para>
                   <para>
-<varname>n_dropped</varname> indicates the number of silently dropped messages
-destined for this peer. The count is reset unless the
-<constant>BUS1_RECV_FLAG_PEEK</constant> flag was passed.
-                  </para>
-                  <para>
 <varname>msg.type</varname> indicates the type of message.
-<constant>BUS1_MSG_NONE</constant> is used to only receive
-<varname>n_dropped</varname>. <constant>BUS1_MSG_DATA</constant> indicates a
-regular message sent from another peer, possibly containing a payload, as well
-as attached handles and filedescriptors.
-<constant>BUS1_MSG_NODE_DESTROY</constant> indicates that the node referenced
-by the handle in <varname>msg.destination</varname> was destroyed by its owner.
-<constant>BUS1_MSG_NODE_RELEASE</constant> indicates that all the references to
-handles referencing the node in <varname>msg.destination</varname> have been
-released.
+<constant>BUS1_MSG_NONE</constant> is never returned.
+<constant>BUS1_MSG_DATA</constant> indicates a regular message sent from another
+peer, possibly containing a payload, as well as attached handles and
+filedescriptors. <constant>BUS1_MSG_NODE_DESTROY</constant> indicates that the
+node referenced by the handle in <varname>msg.destination</varname> was
+destroyed by its owner. <constant>BUS1_MSG_NODE_RELEASE</constant> indicates
+that all the references to handles referencing the node in
+<varname>msg.destination</varname> have been released.
                   </para>
                   <para>
 <varname>msg.destination</varname> is the ID of the destination node or handle
