@@ -1646,7 +1646,7 @@ static union bus1_handle_entry *bus1_handle_list_new(size_t n)
 	}
 
 	if (remaining > 0) {
-		slot->next = kmalloc(sizeof(*e) * remaining, GFP_KERNEL);
+		slot->next = kmalloc_array(remaining, sizeof(*e), GFP_KERNEL);
 		if (!slot->next)
 			goto error;
 	}

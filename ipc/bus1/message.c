@@ -290,7 +290,7 @@ int bus1_message_install(struct bus1_message *message,
 	if (message->handles.batch.n_entries > 0) {
 		n_ids = min_t(size_t, message->handles.batch.n_entries,
 				      BUS1_HANDLE_BATCH_SIZE);
-		ids = kmalloc(n_ids * sizeof(*ids), GFP_TEMPORARY);
+		ids = kmalloc_array(n_ids, sizeof(*ids), GFP_TEMPORARY);
 		if (!ids) {
 			r = -ENOMEM;
 			goto exit;
@@ -320,7 +320,8 @@ int bus1_message_install(struct bus1_message *message,
 	}
 
 	if (inst_fds && message->n_files > 0) {
-		fds = kmalloc(message->n_files * sizeof(*fds), GFP_TEMPORARY);
+		fds = kmalloc_array(message->n_files, sizeof(*fds),
+				    GFP_TEMPORARY);
 		if (!fds) {
 			r = -ENOMEM;
 			goto exit;
