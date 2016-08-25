@@ -1226,9 +1226,6 @@ exit:
  * @n_handlesp:		output-var to store number of released handles, or NULL
  *
  * This releases a *user* visible reference to the handle with the given ID.
- * The usual allocation rules for @idp apply. If @idp was modified, 1 is
- * returned. If @idp was not modified, 0 is returned. On error, a negative
- * error code is returned.
  *
  * For each handle of which the last user-refcount is dropped, this increments
  * @n_handlesp by one (usually this means either 0 or 1).
