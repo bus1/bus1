@@ -27,8 +27,8 @@
 #define N_TESTS (sizeof(tests) / sizeof(tests[0]))
 
 static const char *arg_module = "bus1";
-static const char *arg_test = NULL;
-char *test_path = NULL;
+static const char *arg_test;
+char *test_path;
 
 int c_sys_clone(unsigned long flags, void *child_stack)
 {
@@ -71,7 +71,7 @@ static int run_one(const struct test *test)
 	fprintf(stdout, "Testing: `%s' ", test->name);
 	for (i = line_len; i < 60; ++i)
 		fprintf(stdout, ".");
-	fprintf(stdout, " \n\n");
+	fprintf(stdout, "\n\n");
 	fflush(stdout);
 
 	/* run test */
