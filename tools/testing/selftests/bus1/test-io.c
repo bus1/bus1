@@ -248,7 +248,8 @@ static void test_one(struct bus1_peer *parent,
 	int r;
 
 	/* send */
-	r = client_send(parent, child_handles, n_destinations, payload, n_bytes);
+	r = client_send(parent, child_handles, n_destinations, payload,
+			n_bytes);
 	assert(r >= 0);
 
 	/* receive */
@@ -322,19 +323,21 @@ static uint64_t test_iterate(unsigned int iterations,
 		assert(recv.msg.n_fds == 0);
 		assert(recv.msg.n_handles == 1);
 
-		child_handles[i] = *(uint64_t *) bus1_peer_slice_from_offset(parent,
-								recv.msg.offset);
+		child_handles[i] = *(uint64_t *)
+			bus1_peer_slice_from_offset(parent, recv.msg.offset);
 
 		r = bus1_peer_slice_release(parent, recv.msg.offset);
 		assert(r >= 0);
 	}
 
 	/* caches */
-	test_one(parent, children, child_handles, n_destinations, payload, n_bytes);
+	test_one(parent, children, child_handles, n_destinations, payload,
+		 n_bytes);
 
 	time_start = nsec_from_clock(CLOCK_THREAD_CPUTIME_ID);
 	for (i = 0; i < iterations; i++)
-		test_one(parent, children, child_handles, n_destinations, payload, n_bytes);
+		test_one(parent, children, child_handles, n_destinations,
+			 payload, n_bytes);
 	time_end = nsec_from_clock(CLOCK_THREAD_CPUTIME_ID);
 
 	/* cleanup */
