@@ -71,7 +71,7 @@ static int run_one(const struct test *test)
 	fprintf(stdout, "Testing: `%s' ", test->name);
 	for (i = line_len; i < 60; ++i)
 		fprintf(stdout, ".");
-	fprintf(stdout, " \n\n");
+	fprintf(stdout, "\n\n");
 	fflush(stdout);
 
 	/* run test */
