@@ -27,8 +27,8 @@
 #define N_TESTS (sizeof(tests) / sizeof(tests[0]))
 
 static const char *arg_module = "bus1";
-static const char *arg_test = NULL;
-char *test_path = NULL;
+static const char *arg_test;
+char *test_path;
 
 int c_sys_clone(unsigned long flags, void *child_stack)
 {
