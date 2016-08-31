@@ -396,8 +396,8 @@ static void bus1_handle_attach_internal(struct bus1_handle *handle,
 	bus1_handle_ref(handle);
 
 	/*
-	 * This BUS1_WARN_ON and lockdep must be after the attach operation, since
-	 * otherwise the holder would be unset for owner attachments.
+	 * This BUS1_WARN_ON and lockdep must be after the attach operation,
+	 * since otherwise the holder would be unset for owner attachments.
 	 */
 	owner = rcu_access_pointer(handle->node->owner.holder);
 	BUS1_WARN_ON(!owner);
