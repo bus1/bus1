@@ -156,7 +156,7 @@ int bus1_message_allocate(struct bus1_message *message,
 	/* cannot overflow as all of those are limited */
 	slice_size = ALIGN(message->n_bytes, 8) +
 		     ALIGN(message->handles.batch.n_entries * sizeof(u64), 8) +
-		     ALIGN(message->n_files + sizeof(int), 8);
+		     ALIGN(message->n_files * sizeof(int), 8);
 
 	/* empty slices are forbidden, so make sure to allocate a minimum */
 	slice_size = max_t(size_t, slice_size, 8);
