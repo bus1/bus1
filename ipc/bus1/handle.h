@@ -233,7 +233,8 @@ void bus1_handle_inflight_flush(struct bus1_handle_inflight *inflight,
 				struct bus1_peer_info *peer_info);
 int bus1_handle_inflight_import(struct bus1_handle_inflight *inflight,
 				struct bus1_peer_info *peer_info,
-				struct bus1_handle_transfer *transfer);
+				struct bus1_handle_transfer *transfer,
+				struct bus1_peer_info *transfer_info);
 void bus1_handle_inflight_install(struct bus1_handle_inflight *inflight,
 				  struct bus1_peer *dst);
 size_t bus1_handle_inflight_walk(struct bus1_handle_inflight *inflight,

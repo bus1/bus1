@@ -17,6 +17,7 @@
 #include <linux/pid.h>
 #include <linux/pid_namespace.h>
 #include <linux/sched.h>
+#include <linux/security.h>
 #include <linux/slab.h>
 #include <linux/uaccess.h>
 #include <linux/uidgid.h>
@@ -28,6 +29,7 @@
 #include "peer.h"
 #include "pool.h"
 #include "queue.h"
+#include "security.h"
 #include "transaction.h"
 #include "user.h"
 #include "util.h"
@@ -269,6 +271,10 @@ bus1_transaction_instantiate_message(struct bus1_transaction *transaction,
 	size_t i;
 	int r;
 
+	r = security_bus1_transfer_message(transaction->peer_info, peer_info);
+	if (r < 0)
+		return ERR_PTR(r);
+
 	message = bus1_message_new(transaction->length_vecs,
 				   transaction->param->n_fds,
 				   transaction->param->n_handles,
@@ -300,7 +306,8 @@ bus1_transaction_instantiate_message(struct bus1_transaction *transaction,
 		goto error;
 
 	r = bus1_handle_inflight_import(&message->handles, peer_info,
-					&transaction->handles);
+					&transaction->handles,
+					transaction->peer_info);
 	if (r < 0)
 		goto error;
 
@@ -311,8 +318,15 @@ bus1_transaction_instantiate_message(struct bus1_transaction *transaction,
 	message->pid = pid_nr_ns(transaction->pid, peer_info->pid_ns);
 	message->tid = pid_nr_ns(transaction->tid, peer_info->pid_ns);
 
-	for (i = 0; i < transaction->param->n_fds; ++i)
+	for (i = 0; i < transaction->param->n_fds; ++i) {
+		r = security_bus1_transfer_file(transaction->peer_info,
+						peer_info,
+						transaction->files[i]);
+		if (r < 0)
+			goto error;
+
 		message->files[i] = get_file(transaction->files[i]);
+	}
 
 	return message;
 

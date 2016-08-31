@@ -18,6 +18,7 @@
 #include <linux/rbtree.h>
 #include <linux/rcupdate.h>
 #include <linux/sched.h>
+#include <linux/security.h>
 #include <linux/seqlock.h>
 #include <linux/slab.h>
 #include <linux/uaccess.h>
@@ -26,6 +27,7 @@
 #include "handle.h"
 #include "peer.h"
 #include "queue.h"
+#include "security.h"
 #include "util.h"
 
 /**
@@ -1107,6 +1109,11 @@ int bus1_handle_pair(struct bus1_peer *src,
 			src_handle = NULL;
 			goto exit;
 		}
+
+		r = security_bus1_transfer_handle(src_info, dst_info,
+						  src_handle->node);
+		if (r < 0)
+			goto exit;
 	} else {
 		src_handle = bus1_handle_find_by_id(src_info, *src_idp);
 		if (!src_handle)
@@ -1116,6 +1123,11 @@ int bus1_handle_pair(struct bus1_peer *src,
 			r = -ENXIO;
 			goto exit;
 		}
+
+		r = security_bus1_transfer_handle(src_info, dst_info,
+						  src_handle->node);
+		if (r < 0)
+			goto exit;
 
 		rcu_read_lock();
 		owner = rcu_dereference(src_handle->node->owner.holder);
@@ -2066,6 +2078,7 @@ void bus1_handle_inflight_flush(struct bus1_handle_inflight *inflight,
  * @inflight:		inflight context to instantiate
  * @peer_info:		peer info to instantiate for
  * @transfer:		transfer object to instantiate from
+ * @transfer_info:	peer info owning the transfer object
  *
  * Instantiate an inflight-context from an existing transfer-context. Import
  * each pinned handle from the transfer-context into the peer @peer_info,
@@ -2079,7 +2092,8 @@ void bus1_handle_inflight_flush(struct bus1_handle_inflight *inflight,
  */
 int bus1_handle_inflight_import(struct bus1_handle_inflight *inflight,
 				struct bus1_peer_info *peer_info,
-				struct bus1_handle_transfer *transfer)
+				struct bus1_handle_transfer *transfer,
+				struct bus1_peer_info *transfer_info)
 {
 	union bus1_handle_entry *from, *to;
 	struct bus1_handle *handle, *t;
@@ -2099,6 +2113,11 @@ int bus1_handle_inflight_import(struct bus1_handle_inflight *inflight,
 	BUS1_HANDLE_BATCH_FOREACH_HANDLE(from, pos_from, &transfer->batch) {
 		t = from->handle;
 		if (t) {
+			r = security_bus1_transfer_handle(transfer_info,
+							  peer_info, t->node);
+			if (r < 0)
+				return r;
+
 			handle = bus1_handle_find_by_node(peer_info, t->node);
 			if (handle && !bus1_handle_acquire(handle, peer_info))
 				handle = bus1_handle_unref(handle);
