@@ -411,10 +411,10 @@ bool bus1_queue_commit_staged(struct bus1_queue *queue,
 		bus1_queue_add(queue, node, timestamp);
 		mutex_unlock(&queue->lock);
 		return true;
-	} else {
-		mutex_unlock(&queue->lock);
-		return false;
 	}
+
+	mutex_unlock(&queue->lock);
+	return false;
 }
 
 /**
