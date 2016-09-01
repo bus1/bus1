@@ -366,41 +366,42 @@ static int bus1_peer_ioctl_node_destroy(struct bus1_peer *peer,
 	struct bus1_cmd_node_destroy param;
 	struct bus1_peer_info *peer_info = bus1_peer_dereference(peer);
 	u64 __user *ptr_nodes;
-	size_t n_handles = 0;
+	size_t n_handles;
 	unsigned int i;
-	int r = 0;
+	int r, res;
+	u64 id;
 
 	BUILD_BUG_ON(_IOC_SIZE(BUS1_CMD_NODE_DESTROY) != sizeof(param));
 
 	if (copy_from_user(&param, (void __user *)arg, sizeof(param)))
 		return -EFAULT;
-
-	if (unlikely(param.flags) || unlikely(!param.n_nodes))
+	if (unlikely(param.flags))
 		return -EINVAL;
-
-	/* 32bit pointer validity checks */
 	if (unlikely(param.ptr_nodes != (u64)(unsigned long)param.ptr_nodes))
 		return -EFAULT;
 
 	ptr_nodes = (u64 __user *)(unsigned long)param.ptr_nodes;
+	n_handles = 0;
+	res = 0;
 
 	/* XXX: make atomic and disallow partial failures */
 	for (i = 0; i < param.n_nodes; ++i) {
-		int k;
-
-		/* returns >= 0 on success, and > 0 in case @id was modified */
-		k = bus1_node_destroy_by_id(peer, ptr_nodes + i, &n_handles);
-		if (k < 0)
-			r = k;
-
-		if (k > 0 && put_user(ptr_nodes[i],
-				      (u64 __user *)param.ptr_nodes) + i)
+		if (get_user(id, ptr_nodes + i)) {
 			r = -EFAULT;
+		} else {
+			/* >= 0 on success, >0 in case @id was modified */
+			r = bus1_node_destroy_by_id(peer, &id, &n_handles);
+			if (r > 0 && put_user(id, ptr_nodes + i))
+				r = -EFAULT;
+		}
+
+		if (unlikely(r < 0 && res >= 0))
+			res = r;
 	}
 
 	atomic_add(n_handles, &peer_info->user->n_handles);
 
-	return r;
+	return res;
 }
 
 static int bus1_peer_ioctl_handle_release(struct bus1_peer *peer,
