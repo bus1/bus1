@@ -6,7 +6,6 @@ OBJS =				\
 	test-api.o		\
 	test-hive.o		\
 	test-io.o		\
-	test-peer.o		\
 	test-xfer.o
 
 CFLAGS += -Wall -I../../../../usr/include/
