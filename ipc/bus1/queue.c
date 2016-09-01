@@ -404,17 +404,17 @@ bool bus1_queue_commit_staged(struct bus1_queue *queue,
 			      struct bus1_queue_node *node,
 			      u64 timestamp)
 {
+	bool committed;
+
 	BUS1_WARN_ON(timestamp & 1);
 
 	mutex_lock(&queue->lock);
-	if (bus1_queue_node_is_queued(node)) {
+	committed = bus1_queue_node_is_queued(node);
+	if (committed)
 		bus1_queue_add(queue, node, timestamp);
-		mutex_unlock(&queue->lock);
-		return true;
-	} else {
-		mutex_unlock(&queue->lock);
-		return false;
-	}
+	mutex_unlock(&queue->lock);
+
+	return committed;
 }
 
 /**
@@ -435,9 +435,8 @@ void bus1_queue_commit_unstaged(struct bus1_queue *queue,
 				struct bus1_queue_node *node)
 {
 	mutex_lock(&queue->lock);
-	if (!bus1_queue_node_is_queued(node)) {
+	if (!bus1_queue_node_is_queued(node))
 		bus1_queue_add(queue, node, bus1_queue_tick(queue));
-	}
 	mutex_unlock(&queue->lock);
 }
 
