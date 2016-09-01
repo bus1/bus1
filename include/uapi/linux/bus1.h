@@ -83,6 +83,7 @@ struct bus1_cmd_recv {
 		__u64 n_bytes;
 		__u64 n_handles;
 		__u64 n_fds;
+		__u64 n_secctx;
 	} __attribute__((__aligned__(8))) msg;
 } __attribute__((__aligned__(8)));
 

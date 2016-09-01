@@ -19,6 +19,7 @@
 #include <linux/sched.h>
 #include <linux/security.h>
 #include <linux/slab.h>
+#include <linux/security.h>
 #include <linux/uaccess.h>
 #include <linux/uidgid.h>
 #include <linux/uio.h>
@@ -42,6 +43,8 @@ struct bus1_transaction {
 	const struct cred *cred;
 	struct pid *pid;
 	struct pid *tid;
+	char *secctx;
+	u32 n_secctx;
 
 	/* payload */
 	struct iovec *vecs;
@@ -83,6 +86,8 @@ static void bus1_transaction_init(struct bus1_transaction *transaction,
 	transaction->cred = current_cred();
 	transaction->pid = task_tgid(current);
 	transaction->tid = task_pid(current);
+	transaction->secctx = NULL;
+	transaction->n_secctx = 0;
 
 	transaction->vecs = (void *)((u8 *)(transaction + 1) +
 			bus1_handle_batch_inline_size(param->n_handles));
@@ -123,6 +128,29 @@ static void bus1_transaction_destroy(struct bus1_transaction *transaction)
 	bus1_handle_transfer_release(&transaction->handles,
 				     transaction->peer_info);
 	bus1_handle_transfer_destroy(&transaction->handles);
+
+	security_release_secctx(transaction->secctx, transaction->n_secctx);
+}
+
+static int bus1_transaction_set_secctx(struct bus1_transaction *transaction)
+{
+#ifdef CONFIG_SECURITY
+	u32 sid;
+	int r;
+
+	BUS1_WARN_ON(transaction->secctx || transaction->n_secctx);
+
+	security_task_getsecid(current, &sid);
+	if (!sid)
+		return 0;
+
+	r = security_secid_to_secctx(sid, &transaction->secctx,
+				     &transaction->n_secctx);
+	if (r < 0)
+		return r;
+#endif
+
+	return 0;
 }
 
 static int bus1_transaction_import_vecs(struct bus1_transaction *transaction)
@@ -215,6 +243,12 @@ bus1_transaction_new_from_user(u8 *stack_buffer,
 		transaction = (void *)stack_buffer;
 	}
 	bus1_transaction_init(transaction, peer, param);
+	if (r < 0)
+		goto error;
+
+	r = bus1_transaction_set_secctx(transaction);
+	if (r < 0)
+		goto error;
 
 	r = bus1_transaction_import_vecs(transaction);
 	if (r < 0)
@@ -268,7 +302,11 @@ bus1_transaction_instantiate_message(struct bus1_transaction *transaction,
 				     struct bus1_peer_info *peer_info)
 {
 	struct bus1_message *message;
-	size_t i;
+	struct kvec vec = {
+		.iov_base = transaction->secctx,
+		.iov_len = transaction->n_secctx,
+	};
+	size_t offset, i;
 	int r;
 
 	r = security_bus1_transfer_message(transaction->peer_info, peer_info);
@@ -278,6 +316,7 @@ bus1_transaction_instantiate_message(struct bus1_transaction *transaction,
 	message = bus1_message_new(transaction->length_vecs,
 				   transaction->param->n_fds,
 				   transaction->param->n_handles,
+				   transaction->n_secctx,
 				   transaction->peer_info);
 	if (IS_ERR(message))
 		return message;
@@ -296,12 +335,25 @@ bus1_transaction_instantiate_message(struct bus1_transaction *transaction,
 		goto error;
 	}
 
-	r = bus1_pool_write_iovec(&peer_info->pool,	/* pool to write */
+	r = bus1_pool_write_iovec(&peer_info->pool,	/* pool to write to */
 				  message->slice,	/* slice to write to */
 				  0,			/* offset into slice */
 				  transaction->vecs,	/* vectors */
 				  transaction->param->n_vecs, /* #n vectors */
 				  transaction->length_vecs); /* total length */
+	if (r < 0)
+		goto error;
+
+	offset = ALIGN(message->n_bytes, 8) +
+		 ALIGN(message->handles.batch.n_entries * sizeof(u64), 8) +
+		 ALIGN(message->n_files * sizeof(int), 8);
+
+	r = bus1_pool_write_kvec(&peer_info->pool,	/* pool to write to */
+				 message->slice,	/* slice to write to */
+				 offset,		/* offset into slice */
+				 &vec,			/* vectors */
+				 1,			/* #n vectors */
+				 vec.iov_len);		/* total length */
 	if (r < 0)
 		goto error;
 

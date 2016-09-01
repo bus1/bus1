@@ -28,6 +28,7 @@
  * @n_bytes:		number of bytes to transmit
  * @n_files:		number of files to pre-allocate
  * @n_handles:		number of handles to pre-allocate
+ * @n_secctx:		number of bytes of the security context to transmit
  * @peer_info:		sending peer
  *
  * This allocates a new, unused message for free use to the caller. Storage for
@@ -40,6 +41,7 @@
 struct bus1_message *bus1_message_new(size_t n_bytes,
 				      size_t n_files,
 				      size_t n_handles,
+				      size_t n_secctx,
 				      struct bus1_peer_info *peer_info)
 {
 	struct bus1_message *message;
@@ -69,6 +71,7 @@ struct bus1_message *bus1_message_new(size_t n_bytes,
 	message->files = (void *)((u8 *)message + base_size);
 	message->n_bytes = n_bytes; /* does *not* match slice->size! */
 	message->n_files = n_files;
+	message->n_secctx = n_secctx;
 	message->n_accounted_handles = 0;
 	message->error = 0;
 	bus1_handle_inflight_init(&message->handles, n_handles);
@@ -156,7 +159,8 @@ int bus1_message_allocate(struct bus1_message *message,
 	/* cannot overflow as all of those are limited */
 	slice_size = ALIGN(message->n_bytes, 8) +
 		     ALIGN(message->handles.batch.n_entries * sizeof(u64), 8) +
-		     ALIGN(message->n_files * sizeof(int), 8);
+		     ALIGN(message->n_files * sizeof(int), 8) +
+		     ALIGN(message->n_secctx, 8);
 
 	/* empty slices are forbidden, so make sure to allocate a minimum */
 	slice_size = max_t(size_t, slice_size, 8);

@@ -563,6 +563,7 @@ bus1_peer_queue_peek(struct bus1_peer_info *peer_info,
 			param->msg.n_bytes = message->n_bytes;
 			param->msg.n_handles = message->handles.batch.n_entries;
 			param->msg.n_fds = message->n_files;
+			param->msg.n_secctx = message->n_secctx;
 			break;
 
 		case BUS1_QUEUE_NODE_HANDLE_DESTRUCTION:
@@ -577,6 +578,7 @@ bus1_peer_queue_peek(struct bus1_peer_info *peer_info,
 			param->msg.n_bytes = 0;
 			param->msg.n_handles = 0;
 			param->msg.n_fds = 0;
+			param->msg.n_secctx = 0;
 			break;
 
 		case BUS1_QUEUE_NODE_HANDLE_RELEASE:
@@ -591,6 +593,7 @@ bus1_peer_queue_peek(struct bus1_peer_info *peer_info,
 			param->msg.n_bytes = 0;
 			param->msg.n_handles = 0;
 			param->msg.n_fds = 0;
+			param->msg.n_secctx = 0;
 			break;
 
 		default:
