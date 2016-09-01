@@ -42,6 +42,7 @@ struct bus1_message;
  * @lock:			data lock
  * @cred:			user creds
  * @pid_ns:			user pid namespace
+ * @cgroup_ns:			cgroup namespace
  * @user:			object owner
  * @quota:			quota handling
  * @pool:			data pool
@@ -58,6 +59,7 @@ struct bus1_peer_info {
 	};
 	const struct cred *cred;
 	struct pid_namespace *pid_ns;
+	struct cgroup_namespace *cgroup_ns;
 	struct bus1_user *user;
 	struct bus1_user_quota quota;
 	struct bus1_pool pool;

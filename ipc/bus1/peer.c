@@ -9,6 +9,7 @@
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 #include <linux/atomic.h>
+#include <linux/cgroup.h>
 #include <linux/cred.h>
 #include <linux/debugfs.h>
 #include <linux/err.h>
@@ -94,6 +95,7 @@ bus1_peer_info_free(struct bus1_peer_info *peer_info)
 	bus1_user_quota_destroy(&peer_info->quota);
 
 	peer_info->user = bus1_user_unref(peer_info->user);
+	put_cgroup_ns(peer_info->cgroup_ns);
 	put_pid_ns(peer_info->pid_ns);
 	put_cred(peer_info->cred);
 
@@ -122,6 +124,8 @@ static struct bus1_peer_info *bus1_peer_info_new(wait_queue_head_t *waitq)
 	mutex_init(&peer_info->lock);
 	peer_info->cred = get_cred(current_cred());
 	peer_info->pid_ns = get_pid_ns(task_active_pid_ns(current));
+	get_cgroup_ns(current->nsproxy->cgroup_ns);
+	peer_info->cgroup_ns = current->nsproxy->cgroup_ns;
 	peer_info->user = NULL;
 	bus1_user_quota_init(&peer_info->quota);
 	peer_info->pool = BUS1_POOL_NULL;
@@ -564,6 +568,7 @@ bus1_peer_queue_peek(struct bus1_peer_info *peer_info,
 			param->msg.n_handles = message->handles.batch.n_entries;
 			param->msg.n_fds = message->n_files;
 			param->msg.n_secctx = message->n_secctx;
+			param->msg.n_cgroup = message->n_cgroup;
 			break;
 
 		case BUS1_QUEUE_NODE_HANDLE_DESTRUCTION:
@@ -579,6 +584,7 @@ bus1_peer_queue_peek(struct bus1_peer_info *peer_info,
 			param->msg.n_handles = 0;
 			param->msg.n_fds = 0;
 			param->msg.n_secctx = 0;
+			param->msg.n_cgroup = 0;
 			break;
 
 		case BUS1_QUEUE_NODE_HANDLE_RELEASE:
@@ -594,6 +600,7 @@ bus1_peer_queue_peek(struct bus1_peer_info *peer_info,
 			param->msg.n_handles = 0;
 			param->msg.n_fds = 0;
 			param->msg.n_secctx = 0;
+			param->msg.n_cgroup = 0;
 			break;
 
 		default:
