@@ -329,7 +329,7 @@ bus1_transaction_instantiate_message(struct bus1_transaction *transaction,
 		return ERR_PTR(r);
 
 #ifdef CONFIG_CGROUPS
-	page = (void*) __get_free_page(GFP_TEMPORARY);
+	page = (void *) __get_free_page(GFP_TEMPORARY);
 	if (!page)
 		return ERR_PTR(-ENOMEM);
 
