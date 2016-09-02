@@ -247,8 +247,6 @@ bus1_transaction_new_from_user(u8 *stack_buffer,
 		transaction = (void *)stack_buffer;
 	}
 	bus1_transaction_init(transaction, peer, param);
-	if (r < 0)
-		goto error;
 
 	r = bus1_transaction_set_secctx(transaction);
 	if (r < 0)
