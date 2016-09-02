@@ -28,10 +28,9 @@ struct bus1_peer {
 
 #define _cleanup_(_x) __attribute__((__cleanup__(_x)))
 #define _likely_(_x) (__builtin_expect(!!(_x), 1))
-#define _public_ __attribute__((__visibility__("default")))
 #define _unlikely_(_x) (__builtin_expect(!!(_x), 0))
 
-_public_ int bus1_peer_new_from_fd(struct bus1_peer **peerp, int fd)
+int bus1_peer_new_from_fd(struct bus1_peer **peerp, int fd)
 {
 	_cleanup_(bus1_peer_freep) struct bus1_peer *peer = NULL;
 
@@ -51,8 +50,7 @@ _public_ int bus1_peer_new_from_fd(struct bus1_peer **peerp, int fd)
 	return 0;
 }
 
-_public_ int bus1_peer_new_from_path(struct bus1_peer **peerp,
-				     const char *path)
+int bus1_peer_new_from_path(struct bus1_peer **peerp, const char *path)
 {
 	int r, fd;
 
@@ -70,7 +68,7 @@ _public_ int bus1_peer_new_from_path(struct bus1_peer **peerp,
 	return r;
 }
 
-_public_ struct bus1_peer *bus1_peer_free(struct bus1_peer *peer)
+struct bus1_peer *bus1_peer_free(struct bus1_peer *peer)
 {
 	if (!peer)
 		return NULL;
@@ -84,24 +82,22 @@ _public_ struct bus1_peer *bus1_peer_free(struct bus1_peer *peer)
 	return NULL;
 }
 
-_public_ int bus1_peer_get_fd(struct bus1_peer *peer)
+int bus1_peer_get_fd(struct bus1_peer *peer)
 {
 	return peer ? peer->fd : -1;
 }
 
-_public_ size_t bus1_peer_get_pool_size(struct bus1_peer *peer)
+size_t bus1_peer_get_pool_size(struct bus1_peer *peer)
 {
 	return peer ? peer->pool_size : 0;
 }
 
-_public_ const void *bus1_peer_get_pool(struct bus1_peer *peer)
+const void *bus1_peer_get_pool(struct bus1_peer *peer)
 {
 	return peer ? peer->pool : NULL;
 }
 
-_public_ int bus1_peer_ioctl(struct bus1_peer *peer,
-			     unsigned int cmd,
-			     void *arg)
+int bus1_peer_ioctl(struct bus1_peer *peer, unsigned int cmd, void *arg)
 {
 	int r;
 
@@ -109,7 +105,7 @@ _public_ int bus1_peer_ioctl(struct bus1_peer *peer,
 	return r >= 0 ? r : -errno;
 }
 
-_public_ int bus1_peer_mmap(struct bus1_peer *peer)
+int bus1_peer_mmap(struct bus1_peer *peer)
 {
 	const void *pool, *old_pool;
 	size_t pool_size;
@@ -155,20 +151,20 @@ _public_ int bus1_peer_mmap(struct bus1_peer *peer)
 	return 0;
 }
 
-_public_ int bus1_peer_disconnect(struct bus1_peer *peer)
+int bus1_peer_disconnect(struct bus1_peer *peer)
 {
 	return bus1_peer_ioctl(peer, BUS1_CMD_PEER_DISCONNECT, NULL);
 }
 
-_public_ int bus1_peer_reset(struct bus1_peer *peer)
+int bus1_peer_reset(struct bus1_peer *peer)
 {
 	return bus1_peer_ioctl(peer, BUS1_CMD_PEER_RESET, NULL);
 }
 
-_public_ int bus1_peer_handle_transfer(struct bus1_peer *src,
-				       struct bus1_peer *dst,
-				       uint64_t *src_handlep,
-				       uint64_t *dst_handlep)
+int bus1_peer_handle_transfer(struct bus1_peer *src,
+			      struct bus1_peer *dst,
+			      uint64_t *src_handlep,
+			      uint64_t *dst_handlep)
 {
 	struct bus1_cmd_handle_transfer handle_transfer;
 	int r;
@@ -194,8 +190,8 @@ _public_ int bus1_peer_handle_transfer(struct bus1_peer *src,
 	return 0;
 }
 
-_public_ int bus1_peer_handle_release(struct bus1_peer *peer,
-				      uint64_t handle)
+int bus1_peer_handle_release(struct bus1_peer *peer,
+			     uint64_t handle)
 {
 	static_assert(_IOC_SIZE(BUS1_CMD_HANDLE_RELEASE) == sizeof(handle),
 		      "ioctl is called with invalid argument size");
@@ -203,8 +199,8 @@ _public_ int bus1_peer_handle_release(struct bus1_peer *peer,
 	return bus1_peer_ioctl(peer, BUS1_CMD_HANDLE_RELEASE, &handle);
 }
 
-_public_ int bus1_peer_slice_release(struct bus1_peer *peer,
-				     uint64_t offset)
+int bus1_peer_slice_release(struct bus1_peer *peer,
+			    uint64_t offset)
 {
 	static_assert(_IOC_SIZE(BUS1_CMD_SLICE_RELEASE) == sizeof(offset),
 		      "ioctl is called with invalid argument size");
@@ -212,8 +208,8 @@ _public_ int bus1_peer_slice_release(struct bus1_peer *peer,
 	return bus1_peer_ioctl(peer, BUS1_CMD_SLICE_RELEASE, &offset);
 }
 
-_public_ const void *bus1_peer_slice_from_offset(struct bus1_peer *peer,
-						 uint64_t offset)
+const void *bus1_peer_slice_from_offset(struct bus1_peer *peer,
+					uint64_t offset)
 {
 	if (_unlikely_(!peer->pool || offset >= peer->pool_size))
 		return NULL;
@@ -221,8 +217,7 @@ _public_ const void *bus1_peer_slice_from_offset(struct bus1_peer *peer,
 	return peer->pool + offset;
 }
 
-_public_ uint64_t bus1_peer_slice_to_offset(struct bus1_peer *peer,
-					    const void *slice)
+uint64_t bus1_peer_slice_to_offset(struct bus1_peer *peer, const void *slice)
 {
 	if (_unlikely_(!peer->pool ||
 		       !peer->pool_size ||
