@@ -2105,7 +2105,8 @@ int bus1_handle_inflight_import(struct bus1_handle_inflight *inflight,
 		return r;
 	if (BUS1_WARN_ON(inflight->batch.n_handles > 0))
 		return -ENOTRECOVERABLE;
-	if (BUS1_WARN_ON(inflight->batch.n_entries != transfer->batch.n_entries))
+	if (BUS1_WARN_ON(inflight->batch.n_entries !=
+			 transfer->batch.n_entries))
 		return -ENOTRECOVERABLE;
 
 	to = BUS1_HANDLE_BATCH_FIRST(&inflight->batch, pos_to);
@@ -2256,7 +2257,8 @@ size_t bus1_handle_inflight_walk(struct bus1_handle_inflight *inflight,
 
 	lockdep_assert_held(&peer_info->lock);
 
-	if (BUS1_WARN_ON(inflight->batch.n_handles != inflight->batch.n_entries))
+	if (BUS1_WARN_ON(inflight->batch.n_handles !=
+			 inflight->batch.n_entries))
 		return 0;
 
 	n = bus1_handle_batch_walk(&inflight->batch, pos, block);
