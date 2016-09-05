@@ -1446,7 +1446,7 @@ void bus1_handle_dest_init(struct bus1_handle_dest *dest)
  * @dest:		destination handle context to destroy, or NULL
  * @peer:info:		owning peer
  *
- * This releases all data pinned by a destiantion handle context. If Null is
+ * This releases all data pinned by a destination handle context. If Null is
  * passed, or if the destination object was already destroyed, then nothing is
  * done.
  */
@@ -1567,7 +1567,7 @@ int bus1_handle_dest_import(struct bus1_handle_dest *dest,
 
 /**
  * bus1_handle_dest_export() - publish new nodes of destination context
- * @dest:		destinatino context
+ * @dest:		destination context
  * @peer_info:		owning peer of @dest
  * @timestamp:		final timestamp of message transaction
  * @commit:		whether to commit the node
@@ -1969,7 +1969,7 @@ int bus1_handle_transfer_import(struct bus1_handle_transfer *transfer,
  * @n_ids:		number of IDs
  *
  * For every node that is created as part of an handle transfer, we have to
- * publish the handle ID back to the caller. This function acquires the hande
+ * publish the handle ID back to the caller. This function acquires the handle
  * IDs *and* directly copies them over into the user-provided buffers.
  *
  * The caller must hold the peer lock of @peer_info.
