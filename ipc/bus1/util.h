@@ -13,7 +13,7 @@
 /**
  * Utilities
  *
- * Random untility functions that don't belong to a specific object. Some of
+ * Random utility functions that don't belong to a specific object. Some of
  * them are copies from internal kernel functions (which lack an export
  * annotation), some of them are variants of internal kernel functions, and
  * some of them are our own.
