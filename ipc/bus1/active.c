@@ -18,7 +18,7 @@
 /*
  * Bias values track states of "active references". They're all negative. If an
  * object is active, its active-ref-counter is >=0 and tracks all active
- * references. Once an object is deactivaed, we subtract ACTIVE_BIAS. This
+ * references. Once an object is deactivated, we subtract ACTIVE_BIAS. This
  * means, the counter is now negative but still counts the active references.
  * Once it drops to exactly ACTIVE_BIAS, we know all active references were
  * dropped. Exactly one thread will change it to ACTIVE_RELEASE now, perform
@@ -229,7 +229,7 @@ void bus1_active_drain(struct bus1_active *active, wait_queue_head_t *waitq)
 
 #ifdef CONFIG_DEBUG_LOCK_ALLOC
 	/*
-	 * Pretend that no-one got the lock, but everyone got interruped
+	 * Pretend that no-one got the lock, but everyone got interrupted
 	 * instead. That is, they released the lock without ever actually
 	 * getting it locked.
 	 */
