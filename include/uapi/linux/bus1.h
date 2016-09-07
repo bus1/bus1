@@ -70,10 +70,15 @@ enum {
 	BUS1_MSG_NODE_RELEASE,
 };
 
+enum {
+	BUS1_MSG_FLAG_HAS_SECCTX	= 1ULL <<  0,
+};
+
 struct bus1_cmd_recv {
 	__u64 flags;
 	struct {
 		__u64 type;
+		__u64 flags;
 		__u64 destination;
 		__u32 uid;
 		__u32 gid;

@@ -55,6 +55,7 @@ struct bus1_message *bus1_message_new(size_t n_bytes,
 	if (!message)
 		return ERR_PTR(-ENOMEM);
 
+	message->flags = 0;
 	message->destination = BUS1_HANDLE_INVALID;
 	message->uid = -1;
 	message->gid = -1;

@@ -555,6 +555,7 @@ bus1_peer_queue_peek(struct bus1_peer_info *peer_info,
 			}
 
 			param->msg.type = BUS1_MSG_DATA;
+			param->msg.flags = message->flags;
 			param->msg.destination = message->destination;
 			param->msg.uid = message->uid;
 			param->msg.gid = message->gid;
@@ -570,6 +571,7 @@ bus1_peer_queue_peek(struct bus1_peer_info *peer_info,
 		case BUS1_QUEUE_NODE_HANDLE_DESTRUCTION:
 			kref_get(&node->ref);
 			param->msg.type = BUS1_MSG_NODE_DESTROY;
+			param->msg.flags = 0;
 			param->msg.destination = bus1_handle_unref_queued(node);
 			param->msg.uid = -1;
 			param->msg.gid = -1;
@@ -585,6 +587,7 @@ bus1_peer_queue_peek(struct bus1_peer_info *peer_info,
 		case BUS1_QUEUE_NODE_HANDLE_RELEASE:
 			kref_get(&node->ref);
 			param->msg.type = BUS1_MSG_NODE_RELEASE;
+			param->msg.flags = 0;
 			param->msg.destination = bus1_handle_unref_queued(node);
 			param->msg.uid = -1;
 			param->msg.gid = -1;

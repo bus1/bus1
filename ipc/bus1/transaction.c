@@ -46,6 +46,9 @@ struct bus1_transaction {
 	char *secctx;
 	u32 n_secctx;
 
+	/* flags */
+	bool has_secctx : 1;
+
 	/* payload */
 	struct iovec *vecs;
 	struct file **files;
@@ -89,6 +92,8 @@ static void bus1_transaction_init(struct bus1_transaction *transaction,
 	transaction->secctx = NULL;
 	transaction->n_secctx = 0;
 
+	transaction->has_secctx = false;
+
 	transaction->vecs = (void *)((u8 *)(transaction + 1) +
 			bus1_handle_batch_inline_size(param->n_handles));
 	transaction->files = (void *)(transaction->vecs + param->n_vecs);
@@ -129,7 +134,9 @@ static void bus1_transaction_destroy(struct bus1_transaction *transaction)
 				     transaction->peer_info);
 	bus1_handle_transfer_destroy(&transaction->handles);
 
-	security_release_secctx(transaction->secctx, transaction->n_secctx);
+	if (transaction->has_secctx)
+		security_release_secctx(transaction->secctx,
+					transaction->n_secctx);
 }
 
 static int bus1_transaction_set_secctx(struct bus1_transaction *transaction)
@@ -138,7 +145,7 @@ static int bus1_transaction_set_secctx(struct bus1_transaction *transaction)
 	u32 sid;
 	int r;
 
-	BUS1_WARN_ON(transaction->secctx || transaction->n_secctx);
+	BUS1_WARN_ON(transaction->has_secctx);
 
 	security_task_getsecid(current, &sid);
 	if (!sid)
@@ -148,6 +155,8 @@ static int bus1_transaction_set_secctx(struct bus1_transaction *transaction)
 				     &transaction->n_secctx);
 	if (r < 0)
 		return r;
+
+	transaction->has_secctx = true;
 #endif
 
 	return 0;
@@ -300,11 +309,8 @@ bus1_transaction_instantiate_message(struct bus1_transaction *transaction,
 				     struct bus1_peer_info *peer_info)
 {
 	struct bus1_message *message;
-	struct kvec vec = {
-		.iov_base = transaction->secctx,
-		.iov_len = transaction->n_secctx,
-	};
 	size_t offset, i;
+	struct kvec vec;
 	int r;
 
 	r = security_bus1_transfer_message(transaction->peer_info, peer_info);
@@ -342,18 +348,27 @@ bus1_transaction_instantiate_message(struct bus1_transaction *transaction,
 	if (r < 0)
 		goto error;
 
-	offset = ALIGN(message->n_bytes, 8) +
-		 ALIGN(message->handles.batch.n_entries * sizeof(u64), 8) +
-		 ALIGN(message->n_files * sizeof(int), 8);
+	if (transaction->has_secctx) {
+		offset = ALIGN(message->n_bytes, 8) +
+			 ALIGN(message->handles.batch.n_entries * sizeof(u64),
+			       8) +
+			 ALIGN(message->n_files * sizeof(int), 8);
+		vec = (struct kvec){
+			.iov_base = transaction->secctx,
+			.iov_len = transaction->n_secctx,
+		};
 
-	r = bus1_pool_write_kvec(&peer_info->pool,	/* pool to write to */
-				 message->slice,	/* slice to write to */
-				 offset,		/* offset into slice */
-				 &vec,			/* vectors */
-				 1,			/* #n vectors */
-				 vec.iov_len);		/* total length */
-	if (r < 0)
-		goto error;
+		r = bus1_pool_write_kvec(&peer_info->pool,
+					 message->slice,
+					 offset,
+					 &vec,
+					 1,
+					 vec.iov_len);
+		if (r < 0)
+			goto error;
+
+		message->flags |= BUS1_MSG_FLAG_HAS_SECCTX;
+	}
 
 	r = bus1_handle_inflight_import(&message->handles, peer_info,
 					&transaction->handles,

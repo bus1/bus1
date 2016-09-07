@@ -32,6 +32,7 @@ struct bus1_user;
 
 /**
  * struct bus1_message - message
+ * @flags:			message flags
  * @destination:		destination ID
  * @uid:			sender UID
  * @gid:			sender GID
@@ -51,6 +52,7 @@ struct bus1_user;
  * @handles:			passed handles
  */
 struct bus1_message {
+	u64 flags;
 	u64 destination;
 	uid_t uid;
 	gid_t gid;
