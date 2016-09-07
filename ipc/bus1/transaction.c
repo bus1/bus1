@@ -148,11 +148,10 @@ static int bus1_transaction_set_secctx(struct bus1_transaction *transaction)
 	BUS1_WARN_ON(transaction->has_secctx);
 
 	security_task_getsecid(current, &sid);
-	if (!sid)
-		return 0;
-
 	r = security_secid_to_secctx(sid, &transaction->secctx,
 				     &transaction->n_secctx);
+	if (r == -EOPNOTSUPP)
+		return 0; /* no LSM with secctx support loaded */
 	if (r < 0)
 		return r;
 
