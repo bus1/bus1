@@ -9,7 +9,6 @@
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 #include <linux/atomic.h>
-#include <linux/cgroup.h>
 #include <linux/cred.h>
 #include <linux/err.h>
 #include <linux/file.h>
@@ -44,7 +43,6 @@ struct bus1_transaction {
 	const struct cred *cred;
 	struct pid *pid;
 	struct pid *tid;
-	struct cgroup *cgroup;
 	char *secctx;
 	u32 n_secctx;
 
@@ -88,8 +86,6 @@ static void bus1_transaction_init(struct bus1_transaction *transaction,
 	transaction->cred = current_cred();
 	transaction->pid = task_tgid(current);
 	transaction->tid = task_pid(current);
-	/* only the unified cgroup hierarchy is supported */
-	transaction->cgroup = task_cgroup(current, 1);
 	transaction->secctx = NULL;
 	transaction->n_secctx = 0;
 
@@ -304,52 +300,24 @@ bus1_transaction_instantiate_message(struct bus1_transaction *transaction,
 				     struct bus1_peer_info *peer_info)
 {
 	struct bus1_message *message;
-	u8 padding[7] = {};
-	struct kvec vecs[3] = {
-		{
-			.iov_base = transaction->secctx,
-			.iov_len = transaction->n_secctx,
-		},
-		{
-			.iov_base = &padding,
-			.iov_len = transaction->n_secctx % 8,
-		}
+	struct kvec vec = {
+		.iov_base = transaction->secctx,
+		.iov_len = transaction->n_secctx,
 	};
-	void *page = NULL;
-#ifdef CONFIG_CGROUPS
-	char *cgroup;
-#endif
-	size_t n_cgroup = 0, offset, length, i;
+	size_t offset, i;
 	int r;
 
 	r = security_bus1_transfer_message(transaction->peer_info, peer_info);
 	if (r < 0)
 		return ERR_PTR(r);
 
-#ifdef CONFIG_CGROUPS
-	page = (void *) __get_free_page(GFP_TEMPORARY);
-	if (!page)
-		return ERR_PTR(-ENOMEM);
-
-	cgroup = cgroup_path_ns(transaction->cgroup, page, PAGE_SIZE,
-				peer_info->cgroup_ns);
-	n_cgroup = cgroup ? strlen(cgroup) + 1 : 0;
-
-	vecs[2].iov_base = cgroup;
-	vecs[2].iov_len = n_cgroup;
-#endif
-
 	message = bus1_message_new(transaction->length_vecs,
 				   transaction->param->n_fds,
 				   transaction->param->n_handles,
 				   transaction->n_secctx,
-				   n_cgroup,
 				   transaction->peer_info);
-	if (IS_ERR(message)) {
-		r = PTR_ERR(message);
-		message = NULL;
-		goto error;
-	}
+	if (IS_ERR(message))
+		return message;
 
 	r = bus1_message_allocate(message, peer_info);
 	if (r < 0) {
@@ -377,14 +345,13 @@ bus1_transaction_instantiate_message(struct bus1_transaction *transaction,
 	offset = ALIGN(message->n_bytes, 8) +
 		 ALIGN(message->handles.batch.n_entries * sizeof(u64), 8) +
 		 ALIGN(message->n_files * sizeof(int), 8);
-	length = vecs[0].iov_len + vecs[1].iov_len + vecs[2].iov_len;
 
 	r = bus1_pool_write_kvec(&peer_info->pool,	/* pool to write to */
 				 message->slice,	/* slice to write to */
 				 offset,		/* offset into slice */
-				 vecs,			/* vectors */
-				 3,			/* #n vectors */
-				 length);		/* total length */
+				 &vec,			/* vectors */
+				 1,			/* #n vectors */
+				 vec.iov_len);		/* total length */
 	if (r < 0)
 		goto error;
 
@@ -411,7 +378,6 @@ bus1_transaction_instantiate_message(struct bus1_transaction *transaction,
 		message->files[i] = get_file(transaction->files[i]);
 	}
 
-	free_page((unsigned long)page);
 	return message;
 
 error:
@@ -421,7 +387,6 @@ error:
 		bus1_message_unref(message);
 		message = ERR_PTR(r);
 	}
-	free_page((unsigned long)page);
 	return message;
 }
 

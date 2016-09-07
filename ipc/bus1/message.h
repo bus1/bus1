@@ -46,7 +46,6 @@ struct bus1_user;
  * @n_bytes:			number of user-bytes transmitted
  * @n_files:			number of files transmitted
  * @n_secctx:			number of bytes of security context transmitted
- * @n_cgroup:			number of bytes of cgroup path transmitted
  * @n_accounted_handles:	number of accounted handles
  * @error:			error code for message delivery
  * @handles:			passed handles
@@ -71,7 +70,6 @@ struct bus1_message {
 	size_t n_bytes;
 	size_t n_files;
 	size_t n_secctx;
-	size_t n_cgroup;
 	size_t n_accounted_handles;
 	int error;
 	struct bus1_handle_inflight handles;
@@ -82,7 +80,6 @@ struct bus1_message *bus1_message_new(size_t n_bytes,
 				      size_t n_files,
 				      size_t n_handles,
 				      size_t n_secctx,
-				      size_t n_cgroup,
 				      struct bus1_peer_info *peer_info);
 struct bus1_message *bus1_message_ref(struct bus1_message *message);
 struct bus1_message *bus1_message_unref(struct bus1_message *message);
