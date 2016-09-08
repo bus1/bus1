@@ -52,7 +52,7 @@
  * that own a handle are notified of this fact.
  * Once all handles to a specific node have been released (except for the handle
  * internally pinned in the node itself), the owner of the node is notified of
- * this, so it can potentianlly destroy both any linked state and the node
+ * this, so it can potentially destroy both any linked state and the node
  * itself.
  *
  * Node destruction is fully synchronized with any transaction. That is, a node
@@ -103,7 +103,7 @@ struct bus1_handle_dest {
  * @id:			stored handle ID
  *
  * This union represents a single handle-entry in a batch. To support large
- * batches, we only store a limited number of handles consequetively. Once the
+ * batches, we only store a limited number of handles consecutively. Once the
  * batch size is reached, a new batch is allocated and linked  This is all
  * hidden in the batch implementation, the details are hidden from the caller.
  */
