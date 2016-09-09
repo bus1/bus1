@@ -589,6 +589,7 @@ bus1_peer_queue_peek(struct bus1_peer_info *peer_info,
 {
 	struct bus1_queue_node *node;
 	struct bus1_message *message = NULL;
+	bool has_continue;
 	int r;
 
 	/*
@@ -602,7 +603,7 @@ bus1_peer_queue_peek(struct bus1_peer_info *peer_info,
 
 	lockdep_assert_held(&peer_info->lock);
 
-	node = bus1_queue_peek(&peer_info->queue,
+	node = bus1_queue_peek(&peer_info->queue, &has_continue,
 			       !!(param->flags & BUS1_RECV_FLAG_SEED));
 	if (node) {
 		switch (bus1_queue_node_get_type(node)) {
@@ -666,6 +667,8 @@ bus1_peer_queue_peek(struct bus1_peer_info *peer_info,
 			return ERR_PTR(-ENOTRECOVERABLE);
 		}
 
+		if (has_continue)
+			param->msg.flags |= BUS1_MSG_FLAG_CONTINUE;
 		if (drop)
 			bus1_queue_remove(&peer_info->queue, node);
 	}

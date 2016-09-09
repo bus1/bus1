@@ -92,6 +92,7 @@ enum {
 
 enum {
 	BUS1_MSG_FLAG_HAS_SECCTX	= 1ULL <<  0,
+	BUS1_MSG_FLAG_CONTINUE		= 1ULL <<  1,
 };
 
 struct bus1_cmd_recv {

@@ -513,6 +513,7 @@ exit:
 /**
  * bus1_queue_peek() - peek first available entry
  * @queue:	queue to operate on
+ * @continuep:	output variable to store continue-state of peeked node
  * @seed:	whether to peek at seed
  *
  * This returns a reference to the first available entry in the given queue, or
@@ -522,33 +523,57 @@ exit:
  * This only returns entries that are ready to be dequeued. Entries that are
  * still in staging mode will not be considered.
  *
+ * If @continuep is non-NULL, and a node is returned, the continue-state of
+ * that node is stored in @continuep. The continue-state describes whether
+ * there are more nodes queued that are part of the same transaction.
+ *
  * If @seed is true, this will fetch the currently set seed rather than look at
  * the message queue.
  *
  * Return: Reference to first available entry, NULL if none available.
  */
-struct bus1_queue_node *bus1_queue_peek(struct bus1_queue *queue, bool seed)
+struct bus1_queue_node *bus1_queue_peek(struct bus1_queue *queue,
+					bool *continuep,
+					bool seed)
 {
-	struct bus1_queue_node *node = NULL;
+	struct bus1_queue_node *node = NULL, *next;
+	bool has_continue = false;
 	struct rb_node *n;
 
 	mutex_lock(&queue->lock);
 
 	if (seed) {
-		if (queue->seed) {
-			node = queue->seed;
-			kref_get(&node->ref);
-		}
+		if (!queue->seed)
+			goto exit;
+
+		node = queue->seed;
+		kref_get(&node->ref);
+		has_continue = false;
 	} else {
 		n = rcu_dereference_protected(queue->front,
 					      lockdep_is_held(&queue->lock));
-		if (n) {
-			node = container_of(n, struct bus1_queue_node, rb);
-			kref_get(&node->ref);
-		}
+		if (!n)
+			goto exit;
+
+		node = container_of(n, struct bus1_queue_node, rb);
+		kref_get(&node->ref);
+
+		if (!continuep)
+			goto exit;
+
+		n = rb_next(n);
+		if (!n)
+			goto exit;
+
+		next = container_of(n, struct bus1_queue_node, rb);
+		has_continue = !bus1_queue_node_compare(node,
+					bus1_queue_node_get_timestamp(next),
+					next->sender);
 	}
 
+exit:
 	mutex_unlock(&queue->lock);
-
+	if (node && continuep)
+		*continuep = has_continue;
 	return node;
 }
