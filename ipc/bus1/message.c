@@ -143,7 +143,7 @@ struct bus1_message *bus1_message_unref(struct bus1_message *message)
  * given user for all the associated in-flight resources.
  *
  * This returns the message resources pinned. Use bus1_message_unpin() to
- * realease them again.
+ * release them again.
  *
  * Return: 0 on success, negative error code on failure.
  */
