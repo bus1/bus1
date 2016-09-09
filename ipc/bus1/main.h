@@ -58,7 +58,6 @@
  *
  *   bus1_peer.active
  *     bus1_user_lock
- *     bus1_peer.waitq.lock
  *     bus1_peer_info.lock
  *       bus1_queue.qlock
  *       bus1_peer_info.seqcount
