@@ -282,7 +282,7 @@ error:
  *
  * This releases a transaction and all associated memory. If the transaction
  * failed, any in-flight messages are dropped and pinned peers are released. If
- * the transaction was successfull, this just releases the temporary data that
+ * the transaction was successful, this just releases the temporary data that
  * was used for the transmission.
  *
  * If NULL is passed, this is a no-op.
@@ -561,7 +561,7 @@ int bus1_transaction_commit(struct bus1_transaction *transaction)
 	 * message cannot be dequeued and blocks (until the message is finally
 	 * committed) any future messages on each queue from being dequeued too.
 	 * However, no messages that were finally committed before this message
-	 * was staged are blocked. At the end of the loop, it is guananteed that
+	 * was staged are blocked. At the end of the loop, it is guaranteed that
 	 * all messages after @timestamp are blocked on all destination queues.
 	 */
 	for (message = list; message; message = message->transaction.next) {
