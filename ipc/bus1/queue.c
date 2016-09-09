@@ -178,7 +178,7 @@ static int bus1_queue_node_compare(struct bus1_queue_node *node,
  * @waitq:	wait queue to use for wake-ups
  *
  * This initializes a new queue. The queue memory is considered uninitialized,
- * any previous content is lost unrecoverably.
+ * any previous content is unrecoverable.
  */
 void bus1_queue_init(struct bus1_queue *queue, wait_queue_head_t *waitq)
 {
