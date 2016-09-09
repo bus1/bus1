@@ -26,6 +26,22 @@ enum {
 	BUS1_NODE_FLAG_PERSISTENT	= 1ULL <<  2,
 };
 
+enum {
+	BUS1_PEER_RESET_FLAG_QUERY		= 1ULL <<  0,
+	BUS1_PEER_RESET_FLAG_DESTROY_NODES	= 1ULL <<  1,
+	BUS1_PEER_RESET_FLAG_PROTECT_PERSISTENT	= 1ULL <<  2,
+	BUS1_PEER_RESET_FLAG_RELEASE_HANDLES	= 1ULL <<  3,
+};
+
+struct bus1_cmd_peer_reset {
+	__u64 flags;
+	__u64 peer_flags;
+	__u64 max_slices;
+	__u64 max_handles;
+	__u64 max_inflight_bytes;
+	__u64 max_inflight_fds;
+} __attribute__((__aligned__(8)));
+
 struct bus1_cmd_handle_transfer {
 	__u64 flags;
 	__u64 src_handle;
@@ -96,7 +112,7 @@ enum {
 	BUS1_CMD_PEER_DISCONNECT	= _IOWR(BUS1_IOCTL_MAGIC, 0x00,
 					__u64),
 	BUS1_CMD_PEER_RESET		= _IOWR(BUS1_IOCTL_MAGIC, 0x01,
-					__u64),
+					struct bus1_cmd_peer_reset),
 	BUS1_CMD_HANDLE_RELEASE		= _IOWR(BUS1_IOCTL_MAGIC, 0x10,
 					__u64),
 	BUS1_CMD_HANDLE_TRANSFER	= _IOWR(BUS1_IOCTL_MAGIC, 0x11,

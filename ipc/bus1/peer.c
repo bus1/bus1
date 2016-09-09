@@ -294,12 +294,54 @@ int bus1_peer_disconnect(struct bus1_peer *peer)
 static int bus1_peer_ioctl_reset(struct bus1_peer *peer, unsigned long arg)
 {
 	struct bus1_peer_info *peer_info = bus1_peer_dereference(peer);
+	bool destroy_nodes, protect_persistent, release_handles;
+	struct bus1_cmd_peer_reset __user *uparam = (void __user *)arg;
+	struct bus1_cmd_peer_reset param;
 
-	if (unlikely(arg))
+	BUILD_BUG_ON(_IOC_SIZE(BUS1_CMD_PEER_RESET) != sizeof(param));
+
+	if (copy_from_user(&param, uparam, sizeof(param)))
+		return -EFAULT;
+	if (unlikely(param.flags & ~(BUS1_PEER_RESET_FLAG_QUERY |
+				     BUS1_PEER_RESET_FLAG_DESTROY_NODES |
+				     BUS1_PEER_RESET_FLAG_PROTECT_PERSISTENT |
+				     BUS1_PEER_RESET_FLAG_RELEASE_HANDLES)))
 		return -EINVAL;
 
-	/* flush everything, but keep persistent nodes */
-	bus1_peer_info_reset(peer_info, false);
+	/* XXX: add support for secctx buyin */
+	if (unlikely(param.peer_flags))
+		return -EINVAL;
+	/* XXX: add support for peer limits */
+	if (unlikely(param.max_slices != -1 ||
+		     param.max_handles != -1 ||
+		     param.max_inflight_bytes != -1 ||
+		     param.max_inflight_fds != -1))
+		return -EINVAL;
+
+	if (param.flags & BUS1_PEER_RESET_FLAG_QUERY) {
+		/* QUERY cannot be combined */
+		if (param.flags & ~BUS1_PEER_RESET_FLAG_QUERY)
+			return -EINVAL;
+
+		/* so far nothing to do for QUERY */
+	} else {
+		destroy_nodes = param.flags &
+				BUS1_PEER_RESET_FLAG_DESTROY_NODES;
+		protect_persistent = param.flags &
+				     BUS1_PEER_RESET_FLAG_PROTECT_PERSISTENT;
+		release_handles = param.flags &
+				  BUS1_PEER_RESET_FLAG_RELEASE_HANDLES;
+
+		/* PROTECT_PERSISTENT requires DESTROY_NODES */
+		if (unlikely(protect_persistent && !destroy_nodes))
+			return -EINVAL;
+		/* DESTROY_NODES and RELEASE_HANDLES must be combined so far */
+		if (unlikely(destroy_nodes != release_handles))
+			return -EINVAL;
+
+		if (destroy_nodes || release_handles)
+			bus1_peer_info_reset(peer_info, !protect_persistent);
+	}
 
 	return 0;
 }

@@ -156,11 +156,6 @@ int bus1_peer_disconnect(struct bus1_peer *peer)
 	return bus1_peer_ioctl(peer, BUS1_CMD_PEER_DISCONNECT, NULL);
 }
 
-int bus1_peer_reset(struct bus1_peer *peer)
-{
-	return bus1_peer_ioctl(peer, BUS1_CMD_PEER_RESET, NULL);
-}
-
 int bus1_peer_handle_transfer(struct bus1_peer *src,
 			      struct bus1_peer *dst,
 			      uint64_t *src_handlep,

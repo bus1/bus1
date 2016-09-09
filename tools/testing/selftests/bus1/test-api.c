@@ -57,6 +57,12 @@ static void test_api_client(void)
 /* make sure basic connect + clone works */
 static void test_api_connect(void)
 {
+	struct bus1_cmd_peer_reset cmd_reset = {
+		.max_slices		= -1,
+		.max_handles		= -1,
+		.max_inflight_bytes	= -1,
+		.max_inflight_fds	= -1,
+	};
 	struct bus1_peer *c1, *c2;
 	uint64_t node, handle;
 	int r;
@@ -64,7 +70,7 @@ static void test_api_connect(void)
 	r = bus1_peer_new_from_path(&c1, test_path);
 	assert(r >= 0);
 
-	r = bus1_peer_reset(c1);
+	r = bus1_peer_reset(c1, &cmd_reset);
 	assert(r >= 0);
 
 	/* disconnect and reconnect @c1 */
@@ -76,7 +82,7 @@ static void test_api_connect(void)
 	assert(r < 0);
 	assert(r == -ESHUTDOWN);
 
-	r = bus1_peer_reset(c1);
+	r = bus1_peer_reset(c1, &cmd_reset);
 	assert(r < 0);
 	assert(r == -ESHUTDOWN);
 

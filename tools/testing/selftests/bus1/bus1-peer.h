@@ -48,7 +48,6 @@ const void *bus1_peer_get_pool(struct bus1_peer *peer);
 int bus1_peer_ioctl(struct bus1_peer *peer, unsigned int cmd, void *arg);
 int bus1_peer_mmap(struct bus1_peer *peer);
 int bus1_peer_disconnect(struct bus1_peer *peer);
-int bus1_peer_reset(struct bus1_peer *peer);
 int bus1_peer_handle_transfer(struct bus1_peer *src,
 			      struct bus1_peer *dst,
 			      uint64_t *src_handlep,
@@ -68,6 +67,15 @@ static inline void bus1_peer_freep(struct bus1_peer **peer)
 {
 	if (*peer)
 		bus1_peer_free(*peer);
+}
+
+static inline int bus1_peer_reset(struct bus1_peer *peer,
+				  struct bus1_cmd_peer_reset *cmd)
+{
+	static_assert(_IOC_SIZE(BUS1_CMD_PEER_RESET) == sizeof(*cmd),
+		      "ioctl is called with invalid argument size");
+
+	return bus1_peer_ioctl(peer, BUS1_CMD_PEER_RESET, cmd);
 }
 
 static inline int bus1_peer_node_destroy(struct bus1_peer *peer,
