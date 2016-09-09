@@ -43,13 +43,15 @@ static int bus1_fop_open(struct inode *inode, struct file *file)
 		return PTR_ERR(peer);
 
 	r = bus1_peer_connect(peer);
-	if (r < 0) {
-		bus1_peer_free(peer);
-		return r;
-	}
+	if (r < 0)
+		goto error;
 
 	file->private_data = peer;
 	return 0;
+
+error:
+	bus1_peer_free(peer);
+	return r;
 }
 
 static int bus1_fop_release(struct inode *inode, struct file *file)
@@ -125,19 +127,22 @@ static long bus1_fop_ioctl(struct file *file,
 	struct bus1_peer *peer = file->private_data;
 	int r;
 
-	if (cmd == BUS1_CMD_PEER_DISCONNECT) {
+	switch (cmd) {
+	case BUS1_CMD_PEER_DISCONNECT:
 		if (unlikely(arg))
 			return -EINVAL;
 
-		return bus1_peer_disconnect(peer);
+		r = bus1_peer_disconnect(peer);
+		break;
+	default:
+		if (!bus1_peer_acquire(peer))
+			return -ESHUTDOWN;
+
+		r = bus1_peer_ioctl(peer, cmd, arg);
+		bus1_peer_release(peer);
+		break;
 	}
 
-	if (!bus1_peer_acquire(peer))
-		return -ESHUTDOWN;
-
-	r = bus1_peer_ioctl(peer, cmd, arg);
-
-	bus1_peer_release(peer);
 	return r;
 }
 
