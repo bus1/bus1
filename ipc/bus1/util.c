@@ -136,22 +136,22 @@ int bus1_import_vecs(struct iovec *out_vecs,
 /**
  * bus1_import_fd() - import file descriptor from user
  * @user_fd:	pointer to user-supplied file descriptor
- * @bus1:	whether only or never to allow bus1 file descriptors
  *
  * This imports a file-descriptor from the current user-context. The FD number
  * is copied into kernel-space, then resolved to a file and returned to the
  * caller. If something goes wrong, an error is returned.
  *
- * If @bus1 is true, then only bus1 file descriptors are allowed. Otherwise,
- * bus1 filedescriptors nor UDS files are allowed. If those are supplied,
- * EOPNOTSUPP is returned. Those would require expensive garbage-collection if
- * they're sent recursively by user-space.
+ * Neither bus1, nor UDS files are allowed. If those are supplied, EOPNOTSUPP
+ * is returned. Those would require expensive garbage-collection if they're
+ * sent recursively by user-space.
  *
  * Return: Pointer to pinned file, ERR_PTR on failure.
  */
-struct file *bus1_import_fd(int fd, bool bus1)
+struct file *bus1_import_fd(int fd)
 {
 	struct file *f, *ret;
+	struct socket *sock;
+	struct inode *inode;
 
 	if (unlikely(fd < 0))
 		return ERR_PTR(-EBADF);
@@ -160,28 +160,17 @@ struct file *bus1_import_fd(int fd, bool bus1)
 	if (unlikely(!f))
 		return ERR_PTR(-EBADF);
 
-	if (bus1) {
-		if (f->f_op != &bus1_fops)
-			ret = ERR_PTR(-EOPNOTSUPP); /* disallow non-bus1 fds */
-		else
-			ret = f; /* all others are allowed */
-	} else {
-		struct socket *sock;
-		struct inode *inode;
+	inode = file_inode(f);
+	sock = S_ISSOCK(inode->i_mode) ? SOCKET_I(inode) : NULL;
 
-		inode = file_inode(f);
-		sock = S_ISSOCK(inode->i_mode) ? SOCKET_I(inode) : NULL;
-
-		if (f->f_mode & FMODE_PATH)
-			ret = f; /* O_PATH is always allowed */
-		else if (f->f_op == &bus1_fops)
-			ret = ERR_PTR(-EOPNOTSUPP); /* no bus1 recursion */
-		else if (sock && sock->sk && sock->ops &&
-			 sock->ops->family == PF_UNIX)
-			ret = ERR_PTR(-EOPNOTSUPP); /* no UDS recursion */
-		else
-			ret = f; /* all others are allowed */
-	}
+	if (f->f_mode & FMODE_PATH)
+		ret = f; /* O_PATH is always allowed */
+	else if (f->f_op == &bus1_fops)
+		ret = ERR_PTR(-EOPNOTSUPP); /* disallow bus1 recursion */
+	else if (sock && sock->sk && sock->ops && sock->ops->family == PF_UNIX)
+		ret = ERR_PTR(-EOPNOTSUPP); /* disallow UDS recursion */
+	else
+		ret = f; /* all others are allowed */
 
 	if (f != ret)
 		bus1_fput(f);

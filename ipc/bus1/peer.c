@@ -365,7 +365,7 @@ static int bus1_peer_ioctl_handle_transfer(struct bus1_peer *src,
 	struct bus1_cmd_handle_transfer __user *uparam = (void __user *) arg;
 	struct bus1_cmd_handle_transfer param;
 	struct bus1_peer *dst;
-	struct file *dst_file;
+	struct fd dst_f;
 	int r = 0;
 
 	lockdep_assert_held(&src->active);
@@ -374,27 +374,27 @@ static int bus1_peer_ioctl_handle_transfer(struct bus1_peer *src,
 
 	if (copy_from_user(&param, (void __user *)arg, sizeof(param)))
 		return -EFAULT;
-
 	if (unlikely(param.flags) ||
 	    unlikely(param.dst_handle != BUS1_HANDLE_INVALID))
 		return -EINVAL;
 
 	if (param.dst_fd == -1) {
-		dst_file = NULL;
-		dst = src;
+		dst = bus1_peer_acquire(src);
 	} else {
-		dst_file = bus1_import_fd(param.dst_fd, true);
-		if (IS_ERR(dst_file))
-			return PTR_ERR(dst_file);
+		dst_f = fdget(param.dst_fd);
+		if (!dst_f.file)
+			return -EBADF;
+		if (dst_f.file->f_op != &bus1_fops) {
+			fdput(dst_f);
+			return -EOPNOTSUPP;
+		}
 
-		dst = dst_file->private_data;
+		dst = bus1_peer_acquire(dst_f.file->private_data);
+		fdput(dst_f);
 	}
 
-	dst = bus1_peer_acquire(dst);
-	if (!dst) {
-		r = -ESHUTDOWN;
-		goto out;
-	}
+	if (!dst)
+		return -ESHUTDOWN;
 
 	/* pass handle from src to dst, allocating node if necessary */
 	r = bus1_handle_pair(src, dst, &param.src_handle, &param.dst_handle);
@@ -407,7 +407,6 @@ static int bus1_peer_ioctl_handle_transfer(struct bus1_peer *src,
 
 out:
 	bus1_peer_release(dst);
-	bus1_fput(dst_file);
 	return r;
 }
 
