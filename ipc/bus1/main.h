@@ -111,7 +111,7 @@
  * The FD-limit controls how many inflight FDs are allowed to be destined for a
  * given user. It is accounted for on SEND, and de-accounted on RECV. After RECV
  * it is subject to RLIM_NOFILE and under full control of the receiver. All
- * inflight FD accounting is accounting is subject to per-sending-user quotas.
+ * inflight FD accounting is subject to a per-sending-user quotas.
  */
 #define BUS1_DEFAULT_FDS_MAX (4096)
 
