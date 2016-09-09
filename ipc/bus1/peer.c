@@ -308,9 +308,6 @@ static int bus1_peer_ioctl_reset(struct bus1_peer *peer, unsigned long arg)
 				     BUS1_PEER_RESET_FLAG_RELEASE_HANDLES)))
 		return -EINVAL;
 
-	/* XXX: add support for secctx buyin */
-	if (unlikely(param.peer_flags))
-		return -EINVAL;
 	/* XXX: add support for peer limits */
 	if (unlikely(param.max_slices != -1 ||
 		     param.max_handles != -1 ||
@@ -323,7 +320,11 @@ static int bus1_peer_ioctl_reset(struct bus1_peer *peer, unsigned long arg)
 		if (param.flags & ~BUS1_PEER_RESET_FLAG_QUERY)
 			return -EINVAL;
 
-		/* so far nothing to do for QUERY */
+		param.peer_flags = peer_info->flags &
+				   BUS1_PEER_FLAG_WANT_SECCTX;
+
+		if (put_user(param.peer_flags, &uparam->peer_flags))
+			return -EFAULT;
 	} else {
 		destroy_nodes = param.flags &
 				BUS1_PEER_RESET_FLAG_DESTROY_NODES;
@@ -338,9 +339,21 @@ static int bus1_peer_ioctl_reset(struct bus1_peer *peer, unsigned long arg)
 		/* DESTROY_NODES and RELEASE_HANDLES must be combined so far */
 		if (unlikely(destroy_nodes != release_handles))
 			return -EINVAL;
+		/* refuse invalid flags, unless cleared to -1 */
+		if (unlikely(param.peer_flags != -1 &&
+			     (param.peer_flags & ~BUS1_PEER_FLAG_WANT_SECCTX)))
+			return -EINVAL;
 
 		if (destroy_nodes || release_handles)
 			bus1_peer_info_reset(peer_info, !protect_persistent);
+
+		if (param.peer_flags != -1) {
+			mutex_lock(&peer_info->lock);
+			peer_info->flags = param.peer_flags |
+					   (peer_info->flags &
+						~BUS1_PEER_FLAG_WANT_SECCTX);
+			mutex_unlock(&peer_info->lock);
+		}
 	}
 
 	return 0;

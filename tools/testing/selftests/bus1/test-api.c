@@ -58,6 +58,7 @@ static void test_api_client(void)
 static void test_api_connect(void)
 {
 	struct bus1_cmd_peer_reset cmd_reset = {
+		.peer_flags		= -1,
 		.max_slices		= -1,
 		.max_handles		= -1,
 		.max_inflight_bytes	= -1,
