@@ -501,6 +501,7 @@ static int bus1_peer_ioctl_slice_release(struct bus1_peer *peer,
 
 static int bus1_peer_ioctl_send(struct bus1_peer *peer, unsigned long arg)
 {
+	struct bus1_peer_info *peer_info = bus1_peer_dereference(peer);
 	struct bus1_transaction *transaction = NULL;
 	/* Use a stack-allocated buffer for the transaction object if it fits */
 	u8 buf[512];
@@ -554,6 +555,12 @@ static int bus1_peer_ioctl_send(struct bus1_peer *peer, unsigned long arg)
 		if (r < 0)
 			goto exit;
 	} else {
+		if (unlikely(param.n_destinations >
+			     atomic_read(&peer_info->user->max_handles))) {
+			r = -EMSGSIZE;
+			goto exit;
+		}
+
 		for (i = 0; i < param.n_destinations; ++i) {
 			r = bus1_transaction_instantiate_for_id(transaction,
 								ptr_dest + i,
