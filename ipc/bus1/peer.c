@@ -610,6 +610,12 @@ bus1_peer_queue_peek(struct bus1_peer_info *peer_info,
 		case BUS1_QUEUE_NODE_MESSAGE_NORMAL:
 			message = bus1_message_from_node(node);
 
+			if (param->max_offset <
+			    message->slice->offset + message->slice->size) {
+				bus1_message_unref(message);
+				return ERR_PTR(-ENOSPC);
+			}
+
 			r = bus1_message_install(message, peer_info, param);
 			if (r < 0) {
 				bus1_message_unref(message);

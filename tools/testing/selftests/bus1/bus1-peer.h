@@ -35,6 +35,8 @@
 extern "C" {
 #endif
 
+#define BUS1_DEFAULT_POOL_SIZE (1024 * 1024 * 32)
+
 struct bus1_peer;
 
 int bus1_peer_new_from_fd(struct bus1_peer **peerp, int fd);
@@ -101,6 +103,8 @@ static inline int bus1_peer_recv(struct bus1_peer *peer,
 {
 	static_assert(_IOC_SIZE(BUS1_CMD_RECV) == sizeof(*recv),
 		      "ioctl is called with invalid argument size");
+
+	recv->max_offset = BUS1_DEFAULT_POOL_SIZE;
 
 	return bus1_peer_ioctl(peer, BUS1_CMD_RECV, recv);
 }

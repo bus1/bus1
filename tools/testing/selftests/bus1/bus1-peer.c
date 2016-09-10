@@ -43,7 +43,7 @@ int bus1_peer_new_from_fd(struct bus1_peer **peerp, int fd)
 	peer->fd = fd;
 	peer->pool = NULL;
 	/* XXX: remap the pool dynamically */
-	peer->pool_size = 1024 * 1024 * 32;
+	peer->pool_size = BUS1_DEFAULT_POOL_SIZE;
 
 	*peerp = peer;
 	peer = NULL;
