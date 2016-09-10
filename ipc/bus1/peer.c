@@ -253,7 +253,7 @@ static void bus1_peer_cleanup(struct bus1_active *active, void *userdata)
 	/*
 	 * bus1_active guarantees that this function is called exactly once,
 	 * and that it cannot race bus1_peer_connect(). It is therefore safe
-	 * to access the info obect without any locking.
+	 * to access the info object without any locking.
 	 */
 	peer_info = rcu_dereference_raw(peer->info);
 	rcu_assign_pointer(peer->info, NULL);
