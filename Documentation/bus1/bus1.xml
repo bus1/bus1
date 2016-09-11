@@ -41,7 +41,7 @@
   <refsect1> <!-- DESCRIPTION -->
     <title>Description</title>
     <para>
-The Bus1 Kernel Message Bus defines and implements a distributed object model.
+The bus1 Kernel Message Bus defines and implements a distributed object model.
 It allows local processes to send messages to objects owned by remote processes,
 as well as share their own objects with others. Object ownership is static and
 cannot be transferred. Access to remote objects is prohibited, unless it was
@@ -91,7 +91,7 @@ node (i.e., they own a handle for that node) are notified of the destruction.
       </para>
       <para>
 Handles are the only way to refer to both local and remote nodes. For each
-handle allocated on a peer, a 64bit ID is assigned to identify that particular
+handle allocated on a peer, a 64-bit ID is assigned to identify that particular
 handle on that particular peer. The ID is only valid locally on that peer. It
 cannot be used by remote peers to address the handle (in other words, the ID
 namespace is tied to each peer and does not define global entities).
@@ -107,8 +107,7 @@ reused again. Note that a peer can never have multiple different handles to the
 same node, rather the kernel always coalesces them into a single handle, using
 the user-reference counter to track it. However, if a handle is fully released,
 but the peer later acquires a handle to the same node again, its ID will be
-different, as IDs are never reused. A concept of soft-references is not
-supported.
+different, as IDs are never reused.
       </para>
       <para>
 When allocating a new node, the node owner implicitly also gets a handle to that
@@ -135,6 +134,13 @@ not already dequeued.
        * single-copy, pool-slice
   -->
 To be defined.
+      </para>
+      <para>
+The kernel amends all data messages with the <varname>uid</varname>,
+<varname>gid</varname>, <varname>pid</varname>, <varname>tid</varname>, and
+optionally the security context of the sending peer. The information is
+collected from the sending peer when the message is sent and translated into the
+namespaces of the receiving peer (which was pinned when the peer was created).
       </para>
     </refsect2>
 
@@ -198,7 +204,7 @@ A call to
   <refentrytitle>open</refentrytitle><manvolnum>2</manvolnum>
 </citerefentry>
 on the bus1 character device (usually <filename>/dev/bus1</filename>) creates a
-new peer context identifie by the returned file descriptor.
+new peer context identified by the returned file descriptor.
             </para>
           </listitem>
         </varlistentry> <!-- FOPS OPEN -->
@@ -324,24 +330,50 @@ The following bus1-specific commands are supported:
             </para>
             <variablelist>
               <varlistentry>
+                <term><constant>BUS1_CMD_PEER_DISCONNECT</constant></term>
+                <listitem>
+                  <para>
+This argument disconnects a peer and does not take an argument. All slices,
+handles and nodes are released and destroyed and all future operations on the
+peer will fail with <constant>-ESHUTDOWN</constant>.
+                  </para>
+                </listitem>
+              </varlistentry>
+
+              <varlistentry>
                 <term><constant>BUS1_CMD_PEER_RESET</constant></term>
                 <listitem>
                   <para>
-This command resets a peer context to its initial state. It takes a 64-bit flags
-argument. If no flags are passed, all nodes owned by this peer context are
-destroyed atomically, followed by a release of all held handles. Lastly, all
-remaining slices are flushed from the pool. Only the node destruction is atomic.
-The remaining cleanup is not. This means, if another command is executed in
-parallel, it might be partially affected by the ongoing reset.
+This command resets a peer context. It takes the following structure as
+argument:
+<programlisting>
+struct bus1_cmd_peer_reset {
+        __u64 flags;
+        __u64 peer_flags;
+        __u64 max_slices;
+        __u64 max_handles;
+        __u64 max_inflight_bytes;
+        __u64 max_inflight_fds;
+};
+</programlisting>
+If <varname>flags</varname> is
+<constant>BUS1_CMD_PEER_RESET_FLAG_QUERY</constant> all the subsequent fields
+must be set to their default valuse which are replaced by the current state of
+the peer context when the ioctl returns, and no other flags may be set. If
+<constant>BUS1_CMD_PEER_RESET_FLAG_DESTROY_NODES</constant> is set, all nodes
+are simultaneously destroyed. If
+<constant>BUS1_CMD_PEER_RESET_FLAG_RELEASE_HANDLES</constant> is set, all
+handles are simultaneously released. If <varname>peer_flags</varname> is
+<constant>BUS1_PEER_FLAG_WANT_SECCTX</constant> the security context of the
+sending task is attached to each received message destined for this peer.
+<varname>max_slices</varname>, <varname>max_handles</varname>,
+<varname>max_inflight_bytes</varname>, and <varname>max_inflight_fds</varname>
+sets the resource limits on this peer.
                   </para>
                   <para>
-Any node marked as persistent, as well as the seed message, are preserved and
-will survive a reset operation.
-                  </para>
-                  <para>
-If the <constant>BUS1_RESET_FLAG_DISCONNECT</constant> is set, no new
-operations can be performed on the peer context and all resources, including
-persistent nodes, are released.
+Unless the query flag is passed, all pending messages are dropped except the
+seed message, which is preserved. All user references to slices are also dropped
+from the pool.
                   </para>
                 </listitem>
               </varlistentry>
@@ -426,6 +458,7 @@ This command sends a message. It takes the following structure as argument:
 struct bus1_cmd_send {
         __u64 flags;
         __u64 ptr_destinations;
+        __u64 ptr_errors;
         __u64 n_destinations;
         __u64 ptr_vecs;
         __u64 n_vecs;
@@ -441,17 +474,18 @@ struct bus1_cmd_send {
 <constant>BUS1_SEND_FLAG_CONTINUE</constant> and
 <constant>BUS1_SEND_FLAG_SEED</constant>. If
 <constant>BUS1_SEND_FLAG_CONTINUE</constant> is set any messages that cannot
-be delivered due to errors on the remote peer are silently dropped and the
-error is instead reported to the receiver, otherwise such an error means the
-whole transaction fails. If <constant>BUS1_SEND_FLAG_SEED</constant> is set the
-message replaces the seed message on the local peer. In this case,
+be delivered due to errors on the remote peer do not make the whole transaction
+fail, but merely set the corresponding error code in the error code array
+respectively. If <constant>BUS1_SEND_FLAG_SEED</constant> is set the message
+replaces the seed message on the local peer. In this case,
 <varname>n_destinations</varname> must be 0.
                   </para>
                   <para>
-<varname>ptr_destinations</varname> is a pointer to an array of handle IDs and
-<varname>n_destinations</varname> is the length of the array. If the
-<constant>BUS1_NODE_FLAG_ALLOCATE</constant> is set in either of the handle IDs
-a new node is allocated in the local peer context, and the handle ID is replaced
+<varname>ptr_destinations</varname> is a pointer to an array of handle IDs,
+<varname>ptr_errors</varname> is a pointer to an array of corresponding
+errno codes, and <varname>n_destinations</varname> is the length of the arrays.
+If the <constant>BUS1_NODE_FLAG_ALLOCATE</constant> is set in either of the
+handle IDs a new node is allocated in the local peer context, and the handle ID is replaced
 by the ID of the new node on return. The message being sent is delivered to
 the peer context owning the nodes pointed to by each of the handles in the
 array.
@@ -484,6 +518,7 @@ This command receives a message. It takes the following structure as argument:
 <programlisting>
 struct bus1_cmd_recv {
         __u64 flags;
+        __u64 max_offset;
         struct {
                 __u64 type;
                 __u64 destination;
@@ -506,6 +541,11 @@ rather than a message from the queue. If
 the received message are installed in the receiving process. Care must be taken
 when using the last flag from more than one process on the same message as file
 descriptor numbers are per-process and not per-peer.
+                  </para>
+                  <para>
+<varname>max_offset</varname> indicates the maximum offset into the pool the
+receiving peer is able to read. If a message slice would exceed this offset
+the call would fail with <constant>-ENOSPC</constant>.
                   </para>
                   <para>
 <varname>msg.type</varname> indicates the type of message.
@@ -645,6 +685,13 @@ Out of kernel memory.
       </varlistentry>
 
       <varlistentry>
+        <term><constant>ENOSPC</constant></term>
+        <listitem><para>
+The message to be received would exceed the maximal offset.
+        </para></listitem>
+      </varlistentry>
+
+      <varlistentry>
         <term><constant>ENOTTY</constant></term>
         <listitem><para>
 Unknown ioctl.
@@ -675,7 +722,7 @@ Permission denied.
       <varlistentry>
         <term><constant>ESHUTDOWN</constant></term>
         <listitem><para>
-Local peer was already shut down.
+Local peer was already disconnected.
         </para></listitem>
       </varlistentry>
     </variablelist>
@@ -684,24 +731,6 @@ Local peer was already shut down.
   <refsect1> <!-- SEE ALSO -->
     <title>See Also</title>
     <simplelist type="inline">
-      <member>
-        <citerefentry>
-          <refentrytitle>bus1.peer</refentrytitle>
-          <manvolnum>7</manvolnum>
-        </citerefentry>
-      </member>
-      <member>
-        <citerefentry>
-          <refentrytitle>bus1.node</refentrytitle>
-          <manvolnum>7</manvolnum>
-        </citerefentry>
-      </member>
-      <member>
-        <citerefentry>
-          <refentrytitle>bus1.message</refentrytitle>
-          <manvolnum>7</manvolnum>
-        </citerefentry>
-      </member>
       <member>
         <citerefentry>
           <refentrytitle>bus1.pool</refentrytitle>

@@ -30,7 +30,7 @@
  * gain a handle linked to the same underlying node. This works regardless
  * of whether the sender is the owner of the underlying node, or not.
  *
- * Each peer can identify all its handles (both owned and un-owned) by a 64bit
+ * Each peer can identify all its handles (both owned and un-owned) by a 64-bit
  * integer. The namespace is local to each peer, and the numbers cannot be
  * compared with the numbers of other peers (in fact, they will be very likely
  * to clash, but might still have *different* underlying nodes). However, if a
