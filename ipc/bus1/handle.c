@@ -1490,17 +1490,14 @@ int bus1_handle_dest_import(struct bus1_handle_dest *dest,
 	struct bus1_peer_info *dst_peer_info;
 	struct bus1_handle *handle;
 	struct bus1_peer *dst_peer;
-	u64 id, error = 0;
+	u64 id;
 
 	if (BUS1_WARN_ON(dest->handle || dest->raw_peer || dest->idp ||
 	    dest->errorp))
 		return -ENOTRECOVERABLE;
 
 	if (get_user(id, idp))
-	if (errorp && get_user(error, errorp))
 		return -EFAULT;
-	if (error)
-		return -EINVAL;
 
 	if (id & BUS1_NODE_FLAG_ALLOCATE) {
 		if (!bus1_peer_acquire(peer))
