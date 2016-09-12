@@ -609,11 +609,6 @@ static int bus1_peer_dequeue(struct bus1_peer_info *peer_info,
 			}
 		}
 		mutex_unlock(&peer_info->queue.lock);
-
-		if (!node) {
-			r = -EAGAIN;
-			goto exit;
-		}
 	} else if (peer_info->seed) {
 		message = bus1_message_ref(peer_info->seed);
 		bus1_message_pin(message);
