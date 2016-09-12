@@ -216,16 +216,13 @@ static inline u64 bus1_queue_sync(struct bus1_queue *queue, u64 timestamp)
  * bus1_queue_is_readable() - check whether a queue is readable
  * @queue:	queue to operate on
  *
- * This checks whether the given queue is readable. It is similar to
- * bus1_queue_peek() and bus1_queue_peek_dropped(), but only returns a boolean
- * state.
+ * This checks whether the given queue is readable.
  *
  * Note that messages can have 3 different states:
  *   - staging: the message is part of an active transaction
  *   - committed: the message is fully committed, but might still be blocked by
  *                a staging message
  *   - ready: the message is committed and ready to be dequeued
- *   - dropped: the message could not be added to the queue and was dropped.
  *
  * This function checks that there is at least one ready or one dropped entry.
  *
