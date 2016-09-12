@@ -582,140 +582,98 @@ exit:
 	return r;
 }
 
-static struct bus1_queue_node *
-bus1_peer_queue_peek(struct bus1_peer_info *peer_info,
-		     struct bus1_cmd_recv *param,
-		     bool drop)
+static int bus1_peer_dequeue(struct bus1_peer_info *peer_info,
+			     struct bus1_cmd_recv *param)
 {
 	struct bus1_queue_node *node;
 	struct bus1_message *message = NULL;
+	unsigned int type;
 	bool has_continue;
 	int r;
 
-	/*
-	 * Any dequeue operation might be raced by a RESET or similar message
-	 * removal. Therefore, we rely on the peer-lock to be held for the
-	 * entire time of this dequeue operation. This guarantees that any
-	 * racing RESET cannot release message resources and as such blocks on
-	 * the dequeue operation. Hence, we can safely access the message
-	 * without requiring the queue to stay locked.
-	 */
-
-	lockdep_assert_held(&peer_info->lock);
+	mutex_lock(&peer_info->lock);
 
 	mutex_lock(&peer_info->queue.lock);
 	node = bus1_queue_peek_locked(&peer_info->queue, &has_continue,
 				      !!(param->flags & BUS1_RECV_FLAG_SEED));
-	mutex_unlock(&peer_info->queue.lock);
 	if (node) {
-		switch (bus1_queue_node_get_type(node)) {
-		case BUS1_QUEUE_NODE_MESSAGE_NORMAL:
+		type = bus1_queue_node_get_type(node);
+		if (type == BUS1_QUEUE_NODE_MESSAGE_NORMAL) {
 			message = bus1_message_from_node(node);
+			bus1_message_pin(message);
+		}
+	}
+	mutex_unlock(&peer_info->queue.lock);
 
-			if (param->max_offset <
-			    message->slice->offset + message->slice->size) {
-				bus1_message_unref(message);
-				return ERR_PTR(-ERANGE);
-			}
+	if (!node) {
+		r = -EAGAIN;
+		goto exit;
+	}
 
-			r = bus1_message_install(message, peer_info, param);
-			if (r < 0) {
-				bus1_message_unref(message);
-				return ERR_PTR(r);
-			}
-
-			param->msg.type = BUS1_MSG_DATA;
-			param->msg.flags = message->flags;
-			param->msg.destination = message->destination;
-			param->msg.uid = message->uid;
-			param->msg.gid = message->gid;
-			param->msg.pid = message->pid;
-			param->msg.tid = message->tid;
-			param->msg.offset = message->slice->offset;
-			param->msg.n_bytes = message->n_bytes;
-			param->msg.n_handles = message->handles.batch.n_entries;
-			param->msg.n_fds = message->n_files;
-			param->msg.n_secctx = message->n_secctx;
-			break;
-
-		case BUS1_QUEUE_NODE_HANDLE_DESTRUCTION:
-			kref_get(&node->ref);
-			param->msg.type = BUS1_MSG_NODE_DESTROY;
-			param->msg.flags = 0;
-			param->msg.destination = bus1_handle_unref_queued(node);
-			param->msg.uid = -1;
-			param->msg.gid = -1;
-			param->msg.pid = 0;
-			param->msg.tid = 0;
-			param->msg.offset = BUS1_OFFSET_INVALID;
-			param->msg.n_bytes = 0;
-			param->msg.n_handles = 0;
-			param->msg.n_fds = 0;
-			param->msg.n_secctx = 0;
-			break;
-
-		case BUS1_QUEUE_NODE_HANDLE_RELEASE:
-			kref_get(&node->ref);
-			param->msg.type = BUS1_MSG_NODE_RELEASE;
-			param->msg.flags = 0;
-			param->msg.destination = bus1_handle_unref_queued(node);
-			param->msg.uid = -1;
-			param->msg.gid = -1;
-			param->msg.pid = 0;
-			param->msg.tid = 0;
-			param->msg.offset = BUS1_OFFSET_INVALID;
-			param->msg.n_bytes = 0;
-			param->msg.n_handles = 0;
-			param->msg.n_fds = 0;
-			param->msg.n_secctx = 0;
-			break;
-
-		default:
-			WARN(1, "Invalid queue-node type");
-			return ERR_PTR(-ENOTRECOVERABLE);
+	if (message) {
+		if (param->max_offset < message->slice->offset +
+					message->slice->size) {
+			r = -ERANGE;
+			goto exit;
 		}
 
-		if (has_continue)
-			param->msg.flags |= BUS1_MSG_FLAG_CONTINUE;
-		if (drop)
-			bus1_queue_remove(&peer_info->queue, node);
+		r = bus1_message_install(message, peer_info, param);
+		if (r < 0)
+			goto exit;
 	}
 
-	return node;
-}
+	if (!(param->flags & BUS1_RECV_FLAG_PEEK)) {
+		bus1_queue_remove(&peer_info->queue, node);
+		bus1_message_unpin(message, peer_info);
+	}
 
-static int bus1_peer_dequeue(struct bus1_peer_info *peer_info,
-			     struct bus1_cmd_recv *param)
-{
-	const bool peek = param->flags & BUS1_RECV_FLAG_PEEK;
-	struct bus1_queue_node *node;
-	struct bus1_message *message;
+	if (message) {
+		param->msg.type = BUS1_MSG_DATA;
+		param->msg.flags = message->flags;
+		param->msg.destination = message->destination;
+		param->msg.uid = message->uid;
+		param->msg.gid = message->gid;
+		param->msg.pid = message->pid;
+		param->msg.tid = message->tid;
+		param->msg.offset = message->slice->offset;
+		param->msg.n_bytes = message->n_bytes;
+		param->msg.n_handles = message->handles.batch.n_entries;
+		param->msg.n_fds = message->n_files;
+		param->msg.n_secctx = message->n_secctx;
+	} else {
+		if (type == BUS1_QUEUE_NODE_HANDLE_DESTRUCTION) {
+			param->msg.type = BUS1_MSG_NODE_DESTROY;
+		} else if (type == BUS1_QUEUE_NODE_HANDLE_RELEASE) {
+			param->msg.type = BUS1_MSG_NODE_RELEASE;
+		} else {
+			WARN(1, "Invalid queue-node type");
+			r = -ENOTRECOVERABLE;
+			goto exit;
+		}
 
-	mutex_lock(&peer_info->lock);
-	node = bus1_peer_queue_peek(peer_info, param, !peek);
+		param->msg.flags = 0;
+		param->msg.destination = bus1_handle_unref_queued(node);
+		param->msg.uid = -1;
+		param->msg.gid = -1;
+		param->msg.pid = 0;
+		param->msg.tid = 0;
+		param->msg.offset = BUS1_OFFSET_INVALID;
+		param->msg.n_bytes = 0;
+		param->msg.n_handles = 0;
+		param->msg.n_fds = 0;
+		param->msg.n_secctx = 0;
+	}
+
+	if (has_continue)
+		param->msg.flags |= BUS1_MSG_FLAG_CONTINUE;
+
+	r = 0;
+
+exit:
 	mutex_unlock(&peer_info->lock);
-	if (IS_ERR_OR_NULL(node))
-		return PTR_ERR(node);
-
-	switch (bus1_queue_node_get_type(node)) {
-	case BUS1_QUEUE_NODE_MESSAGE_NORMAL:
-		message = bus1_message_from_node(node);
-		if (!peek)
-			bus1_message_unpin(message, peer_info);
-		bus1_message_unref(message);
-		break;
-
-	case BUS1_QUEUE_NODE_HANDLE_DESTRUCTION:
-	case BUS1_QUEUE_NODE_HANDLE_RELEASE:
-		bus1_handle_unref_queued(node);
-		break;
-
-	default:
-		WARN(1, "Invalid queue-node type");
-		return -ENOTRECOVERABLE;
-	}
-
-	return 0;
+	bus1_message_unpin(message, peer_info);
+	bus1_message_unref(message);
+	return r;
 }
 
 static int bus1_peer_ioctl_recv(struct bus1_peer *peer, unsigned long arg)
@@ -737,8 +695,6 @@ static int bus1_peer_ioctl_recv(struct bus1_peer *peer, unsigned long arg)
 	r = bus1_peer_dequeue(peer_info, &param);
 	if (r < 0)
 		return r;
-	if (param.msg.type == BUS1_MSG_NONE)
-		return -EAGAIN;
 
 	return copy_to_user((void __user *)arg,
 			    &param, sizeof(param)) ? -EFAULT : 0;
