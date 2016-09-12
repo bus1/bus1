@@ -511,7 +511,7 @@ exit:
 }
 
 /**
- * bus1_queue_peek() - peek first available entry
+ * bus1_queue_peek_locked() - peek first available entry
  * @queue:	queue to operate on
  * @continuep:	output variable to store continue-state of peeked node
  * @seed:	whether to peek at seed
@@ -523,57 +523,51 @@ exit:
  * This only returns entries that are ready to be dequeued. Entries that are
  * still in staging mode will not be considered.
  *
- * If @continuep is non-NULL, and a node is returned, the continue-state of
- * that node is stored in @continuep. The continue-state describes whether
- * there are more nodes queued that are part of the same transaction.
+ * If a node is returned, the continue-state of that node is stored in
+ * @continuep. The continue-state describes whether there are more nodes queued
+ * that are part of the same transaction.
  *
  * If @seed is true, this will fetch the currently set seed rather than look at
  * the message queue.
  *
+ * The caller must hold @queue.lock.
+ *
  * Return: Reference to first available entry, NULL if none available.
  */
-struct bus1_queue_node *bus1_queue_peek(struct bus1_queue *queue,
-					bool *continuep,
-					bool seed)
+struct bus1_queue_node *bus1_queue_peek_locked(struct bus1_queue *queue,
+					       bool *continuep,
+					       bool seed)
 {
-	struct bus1_queue_node *node = NULL, *next;
-	bool has_continue = false;
+	struct bus1_queue_node *node, *next;
 	struct rb_node *n;
 
-	mutex_lock(&queue->lock);
+	lockdep_assert_held(&queue->lock);
 
 	if (seed) {
 		if (!queue->seed)
-			goto exit;
+			return NULL;
 
 		node = queue->seed;
-		kref_get(&node->ref);
-		has_continue = false;
+		*continuep = false;
 	} else {
 		n = rcu_dereference_protected(queue->front,
 					      lockdep_is_held(&queue->lock));
 		if (!n)
-			goto exit;
+			return NULL;
 
 		node = container_of(n, struct bus1_queue_node, rb);
-		kref_get(&node->ref);
-
-		if (!continuep)
-			goto exit;
 
 		n = rb_next(n);
-		if (!n)
-			goto exit;
-
-		next = container_of(n, struct bus1_queue_node, rb);
-		has_continue = !bus1_queue_node_compare(node,
+		if (n) {
+			next = container_of(n, struct bus1_queue_node, rb);
+			*continuep = !bus1_queue_node_compare(node,
 					bus1_queue_node_get_timestamp(next),
 					next->sender);
+		} else {
+			*continuep = false;
+		}
 	}
 
-exit:
-	mutex_unlock(&queue->lock);
-	if (node && continuep)
-		*continuep = has_continue;
+	kref_get(&node->ref);
 	return node;
 }

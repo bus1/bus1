@@ -603,8 +603,10 @@ bus1_peer_queue_peek(struct bus1_peer_info *peer_info,
 
 	lockdep_assert_held(&peer_info->lock);
 
-	node = bus1_queue_peek(&peer_info->queue, &has_continue,
-			       !!(param->flags & BUS1_RECV_FLAG_SEED));
+	mutex_lock(&peer_info->queue.lock);
+	node = bus1_queue_peek_locked(&peer_info->queue, &has_continue,
+				      !!(param->flags & BUS1_RECV_FLAG_SEED));
+	mutex_unlock(&peer_info->queue.lock);
 	if (node) {
 		switch (bus1_queue_node_get_type(node)) {
 		case BUS1_QUEUE_NODE_MESSAGE_NORMAL:
