@@ -545,7 +545,7 @@ descriptor numbers are per-process and not per-peer.
                   <para>
 <varname>max_offset</varname> indicates the maximum offset into the pool the
 receiving peer is able to read. If a message slice would exceed this offset
-the call would fail with <constant>-ENOSPC</constant>.
+the call would fail with <constant>-ERANGE</constant>.
                   </para>
                   <para>
 <varname>msg.type</varname> indicates the type of message.
@@ -685,13 +685,6 @@ Out of kernel memory.
       </varlistentry>
 
       <varlistentry>
-        <term><constant>ENOSPC</constant></term>
-        <listitem><para>
-The message to be received would exceed the maximal offset.
-        </para></listitem>
-      </varlistentry>
-
-      <varlistentry>
         <term><constant>ENOTTY</constant></term>
         <listitem><para>
 Unknown ioctl.
@@ -716,6 +709,13 @@ Operation not supported.
         <term><constant>EPERM</constant></term>
         <listitem><para>
 Permission denied.
+        </para></listitem>
+      </varlistentry>
+
+      <varlistentry>
+        <term><constant>ERANGE</constant></term>
+        <listitem><para>
+The message to be received would exceed the maximal offset.
         </para></listitem>
       </varlistentry>
 
