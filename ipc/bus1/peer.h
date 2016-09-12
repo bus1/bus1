@@ -64,6 +64,7 @@ struct bus1_peer_info {
 	struct bus1_user_quota quota;
 	struct bus1_pool pool;
 	struct bus1_queue queue;
+	struct bus1_message *seed;
 	struct rb_root map_handles_by_id;
 	struct rb_root map_handles_by_node;
 	struct seqcount seqcount;

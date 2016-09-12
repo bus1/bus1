@@ -43,9 +43,13 @@ static void bus1_peer_info_reset(struct bus1_peer_info *peer_info, bool final)
 	LIST_HEAD(list);
 
 	bus1_handle_flush_all(peer_info, &n_handles, final);
-	bus1_queue_flush(&peer_info->queue, &list, final);
+	bus1_queue_flush(&peer_info->queue, &list);
 
 	mutex_lock(&peer_info->lock);
+	if (peer_info->seed && final) {
+		list_add(&peer_info->seed->qnode.link, &list);
+		peer_info->seed = NULL;
+	}
 	bus1_pool_flush(&peer_info->pool, &n_slices);
 	mutex_unlock(&peer_info->lock);
 
@@ -99,6 +103,7 @@ bus1_peer_info_free(struct bus1_peer_info *peer_info)
 
 	BUS1_WARN_ON(!RB_EMPTY_ROOT(&peer_info->map_handles_by_node));
 	BUS1_WARN_ON(!RB_EMPTY_ROOT(&peer_info->map_handles_by_id));
+	BUS1_WARN_ON(peer_info->seed);
 
 	/*
 	 * Make sure the object is freed in a delayed-manner. Some
@@ -126,6 +131,7 @@ static struct bus1_peer_info *bus1_peer_info_new(wait_queue_head_t *waitq)
 	bus1_user_quota_init(&peer_info->quota);
 	peer_info->pool = BUS1_POOL_NULL;
 	bus1_queue_init(&peer_info->queue, waitq);
+	peer_info->seed = NULL;
 	peer_info->map_handles_by_id = RB_ROOT;
 	peer_info->map_handles_by_node = RB_ROOT;
 	seqcount_init(&peer_info->seqcount);
@@ -585,7 +591,7 @@ exit:
 static int bus1_peer_dequeue(struct bus1_peer_info *peer_info,
 			     struct bus1_cmd_recv *param)
 {
-	struct bus1_queue_node *node;
+	struct bus1_queue_node *node = NULL;
 	struct bus1_message *message = NULL;
 	unsigned int type;
 	bool has_continue;
@@ -593,17 +599,29 @@ static int bus1_peer_dequeue(struct bus1_peer_info *peer_info,
 
 	mutex_lock(&peer_info->lock);
 
-	mutex_lock(&peer_info->queue.lock);
-	node = bus1_queue_peek_locked(&peer_info->queue, &has_continue,
-				      !!(param->flags & BUS1_RECV_FLAG_SEED));
-	if (node) {
-		type = bus1_queue_node_get_type(node);
-		if (type == BUS1_QUEUE_NODE_MESSAGE_NORMAL) {
-			message = bus1_message_from_node(node);
-			bus1_message_pin(message);
+	if (!(param->flags & BUS1_RECV_FLAG_SEED)) {
+		mutex_lock(&peer_info->queue.lock);
+		node = bus1_queue_peek_locked(&peer_info->queue, &has_continue);
+		if (node) {
+			type = bus1_queue_node_get_type(node);
+			if (type == BUS1_QUEUE_NODE_MESSAGE_NORMAL) {
+				message = bus1_message_from_node(node);
+				bus1_message_pin(message);
+			}
 		}
+		mutex_unlock(&peer_info->queue.lock);
+
+		if (!node) {
+			r = -EAGAIN;
+			goto exit;
+		}
+	} else if (peer_info->seed) {
+		message = bus1_message_ref(peer_info->seed);
+		bus1_message_pin(message);
+		node = &message->qnode;
+		type = bus1_queue_node_get_type(node);
+		has_continue = false;
 	}
-	mutex_unlock(&peer_info->queue.lock);
 
 	if (!node) {
 		r = -EAGAIN;
@@ -623,7 +641,10 @@ static int bus1_peer_dequeue(struct bus1_peer_info *peer_info,
 	}
 
 	if (!(param->flags & BUS1_RECV_FLAG_PEEK)) {
-		bus1_queue_remove(&peer_info->queue, node);
+		if (param->flags & BUS1_RECV_FLAG_SEED)
+			peer_info->seed = bus1_message_unref(peer_info->seed);
+		else
+			bus1_queue_remove(&peer_info->queue, node);
 		bus1_message_unpin(message, peer_info);
 	}
 
@@ -688,8 +709,7 @@ static int bus1_peer_ioctl_recv(struct bus1_peer *peer, unsigned long arg)
 		return -EFAULT;
 	if (unlikely(param.flags & ~(BUS1_RECV_FLAG_PEEK |
 				     BUS1_RECV_FLAG_SEED |
-				     BUS1_RECV_FLAG_INSTALL_FDS) ||
-		     param.msg.type != BUS1_MSG_NONE))
+				     BUS1_RECV_FLAG_INSTALL_FDS)))
 		return -EINVAL;
 
 	r = bus1_peer_dequeue(peer_info, &param);

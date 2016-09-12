@@ -185,7 +185,6 @@ void bus1_queue_init(struct bus1_queue *queue, wait_queue_head_t *waitq)
 	queue->clock = 0;
 	rcu_assign_pointer(queue->front, NULL);
 	queue->waitq = waitq;
-	queue->seed = NULL;
 	queue->messages = RB_ROOT;
 	mutex_init(&queue->lock);
 }
@@ -210,7 +209,6 @@ void bus1_queue_destroy(struct bus1_queue *queue)
 
 	mutex_destroy(&queue->lock);
 	BUS1_WARN_ON(!RB_EMPTY_ROOT(&queue->messages));
-	BUS1_WARN_ON(queue->seed);
 	BUS1_WARN_ON(rcu_access_pointer(queue->front));
 }
 
@@ -218,17 +216,12 @@ void bus1_queue_destroy(struct bus1_queue *queue)
  * bus1_queue_flush() - flush message queue
  * @queue:		queue to flush
  * @list:		list to put flushed messages to
- * @final:		whether this is the final flush
  *
  * This flushes all entries from @queue and puts them into @list (no particular
  * order) for the caller to clean up. All the entries returned in @list must be
  * unref'ed by the caller.
- *
- * If @final is true, this will flush everything, even persistent state.
  */
-void bus1_queue_flush(struct bus1_queue *queue,
-		      struct list_head *list,
-		      bool final)
+void bus1_queue_flush(struct bus1_queue *queue, struct list_head *list)
 {
 	struct bus1_queue_node *node, *t;
 
@@ -239,12 +232,6 @@ void bus1_queue_flush(struct bus1_queue *queue,
 		list_add(&node->link, list);
 	queue->messages = RB_ROOT;
 	rcu_assign_pointer(queue->front, NULL);
-
-	/* move seed onto @list, and clear to NULL, but only if requested */
-	if (final && queue->seed) {
-		list_add(&queue->seed->link, list);
-		queue->seed = NULL;
-	}
 
 	mutex_unlock(&queue->lock);
 }
@@ -468,13 +455,6 @@ void bus1_queue_remove(struct bus1_queue *queue, struct bus1_queue_node *node)
 
 	mutex_lock(&queue->lock);
 
-	/* A) if it occupies the seed slot, clear it */
-	if (node == queue->seed) {
-		queue->seed = NULL;
-		kref_put(&node->ref, bus1_queue_node_no_free);
-	}
-
-	/* B) drop from tree, if linked, otherwise bail out */
 	if (RB_EMPTY_NODE(&node->rb))
 		goto exit;
 
@@ -514,7 +494,6 @@ exit:
  * bus1_queue_peek_locked() - peek first available entry
  * @queue:	queue to operate on
  * @continuep:	output variable to store continue-state of peeked node
- * @seed:	whether to peek at seed
  *
  * This returns a reference to the first available entry in the given queue, or
  * NULL if there is none. The queue stays unmodified and the returned entry
@@ -527,47 +506,35 @@ exit:
  * @continuep. The continue-state describes whether there are more nodes queued
  * that are part of the same transaction.
  *
- * If @seed is true, this will fetch the currently set seed rather than look at
- * the message queue.
- *
  * The caller must hold @queue.lock.
  *
  * Return: Reference to first available entry, NULL if none available.
  */
 struct bus1_queue_node *bus1_queue_peek_locked(struct bus1_queue *queue,
-					       bool *continuep,
-					       bool seed)
+					       bool *continuep)
 {
 	struct bus1_queue_node *node, *next;
 	struct rb_node *n;
 
 	lockdep_assert_held(&queue->lock);
 
-	if (seed) {
-		if (!queue->seed)
-			return NULL;
+	n = rcu_dereference_protected(queue->front,
+				      lockdep_is_held(&queue->lock));
+	if (!n)
+		return NULL;
 
-		node = queue->seed;
-		*continuep = false;
+	node = container_of(n, struct bus1_queue_node, rb);
+	kref_get(&node->ref);
+
+	n = rb_next(n);
+	if (n) {
+		next = container_of(n, struct bus1_queue_node, rb);
+		*continuep = !bus1_queue_node_compare(node,
+				bus1_queue_node_get_timestamp(next),
+				next->sender);
 	} else {
-		n = rcu_dereference_protected(queue->front,
-					      lockdep_is_held(&queue->lock));
-		if (!n)
-			return NULL;
-
-		node = container_of(n, struct bus1_queue_node, rb);
-
-		n = rb_next(n);
-		if (n) {
-			next = container_of(n, struct bus1_queue_node, rb);
-			*continuep = !bus1_queue_node_compare(node,
-					bus1_queue_node_get_timestamp(next),
-					next->sender);
-		} else {
-			*continuep = false;
-		}
+		*continuep = false;
 	}
 
-	kref_get(&node->ref);
 	return node;
 }
