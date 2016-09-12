@@ -1,6 +1,5 @@
 DOCS := \
-	bus1.xml \
-	bus1.pool.xml
+	bus1.xml
 
 XMLFILES := $(addprefix $(obj)/,$(DOCS))
 MANFILES := $(patsubst %.xml, %.7, $(XMLFILES))

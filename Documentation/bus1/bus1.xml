@@ -113,27 +113,34 @@ different, as IDs are never reused.
 When allocating a new node, the node owner implicitly also gets a handle to that
 node. As long as the node is valid, the kernel will pin a single user-reference
 to the owner's handle. This guarantees that a node owner always retains access
-to their node, until they explicitly destroy it (which will also implicitly
-release that pinned user-reference on the handle). Otherwise, a handle to a
-local node behaves just like any other handle, that is, user-references are
-acquired and released according to its use. However, whenever the overall sum of
-all user-references on all handles to a node drops to 1 (which implies that only
-the pinned reference of the owner is left), a notification is queued on the node
-owner. If the counter is incremented again, any such notification is dropped, if
-not already dequeued.
+to their node, until they explicitly destroy it (which will make it possible for
+userspace to release the handle like any other). Once all the handles to a local
+node have been released, no more messages destined for the node will be
+received. Otherwise, a handle to a local node behaves just like any other
+handle, that is, user-references are acquired and released according to its use.
+However, whenever the overall sum of all user-references on all handles to a
+node drops to one (which implies that only the pinned reference of the owner is
+left), a notification is queued on the node owner. If the counter is incremented
+again, any such notification is dropped, if not already dequeued.
       </para>
     </refsect2>
 
     <refsect2>
       <title>Message Transactions</title>
       <para>
-<!--
-  XXX: * Unicasts, multicasts
-       * memory data, auxiliary data, metadata
-       * quotas
-       * single-copy, pool-slice
-  -->
-To be defined.
+A message transaction atomically transfers a message to any number of
+destinations. Unless requested otherwise, the message transaction fully succeeds
+or fully fails.
+      </para>
+      <para>
+To receive messag payloads, each peer has an associated shmem-backed
+<emphasis>pool</emphasis> which may be mmapped read-only by the receiving peer.
+The kernel copies the message payload directly from the sending peer to each of
+the receivers' pool without an intermediary kernel buffer. The pool is divided
+into <emphasis>slices</emphasis> to hold each message. When a message is
+received, its <emphasis>offset</emphasis> into the pool in bytes is returned to
+userspace, and userspace has to explicitly release the slice once it has
+finished with it.
       </para>
       <para>
 The kernel amends all data messages with the <varname>uid</varname>,
@@ -141,6 +148,44 @@ The kernel amends all data messages with the <varname>uid</varname>,
 optionally the security context of the sending peer. The information is
 collected from the sending peer when the message is sent and translated into the
 namespaces of the receiving peer (which was pinned when the peer was created).
+      </para>
+    </refsect2>
+
+    <refsect2>
+      <title>Resource quotas</title>
+      <para>
+Each user has a fixed amount of available resources. The limits are static, but
+may be overridden by module parameters. Limits are placed on the amount of
+memory a users pools may consume, the number of handles a user may hold and, the
+number of inflight messages may be destined for a user and the number of file
+descriptors may be inflight to a user. All inflight resources are accounted on
+the receiving peer.
+      </para>
+      <para>
+As resources are accounted on the receiver, a quota mechanism is in place in
+order to avoid intentional or unintentional resource exhaustion by a malicious
+or broken sending user. As the number of users taking part in the bus and their
+usage patterns are not known-up front, a dynamic quota is put in place to try
+to strike a balance between reserving resources for the future and maximize the
+usage of available resources. At the time of a message transaction, the sending
+user may consume in total (including what is consumed by previous transactions)
+half of the total resources of the receiving user that have not been consumed by
+another user. When a message is dequeued its resource consumption is deaccounted
+from the sending users quota.
+      </para>
+      <para>
+If a receiving peer does not dequeue any of its incoming messages (possibly due
+to bug) it would be possible for a users quota to be fully consumed by one peer,
+making it impossible to communicate with other functioning peers owned by the
+same user. A second quota is therefore enforced per-peer, enforcing that at the
+time of a message transaction the receiving peer may consume at in total
+(including what is consumed by previous transactions) half of the total
+resources available to the sending user that have not been consumed by another
+peer.
+      </para>
+      <para>
+For a given message transaction, the available resources are determined by the
+combination of the receiving user, the sending user and the receiving peer.
       </para>
     </refsect2>
 
