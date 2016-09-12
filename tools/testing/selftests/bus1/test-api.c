@@ -98,7 +98,6 @@ static void test_api_connect(void)
 	assert(r >= 0);
 
 	node = BUS1_NODE_FLAG_MANAGED | BUS1_NODE_FLAG_ALLOCATE;
-	handle = BUS1_HANDLE_INVALID;
 	r = bus1_peer_handle_transfer(c1, c2, &node, &handle);
 	assert(r >= 0);
 	assert(node != BUS1_HANDLE_INVALID);
@@ -132,7 +131,6 @@ static void test_api_handle(void)
 	assert(r >= 0);
 
 	node = BUS1_NODE_FLAG_MANAGED | BUS1_NODE_FLAG_ALLOCATE;
-	handle = BUS1_HANDLE_INVALID;
 	r = bus1_peer_handle_transfer(c1, c2, &node, &handle);
 	assert(r >= 0);
 	assert(node != (BUS1_NODE_FLAG_MANAGED | BUS1_NODE_FLAG_ALLOCATE));

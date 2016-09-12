@@ -380,8 +380,7 @@ static int bus1_peer_ioctl_handle_transfer(struct bus1_peer *src,
 
 	if (copy_from_user(&param, (void __user *)arg, sizeof(param)))
 		return -EFAULT;
-	if (unlikely(param.flags) ||
-	    unlikely(param.dst_handle != BUS1_HANDLE_INVALID))
+	if (unlikely(param.flags))
 		return -EINVAL;
 
 	if (param.dst_fd == -1) {
