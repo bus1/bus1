@@ -477,7 +477,6 @@ static int bus1_peer_ioctl_handle_release(struct bus1_peer *peer,
 	if (get_user(id, (const u64 __user *)arg))
 		return -EFAULT;
 
-	/* returns >= 0 on success, and > 0 in case @id was modified */
 	r = bus1_handle_release_by_id(peer, id, &n_handles);
 	if (r < 0)
 		return r;
@@ -601,6 +600,10 @@ static int bus1_peer_dequeue(struct bus1_peer_info *peer_info,
 	bool has_continue;
 	int r;
 
+	/*
+	 * Hold the peer lock over bus1_queue_peek_locked() and
+	 * bus1_queue_remove() to make sure a message is only received once.
+	 */
 	mutex_lock(&peer_info->lock);
 
 	if (!(param->flags & BUS1_RECV_FLAG_SEED)) {
