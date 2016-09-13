@@ -727,7 +727,7 @@ static int bus1_peer_ioctl_recv(struct bus1_peer *peer, unsigned long arg)
 }
 
 /**
- * bus1_peer_ioctl() - handle peer ioctl
+ * bus1_peer_ioctl() - handle peer runtime ioctls
  * @peer:		peer to work on
  * @cmd:		ioctl command
  * @arg:		ioctl argument

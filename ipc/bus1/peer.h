@@ -147,14 +147,14 @@ static inline struct bus1_peer *bus1_peer_release(struct bus1_peer *peer)
 }
 
 /**
- * bus1_peer_dereference() - dereference a peer handle
- * @peer:	handle to dereference
+ * bus1_peer_dereference() - dereference a peer
+ * @peer:	peer to dereference
  *
- * Dereference a peer handle to get access to the underlying peer object. This
+ * Dereference a peer to get access to the underlying peer info object. This
  * function simply returns the pointer to the linked peer information object,
  * which then can be accessed directly by the caller. The caller must hold an
- * active reference to the handle, and retain it as long as the peer object is
- * used.
+ * active reference to the peer, and retain it as long as the peer info object
+ * is used.
  *
  * You are perfectly free to access @peer->info directly, if you are aware of
  * the lifetime restrictions. This function provides lockdep-annotations to

@@ -75,8 +75,8 @@ static unsigned int bus1_fop_poll(struct file *file,
 
 	/*
 	 * We now dereference the peer object (which is rcu-protected). It
-	 * might be NULL during a racing DISCONNECT. If it is non-NULL *and*
-	 * the peer has not been deactivated, then the peer is live and thus
+	 * might be NULL during a racing DISCONNECT. If it is non-NULL and the
+	 * peer has not been deactivated, then the peer is live and thus
 	 * writable. If data is queued, it is readable as well.
 	 */
 	rcu_read_lock();
