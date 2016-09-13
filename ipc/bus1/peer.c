@@ -297,6 +297,33 @@ int bus1_peer_disconnect(struct bus1_peer *peer)
 	return 0;
 }
 
+static int bus1_peer_ioctl_query(struct bus1_peer *peer, unsigned long arg)
+{
+	struct bus1_peer_info *peer_info = bus1_peer_dereference(peer);
+	struct bus1_cmd_peer_reset __user *uparam = (void __user *)arg;
+	struct bus1_cmd_peer_reset param;
+
+	BUILD_BUG_ON(_IOC_SIZE(BUS1_CMD_PEER_RESET) != sizeof(param));
+
+	if (copy_from_user(&param, uparam, sizeof(param)))
+		return -EFAULT;
+	if (unlikely(param.flags))
+		return -EINVAL;
+
+	param.peer_flags = peer_info->flags & BUS1_PEER_FLAG_WANT_SECCTX;
+
+	/* XXX: add support for peer limits */
+	param.max_slices = -1;
+	param.max_handles = -1;
+	param.max_inflight_bytes = -1;
+	param.max_inflight_fds = -1;
+
+	if (put_user(param.peer_flags, &uparam->peer_flags))
+		return -EFAULT;
+
+	return 0;
+}
+
 static int bus1_peer_ioctl_reset(struct bus1_peer *peer, unsigned long arg)
 {
 	struct bus1_peer_info *peer_info = bus1_peer_dereference(peer);
@@ -308,8 +335,7 @@ static int bus1_peer_ioctl_reset(struct bus1_peer *peer, unsigned long arg)
 
 	if (copy_from_user(&param, uparam, sizeof(param)))
 		return -EFAULT;
-	if (unlikely(param.flags & ~(BUS1_PEER_RESET_FLAG_QUERY |
-				     BUS1_PEER_RESET_FLAG_DESTROY_NODES |
+	if (unlikely(param.flags & ~(BUS1_PEER_RESET_FLAG_DESTROY_NODES |
 				     BUS1_PEER_RESET_FLAG_PROTECT_PERSISTENT |
 				     BUS1_PEER_RESET_FLAG_RELEASE_HANDLES)))
 		return -EINVAL;
@@ -321,45 +347,31 @@ static int bus1_peer_ioctl_reset(struct bus1_peer *peer, unsigned long arg)
 		     param.max_inflight_fds != -1))
 		return -EINVAL;
 
-	if (param.flags & BUS1_PEER_RESET_FLAG_QUERY) {
-		/* QUERY cannot be combined */
-		if (param.flags & ~BUS1_PEER_RESET_FLAG_QUERY)
-			return -EINVAL;
+	destroy_nodes = param.flags & BUS1_PEER_RESET_FLAG_DESTROY_NODES;
+	protect_persistent = param.flags &
+			     BUS1_PEER_RESET_FLAG_PROTECT_PERSISTENT;
+	release_handles = param.flags & BUS1_PEER_RESET_FLAG_RELEASE_HANDLES;
 
-		param.peer_flags = peer_info->flags &
-				   BUS1_PEER_FLAG_WANT_SECCTX;
+	/* PROTECT_PERSISTENT requires DESTROY_NODES */
+	if (unlikely(protect_persistent && !destroy_nodes))
+		return -EINVAL;
+	/* DESTROY_NODES and RELEASE_HANDLES must be combined so far */
+	if (unlikely(destroy_nodes != release_handles))
+		return -EINVAL;
+	/* refuse invalid flags, unless cleared to -1 */
+	if (unlikely(param.peer_flags != -1 &&
+		     (param.peer_flags & ~BUS1_PEER_FLAG_WANT_SECCTX)))
+		return -EINVAL;
 
-		if (put_user(param.peer_flags, &uparam->peer_flags))
-			return -EFAULT;
-	} else {
-		destroy_nodes = param.flags &
-				BUS1_PEER_RESET_FLAG_DESTROY_NODES;
-		protect_persistent = param.flags &
-				     BUS1_PEER_RESET_FLAG_PROTECT_PERSISTENT;
-		release_handles = param.flags &
-				  BUS1_PEER_RESET_FLAG_RELEASE_HANDLES;
+	if (destroy_nodes || release_handles)
+		bus1_peer_info_reset(peer_info, !protect_persistent);
 
-		/* PROTECT_PERSISTENT requires DESTROY_NODES */
-		if (unlikely(protect_persistent && !destroy_nodes))
-			return -EINVAL;
-		/* DESTROY_NODES and RELEASE_HANDLES must be combined so far */
-		if (unlikely(destroy_nodes != release_handles))
-			return -EINVAL;
-		/* refuse invalid flags, unless cleared to -1 */
-		if (unlikely(param.peer_flags != -1 &&
-			     (param.peer_flags & ~BUS1_PEER_FLAG_WANT_SECCTX)))
-			return -EINVAL;
-
-		if (destroy_nodes || release_handles)
-			bus1_peer_info_reset(peer_info, !protect_persistent);
-
-		if (param.peer_flags != -1) {
-			mutex_lock(&peer_info->lock);
-			peer_info->flags = param.peer_flags |
-					   (peer_info->flags &
-						~BUS1_PEER_FLAG_WANT_SECCTX);
-			mutex_unlock(&peer_info->lock);
-		}
+	if (param.peer_flags != -1) {
+		mutex_lock(&peer_info->lock);
+		peer_info->flags = param.peer_flags |
+				   (peer_info->flags &
+				    ~BUS1_PEER_FLAG_WANT_SECCTX);
+		mutex_unlock(&peer_info->lock);
 	}
 
 	return 0;
@@ -737,6 +749,8 @@ int bus1_peer_ioctl(struct bus1_peer *peer,
 	lockdep_assert_held(&peer->active);
 
 	switch (cmd) {
+	case BUS1_CMD_PEER_QUERY:
+		return bus1_peer_ioctl_query(peer, arg);
 	case BUS1_CMD_PEER_RESET:
 		return bus1_peer_ioctl_reset(peer, arg);
 	case BUS1_CMD_HANDLE_TRANSFER:

@@ -386,6 +386,28 @@ peer will fail with <constant>-ESHUTDOWN</constant>.
               </varlistentry>
 
               <varlistentry>
+                <term><constant>BUS1_CMD_PEER_QUERY</constant></term>
+                <listitem>
+                  <para>
+This command queries the state of a peer context. It takes the following
+structure as argument:
+<programlisting>
+struct bus1_cmd_peer_reset {
+        __u64 flags;
+        __u64 peer_flags;
+        __u64 max_slices;
+        __u64 max_handles;
+        __u64 max_inflight_bytes;
+        __u64 max_inflight_fds;
+};
+</programlisting>
+<varname>flags</varname> must always be set to 0. The state as set via
+<constant>BUS1_CMD_PEER_RESET</constant> is returned.
+                  </para>
+                </listitem>
+              </varlistentry>
+
+              <varlistentry>
                 <term><constant>BUS1_CMD_PEER_RESET</constant></term>
                 <listitem>
                   <para>
@@ -401,11 +423,8 @@ struct bus1_cmd_peer_reset {
         __u64 max_inflight_fds;
 };
 </programlisting>
-If <varname>flags</varname> is
-<constant>BUS1_CMD_PEER_RESET_FLAG_QUERY</constant> all the subsequent fields
-must be set to their default valuse which are replaced by the current state of
-the peer context when the ioctl returns, and no other flags may be set. If
-<constant>BUS1_CMD_PEER_RESET_FLAG_DESTROY_NODES</constant> is set, all nodes
+If <varname>flags</varname> has
+<constant>BUS1_CMD_PEER_RESET_FLAG_DESTROY_NODES</constant> set, all nodes
 are simultaneously destroyed. If
 <constant>BUS1_CMD_PEER_RESET_FLAG_RELEASE_HANDLES</constant> is set, all
 handles are simultaneously released. If <varname>peer_flags</varname> is
@@ -416,9 +435,8 @@ sending task is attached to each received message destined for this peer.
 sets the resource limits on this peer.
                   </para>
                   <para>
-Unless the query flag is passed, all pending messages are dropped except the
-seed message, which is preserved. All user references to slices are also dropped
-from the pool.
+All pending messages are dropped except the seed message, which is preserved.
+All user references to slices are also dropped from the pool.
                   </para>
                 </listitem>
               </varlistentry>
