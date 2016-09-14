@@ -108,12 +108,9 @@ void bus1_queue_flush(struct bus1_queue *queue, struct list_head *list)
 	 * it will be responsible of the cleanup.
 	 * Note that we *know* that our node-refcount cannot be the last, since
 	 * otherwise the owning transaction would be unable to commit the node.
-	 *
-	 * XXX: Make sure this is true for notifications as well.
 	 */
 	rbtree_postorder_for_each_entry_safe(node, t, &queue->messages, rb) {
-		if (bus1_queue_node_get_type(node) == BUS1_QUEUE_NODE_MESSAGE &&
-		    bus1_queue_node_is_staging(node)) {
+		if (bus1_queue_node_is_staging(node)) {
 			RB_CLEAR_NODE(&node->rb);
 			kref_put(&node->ref, bus1_queue_node_no_free);
 		} else {
