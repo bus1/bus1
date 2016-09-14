@@ -16,6 +16,7 @@
 #include <linux/slab.h>
 #include "peer.h"
 #include "queue.h"
+#include "util.h"
 
 static void bus1_queue_node_set_timestamp(struct bus1_queue_node *node, u64 ts)
 {
@@ -93,9 +94,33 @@ void bus1_queue_flush(struct bus1_queue *queue, struct list_head *list)
 
 	mutex_lock(&queue->lock);
 
-	/* transfer all nodes (including their ref) onto @list, then clear */
-	rbtree_postorder_for_each_entry_safe(node, t, &queue->messages, rb)
-		list_add(&node->link, list);
+	/*
+	 * A queue contains staging and committed nodes. A committed node is
+	 * fully owned by the queue, including a ref-count, but a staging entry
+	 * is always still owned by a transaction (with an additional
+	 * ref-count). Any state transition is synchronized by the queue lock.
+	 *
+	 * On flush, we push all committed (i.e., queue-owned) nodes into a
+	 * list and transfer them (including a ref-count) to the caller, as if
+	 * they dequeued them manually. But any staging node is simply marked
+	 * as removed and the queue-refcount is dropped. The owning transaction
+	 * will thus notice the removal and will be unable to commit it. Hence,
+	 * it will be responsible of the cleanup.
+	 * Note that we *know* that our node-refcount cannot be the last, since
+	 * otherwise the owning transaction would be unable to commit the node.
+	 *
+	 * XXX: Make sure this is true for notifications as well.
+	 */
+	rbtree_postorder_for_each_entry_safe(node, t, &queue->messages, rb) {
+		if (bus1_queue_node_get_type(node) == BUS1_QUEUE_NODE_MESSAGE &&
+		    bus1_queue_node_is_staging(node)) {
+			RB_CLEAR_NODE(&node->rb);
+			kref_put(&node->ref, bus1_queue_node_no_free);
+		} else {
+			list_add(&node->link, list);
+		}
+	}
+
 	queue->messages = RB_ROOT;
 	rcu_assign_pointer(queue->front, NULL);
 

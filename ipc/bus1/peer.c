@@ -64,14 +64,7 @@ static void bus1_peer_info_reset(struct bus1_peer_info *peer_info, bool final)
 		switch (bus1_queue_node_get_type(node)) {
 		case BUS1_QUEUE_NODE_MESSAGE:
 			message = bus1_message_from_node(node);
-			/*
-			 * If a message is marked staging, it is still owned by
-			 * a transaction. Skip it here, the removal from the
-			 * queue serves as hint to its owner that it was
-			 * flushed.
-			 */
-			if (!bus1_queue_node_is_staging(node))
-				bus1_message_unpin(message, peer_info);
+			bus1_message_unpin(message, peer_info);
 			bus1_message_unref(message);
 			break;
 		case BUS1_QUEUE_NODE_HANDLE_DESTRUCTION:
