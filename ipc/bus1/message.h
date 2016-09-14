@@ -107,7 +107,7 @@ static inline struct bus1_message *
 bus1_message_from_node(struct bus1_queue_node *node)
 {
 	if (BUS1_WARN_ON(bus1_queue_node_get_type(node) !=
-			 BUS1_QUEUE_NODE_MESSAGE_NORMAL))
+			 BUS1_QUEUE_NODE_MESSAGE))
 		return NULL;
 
 	return container_of(node, struct bus1_message, qnode);

@@ -62,7 +62,7 @@ static void bus1_peer_info_reset(struct bus1_peer_info *peer_info, bool final)
 		RB_CLEAR_NODE(&node->rb); /* reset the link/rb union */
 
 		switch (bus1_queue_node_get_type(node)) {
-		case BUS1_QUEUE_NODE_MESSAGE_NORMAL:
+		case BUS1_QUEUE_NODE_MESSAGE:
 			message = bus1_message_from_node(node);
 			/*
 			 * If a message is marked staging, it is still owned by
@@ -615,7 +615,7 @@ static int bus1_peer_dequeue(struct bus1_peer_info *peer_info,
 		node = bus1_queue_peek_locked(&peer_info->queue, &has_continue);
 		if (node) {
 			type = bus1_queue_node_get_type(node);
-			if (type == BUS1_QUEUE_NODE_MESSAGE_NORMAL) {
+			if (type == BUS1_QUEUE_NODE_MESSAGE) {
 				message = bus1_message_from_node(node);
 				bus1_message_pin(message);
 			}

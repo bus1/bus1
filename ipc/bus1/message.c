@@ -61,7 +61,7 @@ struct bus1_message *bus1_message_new(size_t n_bytes,
 	message->gid = -1;
 	message->pid = 0;
 	message->tid = 0;
-	bus1_queue_node_init(&message->qnode, BUS1_QUEUE_NODE_MESSAGE_NORMAL,
+	bus1_queue_node_init(&message->qnode, BUS1_QUEUE_NODE_MESSAGE,
 			     (unsigned long)peer_info);
 	atomic_set(&message->n_pins, 0);
 	message->transaction.next = NULL;
