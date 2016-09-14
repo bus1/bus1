@@ -256,10 +256,7 @@ static inline bool bus1_queue_node_is_queued(struct bus1_queue_node *node)
  */
 static inline bool bus1_queue_node_is_staging(struct bus1_queue_node *node)
 {
-	u64 ts;
-
-	ts = node ? bus1_queue_node_get_timestamp(node) : 0;
-	return ts & 1;
+	return node ? (bus1_queue_node_get_timestamp(node) & 1) : false;
 }
 
 /**
