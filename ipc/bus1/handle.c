@@ -42,6 +42,7 @@
  * @id:			current ID of this handle
  * @holder:		holder of this node
  * @link_node:		link into the node
+ * @next:		temporary single-linked list during destruction
  *
  * Handle objects represent an accessor to nodes. A handle is always held by a
  * specific peer, and by that peer only. The peer-lock (or queue-lock,
@@ -99,7 +100,12 @@ struct bus1_handle {
 	struct bus1_node *node;
 	u64 id;
 	struct bus1_peer __rcu *holder;
-	struct list_head link_node;
+	union {
+		struct list_head link_node;
+		struct {
+			struct bus1_handle *next;
+		} transaction;
+	};
 };
 
 /**
@@ -567,14 +573,14 @@ static void bus1_handle_uninstall_holder(struct bus1_handle *handle,
 	bus1_queue_remove(&peer_info->queue, &handle->qnode);
 }
 
-static void bus1_node_commit_notifications(struct list_head *list_notify)
+static void bus1_node_commit_notifications(struct bus1_handle *list)
 {
 	struct bus1_peer_info *peer_info;
 	struct bus1_handle *h;
 	struct bus1_peer *peer;
 
 	/* sync all clocks so side-channels are ordered */
-	list_for_each_entry(h, list_notify, link_node) {
+	for (h = list; h; h = h->transaction.next) {
 		peer = bus1_handle_acquire_holder(h, &peer_info);
 		if (peer) {
 			mutex_lock(&peer_info->queue.lock);
@@ -585,9 +591,9 @@ static void bus1_node_commit_notifications(struct list_head *list_notify)
 	}
 
 	/* commit all queued notifications */
-	while ((h = list_first_entry_or_null(list_notify, struct bus1_handle,
-					     link_node))) {
-		list_del_init(&h->link_node);
+	while ((h = list)) {
+		list = h->transaction.next;
+		INIT_LIST_HEAD(&h->link_node);
 
 		peer = bus1_handle_acquire_holder(h, &peer_info);
 		if (peer) {
@@ -609,9 +615,8 @@ static void bus1_node_destroy(struct bus1_node *node,
 			      struct bus1_peer_info *peer_info)
 {
 	struct bus1_peer_info *holder_info;
+	struct bus1_handle *h, *list = NULL;
 	struct bus1_peer *holder;
-	LIST_HEAD(list_notify);
-	struct bus1_handle *h;
 	u64 timestamp;
 
 	lockdep_assert_held(&peer_info->lock);
@@ -633,9 +638,11 @@ static void bus1_node_destroy(struct bus1_node *node,
 			timestamp = bus1_queue_stage(&holder_info->queue,
 						     &h->qnode, timestamp);
 			mutex_unlock(&holder_info->queue.lock);
-			list_add(&h->link_node, &list_notify);
+			h->transaction.next = list;
+			list = h;
 			bus1_peer_release(holder);
 		} else {
+			INIT_LIST_HEAD(&h->link_node);
 			bus1_handle_unref(h);
 		}
 	}
@@ -657,8 +664,9 @@ static void bus1_node_destroy(struct bus1_node *node,
 	WARN_ON(test_and_set_bit(BUS1_NODE_BIT_DESTROYED, &node->flags));
 	mutex_unlock(&peer_info->queue.lock);
 
-	list_add_tail(&node->owner.link_node, &list_notify);
-	bus1_node_commit_notifications(&list_notify);
+	node->owner.transaction.next = list;
+	list = &node->owner;
+	bus1_node_commit_notifications(list);
 
 done:
 	/*
