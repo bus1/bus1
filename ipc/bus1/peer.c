@@ -597,7 +597,7 @@ static int bus1_peer_dequeue(struct bus1_peer_info *peer_info,
 {
 	struct bus1_queue_node *node = NULL;
 	struct bus1_message *message = NULL;
-	unsigned int type;
+	unsigned int type = _BUS1_QUEUE_NODE_N;
 	bool has_continue;
 	int r;
 
