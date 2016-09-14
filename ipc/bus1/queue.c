@@ -156,7 +156,7 @@ static void bus1_queue_add(struct bus1_queue *queue,
 		n = rb_next(&node->rb);
 		if (n) {
 			iter = container_of(n, struct bus1_queue_node, rb);
-			if (bus1_queue_node_is_committed(iter) &&
+			if (!bus1_queue_node_is_staging(iter) &&
 			    bus1_queue_node_compare(iter, timestamp,
 						    node->sender) < 0)
 				rcu_assign_pointer(queue->front, n);
@@ -339,7 +339,7 @@ void bus1_queue_remove(struct bus1_queue *queue, struct bus1_queue_node *node)
 		n = rb_next(&node->rb);
 		if (n) {
 			iter = container_of(n, struct bus1_queue_node, rb);
-			if (!bus1_queue_node_is_committed(iter))
+			if (bus1_queue_node_is_staging(iter))
 				n = NULL;
 		}
 		rcu_assign_pointer(queue->front, n);

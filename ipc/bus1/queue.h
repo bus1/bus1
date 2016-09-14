@@ -245,24 +245,6 @@ static inline bool bus1_queue_node_is_queued(struct bus1_queue_node *node)
 }
 
 /**
- * bus1_queue_node_is_committed() - check whether a node is committed
- * @node:		node to query, or NULL
- *
- * This checks whether a given node was already committed. In this case, the
- * queue node is owned by the queue. In all other cases, the node is usually
- * owned by an ongoing transaction or some other ongoing operation.
- *
- * Return: True if @node is committed.
- */
-static inline bool bus1_queue_node_is_committed(struct bus1_queue_node *node)
-{
-	u64 ts;
-
-	ts = node ? bus1_queue_node_get_timestamp(node) : 0;
-	return ts != 0 && !(ts & 1);
-}
-
-/**
  * bus1_queue_node_is_staging() - check whether a node is marked staging
  * @node:		node to query, or NULL
  *
