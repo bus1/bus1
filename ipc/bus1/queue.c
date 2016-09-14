@@ -8,7 +8,6 @@
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
-#include <linux/atomic.h>
 #include <linux/err.h>
 #include <linux/kernel.h>
 #include <linux/lockdep.h>
@@ -110,7 +109,7 @@ void bus1_queue_node_destroy(struct bus1_queue_node *node)
 		return;
 
 	BUS1_WARN_ON(!RB_EMPTY_NODE(&node->rb));
-	BUS1_WARN_ON(atomic_read(&node->ref.refcount) > 0);
+	BUS1_WARN_ON(kref_get_unless_zero(&node->ref));
 }
 
 /**
