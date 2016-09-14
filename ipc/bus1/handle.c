@@ -24,6 +24,7 @@
 #include <linux/uaccess.h>
 #include <linux/wait.h>
 #include <uapi/linux/bus1.h>
+#include "active.h"
 #include "handle.h"
 #include "peer.h"
 #include "queue.h"
@@ -43,6 +44,7 @@
  * @holder:		holder of this node
  * @link_node:		link into the node
  * @next:		temporary single-linked list during destruction
+ * @raw_peer:		temporarily pinned raw peer during destruction
  *
  * Handle objects represent an accessor to nodes. A handle is always held by a
  * specific peer, and by that peer only. The peer-lock (or queue-lock,
@@ -104,6 +106,7 @@ struct bus1_handle {
 		struct list_head link_node;
 		struct {
 			struct bus1_handle *next;
+			struct bus1_peer *raw_peer;
 		} transaction;
 	};
 };
@@ -581,32 +584,30 @@ static void bus1_node_commit_notifications(struct bus1_handle *list)
 
 	/* sync all clocks so side-channels are ordered */
 	for (h = list; h; h = h->transaction.next) {
-		peer = bus1_handle_acquire_holder(h, &peer_info);
-		if (peer) {
-			mutex_lock(&peer_info->queue.lock);
-			bus1_queue_sync(&peer_info->queue, h->node->timestamp);
-			mutex_unlock(&peer_info->queue.lock);
-			bus1_peer_release(peer);
-		}
+		peer = h->transaction.raw_peer;
+		bus1_active_lockdep_acquired(&peer->active);
+		peer_info = bus1_peer_dereference(peer);
+
+		mutex_lock(&peer_info->queue.lock);
+		bus1_queue_sync(&peer_info->queue, h->node->timestamp);
+		mutex_unlock(&peer_info->queue.lock);
+
+		bus1_active_lockdep_released(&peer->active);
 	}
 
 	/* commit all queued notifications */
 	while ((h = list)) {
 		list = h->transaction.next;
+		peer = h->transaction.raw_peer;
 		INIT_LIST_HEAD(&h->link_node);
 
-		peer = bus1_handle_acquire_holder(h, &peer_info);
-		if (peer) {
-			bus1_queue_commit_staged(&peer_info->queue, &h->qnode,
-						 h->node->timestamp);
-			bus1_peer_release(peer);
-		}
+		bus1_active_lockdep_acquired(&peer->active);
+		peer_info = bus1_peer_dereference(peer);
 
-		/* nodes pin their owners until destroyed */
-		if (bus1_handle_is_owner(h))
-			bus1_handle_unref(h);
+		bus1_queue_commit_staged(&peer_info->queue, &h->qnode,
+					 h->node->timestamp);
 
-		/* drop ref owned by @list_notify */
+		bus1_peer_release(peer);
 		bus1_handle_unref(h);
 	}
 }
@@ -617,20 +618,20 @@ static void bus1_node_destroy(struct bus1_node *node,
 	struct bus1_peer_info *holder_info;
 	struct bus1_handle *h, *list = NULL;
 	struct bus1_peer *holder;
-	u64 timestamp;
+	u64 timestamp = 0;
 
 	lockdep_assert_held(&peer_info->lock);
 
 	if (bus1_node_is_destroyed(node))
 		goto done;
 
-	list_del_init(&node->owner.link_node);
-	timestamp = 0;
+	/* make sure owner handle is always linked */
+	list_move_tail(&node->owner.link_node, &node->list_handles);
 
 	while ((h = list_first_entry_or_null(&node->list_handles,
 					     struct bus1_handle,
 					     link_node))) {
-		list_del_init(&h->link_node);
+		list_del(&h->link_node);
 
 		holder = bus1_handle_acquire_holder(h, &holder_info);
 		if (holder) {
@@ -638,35 +639,27 @@ static void bus1_node_destroy(struct bus1_node *node,
 			timestamp = bus1_queue_stage(&holder_info->queue,
 						     &h->qnode, timestamp);
 			mutex_unlock(&holder_info->queue.lock);
+			bus1_active_lockdep_released(&holder->active);
+			h->transaction.raw_peer = holder;
 			h->transaction.next = list;
 			list = h;
-			bus1_peer_release(holder);
 		} else {
 			INIT_LIST_HEAD(&h->link_node);
 			bus1_handle_unref(h);
 		}
 	}
 
-	/*
-	 * Queue owner notification only if the owner was ever accessible. If
-	 * it never got any ID assigned, the peer does not know about it and we
-	 * better skip the notification. We still queue it on @list_notify to
-	 * trigger the cleanup.
-	 */
 	mutex_lock(&peer_info->queue.lock);
-	if (likely(!RB_EMPTY_NODE(&node->owner.rb_id)))
-		timestamp = bus1_queue_stage(&peer_info->queue,
-					     &node->owner.qnode, timestamp);
-	else
-		bus1_queue_sync(&peer_info->queue, timestamp);
+	bus1_queue_sync(&peer_info->queue, timestamp);
 	node->timestamp = bus1_queue_tick(&peer_info->queue);
 	/* test_and_set_bit() provides barriers for node->timestamp */
 	WARN_ON(test_and_set_bit(BUS1_NODE_BIT_DESTROYED, &node->flags));
 	mutex_unlock(&peer_info->queue.lock);
 
-	node->owner.transaction.next = list;
-	list = &node->owner;
 	bus1_node_commit_notifications(list);
+
+	/* nodes pin their owners until destroyed */
+	bus1_handle_unref(&node->owner);
 
 done:
 	/*
