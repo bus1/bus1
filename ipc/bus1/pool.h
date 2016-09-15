@@ -92,12 +92,12 @@ struct bus1_pool {
 
 #define BUS1_POOL_NULL ((struct bus1_pool){})
 
-int bus1_pool_create_internal(struct bus1_pool *pool);
+int bus1_pool_create(struct bus1_pool *pool);
 void bus1_pool_destroy(struct bus1_pool *pool);
 
 struct bus1_pool_slice *bus1_pool_alloc(struct bus1_pool *pool, size_t size);
-struct bus1_pool_slice *
-bus1_pool_release_kernel(struct bus1_pool *pool, struct bus1_pool_slice *slice);
+struct bus1_pool_slice *bus1_pool_release_kernel(struct bus1_pool *pool,
+						 struct bus1_pool_slice *slice);
 void bus1_pool_publish(struct bus1_pool *pool, struct bus1_pool_slice *slice);
 int bus1_pool_release_user(struct bus1_pool *pool,
 			   size_t offset,
@@ -116,11 +116,6 @@ ssize_t bus1_pool_write_kvec(struct bus1_pool *pool,
 			     struct kvec *iov,
 			     size_t n_iov,
 			     size_t total_len);
-
-/* see bus1_pool_create_internal() for details */
-#define bus1_pool_create_for_peer(_peer) ({			\
-		bus1_pool_create_internal(&(_peer)->pool);	\
-	})
 
 /**
  * bus1_pool_slice_is_public() - check whether a slice is public

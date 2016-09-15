@@ -14,7 +14,6 @@
 #include <linux/fs.h>
 #include <linux/highmem.h>
 #include <linux/kernel.h>
-#include <linux/lockdep.h>
 #include <linux/mm.h>
 #include <linux/pagemap.h>
 #include <linux/rbtree.h>
@@ -24,14 +23,8 @@
 #include <linux/slab.h>
 #include <linux/uaccess.h>
 #include <linux/uio.h>
-#include "peer.h"
 #include "pool.h"
 #include "util.h"
-
-/* lockdep assertion to verify the parent peer is locked */
-#define bus1_pool_assert_held(_pool) \
-	lockdep_assert_held(&container_of((_pool),		\
-					  struct bus1_peer_info, pool)->lock)
 
 static struct bus1_pool_slice *bus1_pool_slice_new(size_t offset, size_t size)
 {
@@ -152,19 +145,14 @@ bus1_pool_slice_find_by_offset(struct bus1_pool *pool, size_t offset)
 }
 
 /**
- * bus1_pool_create_internal() - create memory pool
- * @pool:	(uninitialized) pool to operate on
+ * bus1_pool_create() - create memory pool
+ * @pool:	pool to operate on
  *
  * Initialize a new pool object.
  *
- * Note that all pools must be embedded into a parent bus1_peer_info object. The
- * code works fine, if you don't, but the lockdep-annotations will fail
- * horribly. They rely on container_of() to be valid on every pool. Use the
- * bus1_pool_create_for_peer() macro to make sure you never violate this rule.
- *
  * Return: 0 on success, negative error code on failure.
  */
-int bus1_pool_create_internal(struct bus1_pool *pool)
+int bus1_pool_create(struct bus1_pool *pool)
 {
 	struct bus1_pool_slice *slice;
 	struct page *p;
@@ -280,8 +268,6 @@ struct bus1_pool_slice *bus1_pool_alloc(struct bus1_pool *pool, size_t size)
 	struct bus1_pool_slice *slice, *ps;
 	size_t slice_size;
 
-	bus1_pool_assert_held(pool);
-
 	slice_size = ALIGN(size, 8);
 	if (slice_size == 0 || slice_size > BUS1_POOL_SLICE_SIZE_MAX)
 		return ERR_PTR(-EMSGSIZE);
@@ -384,8 +370,6 @@ bus1_pool_release_kernel(struct bus1_pool *pool, struct bus1_pool_slice *slice)
 	if (!slice || BUS1_WARN_ON(!slice->ref_kernel))
 		return NULL;
 
-	bus1_pool_assert_held(pool);
-
 	/* kernel must own a ref to @slice */
 	slice->ref_kernel = false;
 
@@ -406,8 +390,6 @@ bus1_pool_release_kernel(struct bus1_pool *pool, struct bus1_pool_slice *slice)
  */
 void bus1_pool_publish(struct bus1_pool *pool, struct bus1_pool_slice *slice)
 {
-	bus1_pool_assert_held(pool);
-
 	/* kernel must own a ref to @slice to publish it */
 	BUS1_WARN_ON(!slice->ref_kernel);
 	slice->ref_user = true;
@@ -433,8 +415,6 @@ int bus1_pool_release_user(struct bus1_pool *pool,
 			   size_t *n_slicesp)
 {
 	struct bus1_pool_slice *slice;
-
-	bus1_pool_assert_held(pool);
 
 	slice = bus1_pool_slice_find_by_offset(pool, offset);
 	if (!slice || !slice->ref_user)
@@ -462,8 +442,6 @@ void bus1_pool_flush(struct bus1_pool *pool, size_t *n_slicesp)
 	struct bus1_pool_slice *slice;
 	struct rb_node *node, *t;
 	size_t n_slices = 0;
-
-	bus1_pool_assert_held(pool);
 
 	for (node = rb_first(&pool->slices_busy);
 	     node && ((t = rb_next(node)), true);

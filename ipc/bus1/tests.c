@@ -104,7 +104,7 @@ static void bus1_test_quota(void)
 	mutex_init(&peer.lock);
 	peer.user = owner;
 	mutex_lock(&peer.lock);
-	bus1_pool_create_for_peer(&peer);
+	bus1_pool_create(&peer.pool);
 
 	/* charge nothing: allocates the user stats, charge one message */
 	r = bus1_user_quota_charge(&peer, user1, 0, 0, 0);
