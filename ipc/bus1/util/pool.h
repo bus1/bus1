@@ -13,30 +13,16 @@
 /**
  * DOC: Pools
  *
- * Each connected peer has its own memory pool associated with the
- * file-descriptor. This pool can be mapped read-only by the client. The pool
- * is used to transfer memory from the kernel to the client; this includes
- * query/list operations the client performs, but also messages received by
- * other clients.
+ * A pool is a shmem-backed memory pool shared between userspace and the kernel.
+ * The pool is used to transfer memory from the kernel to userspace without
+ * requiring userspace to allocate the memory.
  *
- * The pool is managed in slices, and clients have to free each slice after
- * they are done with it.
+ * The pool is managed in slices, which are published to userspace when they are
+ * ready to be read and must be released by userspace when userspace is done
+ * with them.
  *
- * If a client queries the kernel for large sets of data (especially if it has
- * a non-static size), the kernel will put that data into a freshly allocated
- * slice in the pool and lets the client know the offset and size. The client
- * can then access the data directly and keep it allocated as long as it
- * wishes.
- *
- * During message transactions, a sender copies the message directly into a
- * pool-slice allocated in the pool of the receiver. There is no in-flight
- * buffer, as such, only a single copy operation is needed to transfer the
- * message.
- *
- * Note that no-one has direct write-access to pool memory. Furthermore, only
- * the owner of a pool has read-access. Any data that is written into the pool
- * is written by the kernel itself, accounted by a custom quota logic, and
- * protected by client provided policies.
+ * Userspace has read-only access to its pools and the kernel has read-write
+ * access, but published slices are not altered.
  */
 
 #include <linux/kernel.h>
@@ -71,23 +57,20 @@ struct kvec;
  * as referenced by user-space. Note that all slices are always readable by
  * user-space, since the entire pool can be mapped. Publishing a slice only
  * marks the slice as referenced by user-space, so it will not be modified or
- * removed.
- * Once user-space releases its reference, it should no longer access the slice
- * as it might be modified and/or overwritten by other data.
+ * removed. Once user-space releases its reference, it should no longer access
+ * the slice as it might be modified and/or overwritten by other data.
  *
  * Only if neither kernel nor user-space have a reference to a slice, the slice
  * is released. The kernel reference can only be acquired/released once, but
- * user-space references can be published/released several times. For instance,
- * if a message is queued, the kernel retains its reference during each PEEK
- * operation. But at the same time, the slice must be published to user-space on
- * PEEK. If user-space PEEKs multiple times (and drops their reference in
- * between), it might re-acquire references to the same slice several times.
+ * user-space references can be published/released several times. In particular,
+ * if the kernel retains a reference when a slice is published and later
+ * released by userspace, the same slice can be published again in the future.
  *
  * Note that both kernel-space and user-space must be aware that slice
  * references are not ref-counted. They are simple booleans. For the kernel-side
  * this is obvious, as no ref/unref functions are provided. But user-space must
- * be aware that PEEK'ing at the same slice multiple times does not increase the
- * reference count.
+ * be aware that the same slice being published several times does not increase
+ * the reference count.
  */
 struct bus1_pool_slice {
 	u32 offset;
@@ -120,8 +103,8 @@ struct bus1_pool_slice {
  * Instead, the kernel simply allocates slices in the pool and tells user-space
  * where it put the data.
  *
- * All pool operations must be serialized by the caller. Not internal lock is
- * provided! Slices can be queried/modified unlocked. But any pool operation
+ * All pool operations must be serialized by the caller. No internal lock is
+ * provided. Slices can be queried/modified unlocked. But any pool operation
  * (allocation, release, flush, ...) must be serialized!
  */
 struct bus1_pool {
