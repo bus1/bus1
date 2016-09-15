@@ -95,15 +95,10 @@ bus1_peer_info_free(struct bus1_peer_info *peer_info)
 	put_pid_ns(peer_info->pid_ns);
 	put_cred(peer_info->cred);
 
-	BUS1_WARN_ON(!RB_EMPTY_ROOT(&peer_info->map_handles_by_node));
-	BUS1_WARN_ON(!RB_EMPTY_ROOT(&peer_info->map_handles_by_id));
-	BUS1_WARN_ON(peer_info->seed);
+	WARN_ON(!RB_EMPTY_ROOT(&peer_info->map_handles_by_node));
+	WARN_ON(!RB_EMPTY_ROOT(&peer_info->map_handles_by_id));
+	WARN_ON(peer_info->seed);
 
-	/*
-	 * Make sure the object is freed in a delayed-manner. Some
-	 * embedded members (like the queue) must be accessible for an entire
-	 * rcu read-side critical section.
-	 */
 	kfree_rcu(peer_info, rcu);
 
 	return NULL;
@@ -173,9 +168,9 @@ struct bus1_peer *bus1_peer_new(void)
 	peer->debugdir = NULL;
 
 	if (!IS_ERR_OR_NULL(bus1_debugdir)) {
-		char idstr[17];
+		char idstr[22];
 
-		snprintf(idstr, sizeof(idstr), "%llx", peer->id);
+		snprintf(idstr, sizeof(idstr), "peer-%llx", peer->id);
 
 		peer->debugdir = debugfs_create_dir(idstr, bus1_debugdir);
 		if (!peer->debugdir) {
@@ -208,7 +203,7 @@ struct bus1_peer *bus1_peer_free(struct bus1_peer *peer)
 	if (!peer)
 		return NULL;
 
-	BUS1_WARN_ON(rcu_access_pointer(peer->info));
+	WARN_ON(rcu_access_pointer(peer->info));
 	debugfs_remove_recursive(peer->debugdir);
 	bus1_active_destroy(&peer->active);
 	kfree_rcu(peer, rcu);
@@ -223,7 +218,9 @@ struct bus1_peer *bus1_peer_free(struct bus1_peer *peer)
  * This connects a peer. It first creates the linked peer_info object and then
  * marks the peer as active.
  *
- * The caller must make sure this function is called only once.
+ * The caller must make sure this function is called only once. Furthermore,
+ * this call must not race bus1_peer_disconnect(). Better call it on
+ * initialization.
  *
  * Return: 0 on success, negative error code if already torn down.
  */
@@ -231,7 +228,7 @@ int bus1_peer_connect(struct bus1_peer *peer)
 {
 	struct bus1_peer_info *peer_info;
 
-	if (BUS1_WARN_ON(!bus1_active_is_new(&peer->active)))
+	if (WARN_ON(!bus1_active_is_new(&peer->active)))
 		return -ENOTRECOVERABLE;
 
 	peer_info = bus1_peer_info_new(&peer->waitq);
@@ -239,7 +236,6 @@ int bus1_peer_connect(struct bus1_peer *peer)
 		return PTR_ERR(peer_info);
 
 	rcu_assign_pointer(peer->info, peer_info);
-
 	bus1_active_activate(&peer->active);
 
 	return 0;
@@ -277,7 +273,6 @@ static void bus1_peer_cleanup(struct bus1_active *active, void *userdata)
  */
 int bus1_peer_disconnect(struct bus1_peer *peer)
 {
-	/* deactivate and wait for any outstanding operations */
 	bus1_active_deactivate(&peer->active);
 	bus1_active_drain(&peer->active, &peer->waitq);
 
@@ -309,10 +304,7 @@ static int bus1_peer_ioctl_query(struct bus1_peer *peer, unsigned long arg)
 	param.max_inflight_bytes = -1;
 	param.max_inflight_fds = -1;
 
-	if (put_user(param.peer_flags, &uparam->peer_flags))
-		return -EFAULT;
-
-	return 0;
+	return put_user(param.peer_flags, &uparam->peer_flags) ? -EFAULT : 0;
 }
 
 static int bus1_peer_ioctl_reset(struct bus1_peer *peer, unsigned long arg)
@@ -382,12 +374,9 @@ static int bus1_peer_ioctl_handle_release(struct bus1_peer *peer,
 		return -EFAULT;
 
 	r = bus1_handle_release_by_id(peer, id, &n_handles);
-	if (r < 0)
-		return r;
-
 	atomic_add(n_handles, &peer_info->user->n_handles);
 
-	return 0;
+	return r;
 }
 
 static int bus1_peer_ioctl_handle_transfer(struct bus1_peer *src,
@@ -398,8 +387,6 @@ static int bus1_peer_ioctl_handle_transfer(struct bus1_peer *src,
 	struct bus1_peer *dst;
 	struct fd dst_f;
 	int r = 0;
-
-	lockdep_assert_held(&src->active);
 
 	BUILD_BUG_ON(_IOC_SIZE(BUS1_CMD_HANDLE_TRANSFER) != sizeof(param));
 
