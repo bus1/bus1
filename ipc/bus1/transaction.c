@@ -305,6 +305,7 @@ bus1_transaction_instantiate_message(struct bus1_transaction *transaction,
 	struct bus1_message *message;
 	const bool want_secctx = READ_ONCE(peer_info->flags) &
 						BUS1_PEER_FLAG_WANT_SECCTX;
+	const bool transmit_secctx = want_secctx && transaction->has_secctx;
 	size_t offset, i;
 	struct kvec vec;
 	int r;
@@ -316,7 +317,7 @@ bus1_transaction_instantiate_message(struct bus1_transaction *transaction,
 	message = bus1_message_new(transaction->length_vecs,
 				   transaction->param->n_fds,
 				   transaction->param->n_handles,
-				   want_secctx ? transaction->n_secctx : 0,
+				   transmit_secctx ? transaction->n_secctx : 0,
 				   transaction->peer_info);
 	if (IS_ERR(message))
 		return message;
@@ -344,7 +345,7 @@ bus1_transaction_instantiate_message(struct bus1_transaction *transaction,
 	if (r < 0)
 		goto error;
 
-	if (want_secctx && transaction->has_secctx) {
+	if (transmit_secctx) {
 		offset = ALIGN(message->n_bytes, 8) +
 			 ALIGN(message->handles.batch.n_entries * sizeof(u64),
 			       8) +
