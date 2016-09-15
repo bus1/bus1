@@ -60,6 +60,34 @@ struct kvec;
  * @ref_user:		whether a user reference exists
  * @entry:		link into linear list of slices
  * @rb:			link to busy/free rb-tree
+ *
+ * Each chunk of memory in the pool is managed as a slice. A slice can be
+ * accessible by both the kernel and user-space, and their access rights are
+ * managed independently. As long as the kernel has a reference to a slice, its
+ * offset and size can be accessed freely and will not change. Once the kernel
+ * drops its reference, it must not access the slice, anymore.
+ *
+ * To allow user-space access, the slice must be published. This marks the slice
+ * as referenced by user-space. Note that all slices are always readable by
+ * user-space, since the entire pool can be mapped. Publishing a slice only
+ * marks the slice as referenced by user-space, so it will not be modified or
+ * removed.
+ * Once user-space releases its reference, it should no longer access the slice
+ * as it might be modified and/or overwritten by other data.
+ *
+ * Only if neither kernel nor user-space have a reference to a slice, the slice
+ * is released. The kernel reference can only be acquired/released once, but
+ * user-space references can be published/released several times. For instance,
+ * if a message is queued, the kernel retains its reference during each PEEK
+ * operation. But at the same time, the slice must be published to user-space on
+ * PEEK. If user-space PEEKs multiple times (and drops their reference in
+ * between), it might re-acquire references to the same slice several times.
+ *
+ * Note that both kernel-space and user-space must be aware that slice
+ * references are not ref-counted. They are simple booleans. For the kernel-side
+ * this is obvious, as no ref/unref functions are provided. But user-space must
+ * be aware that PEEK'ing at the same slice multiple times does not increase the
+ * reference count.
  */
 struct bus1_pool_slice {
 	u32 offset;
@@ -81,6 +109,20 @@ struct bus1_pool_slice {
  * @slices:		all slices sorted by address
  * @slices_busy:	tree of allocated slices
  * @slices_free:	tree of free slices
+ *
+ * A pool is used to allocate memory slices that can be shared between
+ * kernel-space and user-space. A pool is always backed by a shmem-file and puts
+ * a simple slice-allocator on top. User-space gets read-only access to the
+ * entire pool, kernel-space gets read/write access via accessor-functions.
+ *
+ * Pools are used to transfer large sets of data to user-space, without
+ * requiring a round-trip to ask user-space for a suitable memory chunk.
+ * Instead, the kernel simply allocates slices in the pool and tells user-space
+ * where it put the data.
+ *
+ * All pool operations must be serialized by the caller. Not internal lock is
+ * provided! Slices can be queried/modified unlocked. But any pool operation
+ * (allocation, release, flush, ...) must be serialized!
  */
 struct bus1_pool {
 	struct file *f;
