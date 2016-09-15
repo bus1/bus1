@@ -139,13 +139,10 @@ static void bus1_transaction_destroy(struct bus1_transaction *transaction)
 					transaction->n_secctx);
 }
 
-static int bus1_transaction_set_secctx(struct bus1_transaction *transaction)
+static int bus1_transaction_import_secctx(struct bus1_transaction *transaction)
 {
-#ifdef CONFIG_SECURITY
 	u32 sid;
 	int r;
-
-	BUS1_WARN_ON(transaction->has_secctx);
 
 	security_task_getsecid(current, &sid);
 	r = security_secid_to_secctx(sid, &transaction->secctx,
@@ -156,8 +153,6 @@ static int bus1_transaction_set_secctx(struct bus1_transaction *transaction)
 		return r;
 
 	transaction->has_secctx = true;
-#endif
-
 	return 0;
 }
 
@@ -252,7 +247,7 @@ bus1_transaction_new_from_user(u8 *stack_buffer,
 	}
 	bus1_transaction_init(transaction, peer, param);
 
-	r = bus1_transaction_set_secctx(transaction);
+	r = bus1_transaction_import_secctx(transaction);
 	if (r < 0)
 		goto error;
 
@@ -443,7 +438,8 @@ bus1_transaction_instantiate(struct bus1_transaction *transaction,
  * Return: 0 on success, negative error code on failure.
  */
 int bus1_transaction_instantiate_for_id(struct bus1_transaction *transaction,
-					u64 __user *idp, u64 __user *errorp)
+					u64 __user *idp,
+					u64 __user *errorp)
 {
 	struct bus1_handle_dest dest;
 	struct bus1_message *message;
