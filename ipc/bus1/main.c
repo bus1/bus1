@@ -25,13 +25,13 @@
 #include <linux/slab.h>
 #include <linux/uio.h>
 #include <uapi/linux/bus1.h>
-#include "active.h"
 #include "main.h"
 #include "peer.h"
-#include "queue.h"
 #include "tests.h"
 #include "user.h"
 #include "util.h"
+#include "util/active.h"
+#include "util/queue.h"
 
 static int bus1_fop_open(struct inode *inode, struct file *file)
 {

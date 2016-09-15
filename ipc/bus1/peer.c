@@ -29,11 +29,12 @@
 #include "main.h"
 #include "message.h"
 #include "peer.h"
-#include "pool.h"
-#include "queue.h"
 #include "transaction.h"
 #include "user.h"
 #include "util.h"
+#include "util/active.h"
+#include "util/pool.h"
+#include "util/queue.h"
 
 static void bus1_peer_info_reset(struct bus1_peer_info *peer_info, bool final)
 {

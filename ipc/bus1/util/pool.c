@@ -24,7 +24,6 @@
 #include <linux/uaccess.h>
 #include <linux/uio.h>
 #include "pool.h"
-#include "util.h"
 
 static struct bus1_pool_slice *bus1_pool_slice_new(size_t offset, size_t size)
 {
@@ -169,24 +168,26 @@ int bus1_pool_create(struct bus1_pool *pool)
 		return PTR_ERR(f);
 
 	r = get_write_access(file_inode(f));
-	if (r < 0)
-		goto error_put_file;
-
-	slice = bus1_pool_slice_new(0, BUS1_POOL_SLICE_SIZE_MAX);
-	if (IS_ERR(slice)) {
-		r = PTR_ERR(slice);
-		goto error_put_write;
+	if (r < 0) {
+		fput(f);
+		return r;
 	}
-
-	slice->free = true;
-	slice->ref_kernel = false;
-	slice->ref_user = false;
 
 	pool->f = f;
 	pool->allocated_size = 0;
 	INIT_LIST_HEAD(&pool->slices);
 	pool->slices_free = RB_ROOT;
 	pool->slices_busy = RB_ROOT;
+
+	slice = bus1_pool_slice_new(0, BUS1_POOL_SLICE_SIZE_MAX);
+	if (IS_ERR(slice)) {
+		bus1_pool_destroy(pool);
+		return PTR_ERR(slice);
+	}
+
+	slice->free = true;
+	slice->ref_kernel = false;
+	slice->ref_user = false;
 
 	list_add(&slice->entry, &pool->slices);
 	bus1_pool_slice_link_free(slice, pool);
@@ -202,12 +203,6 @@ int bus1_pool_create(struct bus1_pool *pool)
 		put_page(p);
 
 	return 0;
-
-error_put_write:
-	put_write_access(file_inode(f));
-error_put_file:
-	bus1_fput(f);
-	return r;
 }
 
 /**
@@ -231,13 +226,14 @@ void bus1_pool_destroy(struct bus1_pool *pool)
 	while ((slice = list_first_entry_or_null(&pool->slices,
 						 struct bus1_pool_slice,
 						 entry))) {
-		BUS1_WARN_ON(slice->ref_kernel);
+		WARN_ON(slice->ref_kernel);
 		list_del(&slice->entry);
 		bus1_pool_slice_free(slice);
 	}
 
 	put_write_access(file_inode(pool->f));
-	pool->f = bus1_fput(pool->f);
+	fput(pool->f);
+	pool->f = NULL;
 }
 
 /**
@@ -311,7 +307,7 @@ static void bus1_pool_free(struct bus1_pool *pool,
 	struct bus1_pool_slice *ps;
 
 	/* don't free the slice if either has a reference */
-	if (slice->ref_kernel || slice->ref_user || BUS1_WARN_ON(slice->free))
+	if (slice->ref_kernel || slice->ref_user || WARN_ON(slice->free))
 		return;
 
 	/*
@@ -367,7 +363,7 @@ static void bus1_pool_free(struct bus1_pool *pool,
 struct bus1_pool_slice *
 bus1_pool_release_kernel(struct bus1_pool *pool, struct bus1_pool_slice *slice)
 {
-	if (!slice || BUS1_WARN_ON(!slice->ref_kernel))
+	if (!slice || WARN_ON(!slice->ref_kernel))
 		return NULL;
 
 	/* kernel must own a ref to @slice */
@@ -391,7 +387,7 @@ bus1_pool_release_kernel(struct bus1_pool *pool, struct bus1_pool_slice *slice)
 void bus1_pool_publish(struct bus1_pool *pool, struct bus1_pool_slice *slice)
 {
 	/* kernel must own a ref to @slice to publish it */
-	BUS1_WARN_ON(!slice->ref_kernel);
+	WARN_ON(!slice->ref_kernel);
 	slice->ref_user = true;
 }
 

@@ -13,7 +13,6 @@
 #include <linux/sched.h>
 #include <linux/wait.h>
 #include "active.h"
-#include "util.h"
 
 /*
  * Bias values track states of "active references". They're all negative. If an
@@ -42,6 +41,29 @@
 #define BUS1_ACTIVE_DONE		(BUS1_ACTIVE_BIAS - 3)
 #define BUS1_ACTIVE_NEW			(BUS1_ACTIVE_BIAS - 4)
 #define _BUS1_ACTIVE_RESERVED		(BUS1_ACTIVE_BIAS - 5)
+
+/**
+ * bus1_atomic_add_unless_negative() - add value, unless already negative
+ * @a:		atomic_t to operate on
+ * @add:	value to add
+ *
+ * This atomically adds @add to @a if, and only if, @a is not negative before
+ * the operation.
+ *
+ * Return: 1 if operation was performed, 0 if not.
+ */
+static inline int bus1_atomic_add_unless_negative(atomic_t *a, int add)
+{
+	int v, v1;
+
+	for (v = atomic_read(a); v >= 0; v = v1) {
+		v1 = atomic_cmpxchg(a, v, v + add);
+		if (likely(v1 == v))
+			return 1;
+	}
+
+	return 0;
+}
 
 /**
  * bus1_active_init_private() - initialize object
@@ -75,7 +97,7 @@ void bus1_active_destroy(struct bus1_active *active)
 	int v;
 
 	v = atomic_read(&active->count);
-	BUS1_WARN_ON(v != BUS1_ACTIVE_NEW && v != BUS1_ACTIVE_DONE);
+	WARN_ON(v != BUS1_ACTIVE_NEW && v != BUS1_ACTIVE_DONE);
 }
 
 /**
@@ -204,7 +226,7 @@ bool bus1_active_deactivate(struct bus1_active *active)
  */
 void bus1_active_drain(struct bus1_active *active, wait_queue_head_t *waitq)
 {
-	if (BUS1_WARN_ON(!bus1_active_is_deactivated(active)))
+	if (WARN_ON(!bus1_active_is_deactivated(active)))
 		return;
 
 #ifdef CONFIG_DEBUG_LOCK_ALLOC
@@ -272,7 +294,7 @@ bool bus1_active_cleanup(struct bus1_active *active,
 {
 	int v;
 
-	if (BUS1_WARN_ON(!bus1_active_is_drained(active)))
+	if (WARN_ON(!bus1_active_is_drained(active)))
 		return false;
 
 #ifdef CONFIG_DEBUG_LOCK_ALLOC

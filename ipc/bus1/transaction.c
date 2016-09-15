@@ -24,16 +24,16 @@
 #include <linux/uidgid.h>
 #include <linux/uio.h>
 #include <uapi/linux/bus1.h>
-#include "active.h"
 #include "handle.h"
 #include "message.h"
 #include "peer.h"
-#include "pool.h"
-#include "queue.h"
 #include "security.h"
 #include "transaction.h"
 #include "user.h"
 #include "util.h"
+#include "util/active.h"
+#include "util/pool.h"
+#include "util/queue.h"
 
 struct bus1_transaction {
 	/* sender context */

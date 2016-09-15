@@ -24,12 +24,12 @@
 #include <linux/uaccess.h>
 #include <linux/wait.h>
 #include <uapi/linux/bus1.h>
-#include "active.h"
 #include "handle.h"
 #include "peer.h"
-#include "queue.h"
 #include "security.h"
 #include "util.h"
+#include "util/active.h"
+#include "util/queue.h"
 
 /**
  * struct bus1_handle - handle objects

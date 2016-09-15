@@ -9,15 +9,15 @@
 #
 
 bus$(BUS1_EXT)-y :=	\
-	active.o	\
 	handle.o	\
 	main.o		\
 	message.o	\
 	peer.o		\
-	pool.o		\
-	queue.o		\
 	transaction.o	\
 	util.o		\
+	util/active.o	\
+	util/pool.o	\
+	util/queue.o	\
 	user.o
 
 bus$(BUS1_EXT)-$(CONFIG_BUS1_TESTS) += tests.o

@@ -21,8 +21,8 @@
 #include <linux/kernel.h>
 #include <uapi/linux/bus1.h>
 #include "handle.h"
-#include "queue.h"
 #include "util.h"
+#include "util/queue.h"
 
 struct bus1_message;
 struct bus1_peer;

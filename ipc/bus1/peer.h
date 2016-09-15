@@ -29,10 +29,10 @@
 #include <linux/seqlock.h>
 #include <linux/wait.h>
 #include <uapi/linux/bus1.h>
-#include "active.h"
-#include "pool.h"
-#include "queue.h"
 #include "user.h"
+#include "util/active.h"
+#include "util/pool.h"
+#include "util/queue.h"
 
 struct bus1_message;
 
