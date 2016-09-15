@@ -32,11 +32,11 @@
  * state DRAINED. Now the object can be released a *single* time, before it
  * enters state RELEASED and is finished. It cannot be re-used, anymore.
  *
- * Active-references are very useful to track threads that perform callbacks on
- * an object. As long as a callback is running, an active reference is held,
- * and as such the object is usually protected from being destroyed. The
- * destructor of the object needs to deactivate *and* drain the object, before
- * releasing resources.
+ * Active-references are very useful to track threads that call methods on an
+ * object. As long as a method is running, an active reference is held, and as
+ * such the object is usually protected from being destroyed. The destructor of
+ * the object needs to deactivate *and* drain the object, before releasing
+ * resources.
  *
  * Note that active-references cannot be used to manage their own backing
  * memory. That is, they do not replace normal reference counts.
