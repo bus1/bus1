@@ -285,9 +285,6 @@ int bus1_peer_disconnect(struct bus1_peer *peer)
 				 bus1_peer_cleanup, NULL))
 		return -ESHUTDOWN;
 
-	/* signal hang-up */
-	wake_up_interruptible(&peer->waitq);
-
 	return 0;
 }
 
