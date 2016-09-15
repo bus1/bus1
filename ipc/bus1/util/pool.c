@@ -464,6 +464,30 @@ void bus1_pool_flush(struct bus1_pool *pool, size_t *n_slicesp)
 }
 
 /**
+ * bus1_pool_mmap() - mmap the pool
+ * @pool:		pool to operate on
+ * @vma:		VMA to map to
+ *
+ * This maps the pools shmem file to the provided VMA. Only read-only mappings
+ * are allowed.
+ *
+ * Return: 0 on success, negative error code on failure.
+ */
+int bus1_pool_mmap(struct bus1_pool *pool, struct vm_area_struct *vma)
+{
+	if (unlikely(vma->vm_flags & VM_WRITE))
+		return -EPERM; /* deny write-access to the pool */
+
+	/* replace the connection file with our shmem file */
+	if (vma->vm_file)
+		fput(vma->vm_file);
+	vma->vm_file = get_file(pool->f);
+	vma->vm_flags &= ~VM_MAYWRITE;
+
+	/* calls into shmem_mmap(), which simply sets vm_ops */
+	return pool->f->f_op->mmap(pool->f, vma);
+}
+/**
  * bus1_pool_write_iovec() - copy user memory to a slice
  * @pool:		pool to operate on
  * @slice:		slice to write to

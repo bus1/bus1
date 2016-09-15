@@ -96,26 +96,15 @@ static unsigned int bus1_fop_poll(struct file *file,
 static int bus1_fop_mmap(struct file *file, struct vm_area_struct *vma)
 {
 	struct bus1_peer *peer = file->private_data;
-	struct bus1_pool *pool;
+	struct bus1_peer_info *peer_info;
 	int r;
 
 	if (!bus1_peer_acquire(peer))
 		return -ESHUTDOWN;
-	if (vma->vm_flags & VM_WRITE) {
-		bus1_peer_release(peer);
-		return -EPERM; /* deny write access to the pool */
-	}
 
-	pool = &bus1_peer_dereference(peer)->pool;
+	peer_info = bus1_peer_dereference(peer);
 
-	/* replace the connection file with our shmem file */
-	bus1_fput(vma->vm_file);
-	vma->vm_file = get_file(pool->f);
-	vma->vm_flags &= ~VM_MAYWRITE;
-
-	/* calls into shmem_mmap(), which simply sets vm_ops */
-	r = pool->f->f_op->mmap(pool->f, vma);
-
+	r = bus1_pool_mmap(&peer_info->pool, vma);
 	bus1_peer_release(peer);
 	return r;
 }

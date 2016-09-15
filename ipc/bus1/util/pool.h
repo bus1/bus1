@@ -145,6 +145,7 @@ int bus1_pool_release_user(struct bus1_pool *pool,
 			   size_t offset,
 			   size_t *n_slicesp);
 void bus1_pool_flush(struct bus1_pool *pool, size_t *n_slicesp);
+int bus1_pool_mmap(struct bus1_pool *pool, struct vm_area_struct *vma);
 
 ssize_t bus1_pool_write_iovec(struct bus1_pool *pool,
 			      struct bus1_pool_slice *slice,
