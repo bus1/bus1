@@ -197,13 +197,11 @@ static bool bus1_handle_was_attached(struct bus1_handle *handle)
 	return handle && atomic_read(&handle->n_inflight) >= 0;
 }
 
-#if defined(CONFIG_DEBUG)
-static bool bus1_handle_is_attached(struct bus1_handle *handle)
+__maybe_unused static bool bus1_handle_is_attached(struct bus1_handle *handle)
 {
 	/* Is this handle currently attached? */
 	return handle && atomic_read(&handle->n_inflight) > 0;
 }
-#endif
 
 static bool bus1_handle_has_userref(struct bus1_handle *handle)
 {
