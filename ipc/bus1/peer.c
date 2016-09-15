@@ -596,87 +596,95 @@ static int bus1_peer_dequeue(struct bus1_peer_info *peer_info,
 			     struct bus1_cmd_recv *param)
 {
 	struct bus1_queue_node *node = NULL;
-	struct bus1_message *message = NULL;
+	struct bus1_message *msg = NULL;
 	unsigned int type = _BUS1_QUEUE_NODE_N;
-	bool has_continue;
+	bool has_continue = false;
 	int r;
 
 	/*
-	 * Hold the peer lock over bus1_queue_peek_locked() and
-	 * bus1_queue_remove() to make sure a message is only received once.
+	 * Hold the peer lock over peek() -> remove() to make sure we never
+	 * dequeue a message twice. We need the peer locked for handle-install
+	 * anyway.
+	 * We ignore racing RESETs. It does not matter which call drops the
+	 * message, since the dequeue is the only visible effect.
 	 */
 	mutex_lock(&peer_info->lock);
 
-	if (!(param->flags & BUS1_RECV_FLAG_SEED)) {
-		mutex_lock(&peer_info->queue.lock);
+	/*
+	 * We need to pin the message while it is still queued, otherwise a
+	 * racing RESET might deallocate the resources. In case of seeds the
+	 * lock is redundant, but it is no fast-path, anyway.
+	 */
+	mutex_lock(&peer_info->queue.lock);
+	if (!(param->flags & BUS1_RECV_FLAG_SEED))
 		node = bus1_queue_peek_locked(&peer_info->queue, &has_continue);
-		if (node) {
-			type = bus1_queue_node_get_type(node);
-			if (type == BUS1_QUEUE_NODE_MESSAGE) {
-				message = bus1_message_from_node(node);
-				bus1_message_pin(message);
-			}
-		}
-		mutex_unlock(&peer_info->queue.lock);
-	} else if (peer_info->seed) {
-		message = bus1_message_ref(peer_info->seed);
-		bus1_message_pin(message);
-		node = &message->qnode;
+	else if (peer_info->seed)
+		node = &bus1_message_ref(peer_info->seed)->qnode;
+	if (node) {
 		type = bus1_queue_node_get_type(node);
-		has_continue = false;
+		if (type == BUS1_QUEUE_NODE_MESSAGE)
+			msg = bus1_message_pin(bus1_message_from_node(node));
 	}
+	mutex_unlock(&peer_info->queue.lock);
 
+	/*
+	 * Verify the message to return. In case of user messages we need to
+	 * install the payload before dequeueing the message. If that fails, we
+	 * must skip the dequeue and instead return an error to user-space.
+	 */
 	if (!node) {
 		r = -EAGAIN;
-		goto exit;
-	}
-
-	if (message) {
-		if (param->max_offset < message->slice->offset +
-					message->slice->size) {
-			r = -ERANGE;
-			goto exit;
-		}
-
-		r = bus1_message_install(message, peer_info, param);
-		if (r < 0)
-			goto exit;
-	}
-
-	if (!(param->flags & BUS1_RECV_FLAG_PEEK)) {
-		if (param->flags & BUS1_RECV_FLAG_SEED)
-			peer_info->seed = bus1_message_unref(peer_info->seed);
-		else
-			bus1_queue_remove(&peer_info->queue, node);
-		bus1_message_unpin(message, peer_info);
-	}
-
-	if (message) {
-		param->msg.type = BUS1_MSG_DATA;
-		param->msg.flags = message->flags;
-		param->msg.destination = message->destination;
-		param->msg.uid = message->uid;
-		param->msg.gid = message->gid;
-		param->msg.pid = message->pid;
-		param->msg.tid = message->tid;
-		param->msg.offset = message->slice->offset;
-		param->msg.n_bytes = message->n_bytes;
-		param->msg.n_handles = message->handles.batch.n_entries;
-		param->msg.n_fds = message->n_files;
-		param->msg.n_secctx = message->n_secctx;
+	} else if (!msg) {
+		r = 0;
+	} else if (param->max_offset < msg->slice->offset + msg->slice->size) {
+		r = -ERANGE;
 	} else {
-		if (type == BUS1_QUEUE_NODE_HANDLE_DESTRUCTION) {
-			param->msg.type = BUS1_MSG_NODE_DESTROY;
-		} else if (type == BUS1_QUEUE_NODE_HANDLE_RELEASE) {
-			param->msg.type = BUS1_MSG_NODE_RELEASE;
-		} else {
-			WARN(1, "Invalid queue-node type");
-			r = -ENOTRECOVERABLE;
-			goto exit;
-		}
+		r = bus1_message_install(msg, peer_info, param);
+	}
 
+	if (r >= 0 && !(param->flags & BUS1_RECV_FLAG_PEEK)) {
+		/* unpin() cannot be the last, so safe under peer lock */
+		if (param->flags & BUS1_RECV_FLAG_SEED) {
+			peer_info->seed = bus1_message_unref(msg);
+			bus1_message_unpin(msg, peer_info);
+		} else if (bus1_queue_remove(&peer_info->queue, node)) {
+			bus1_message_unpin(msg, peer_info);
+		}
+	}
+
+	/*
+	 * The message was pinned, installed, and possibly dequeued. We can
+	 * unlock the peer now. In case of an error, simply bail out. In case
+	 * of success, we can copy the data to user-space. No further
+	 * operations required.
+	 */
+	mutex_unlock(&peer_info->lock);
+
+	if (r < 0)
+		return r;
+
+	if (msg) {
+		param->msg.type = BUS1_MSG_DATA;
+		param->msg.flags = msg->flags;
+		param->msg.uid = msg->uid;
+		param->msg.gid = msg->gid;
+		param->msg.pid = msg->pid;
+		param->msg.tid = msg->tid;
+		param->msg.offset = msg->slice->offset;
+		param->msg.n_bytes = msg->n_bytes;
+		param->msg.n_handles = msg->handles.batch.n_entries;
+		param->msg.n_fds = msg->n_files;
+		param->msg.n_secctx = msg->n_secctx;
+
+		param->msg.destination = msg->destination;
+
+		bus1_message_unpin(msg, peer_info);
+		bus1_message_unref(msg);
+	} else {
+		param->msg.type = (type == BUS1_QUEUE_NODE_HANDLE_DESTRUCTION)
+				  ? BUS1_MSG_NODE_DESTROY
+				  : BUS1_MSG_NODE_RELEASE;
 		param->msg.flags = 0;
-		param->msg.destination = bus1_handle_unref_queued(node);
 		param->msg.uid = -1;
 		param->msg.gid = -1;
 		param->msg.pid = 0;
@@ -686,18 +694,14 @@ static int bus1_peer_dequeue(struct bus1_peer_info *peer_info,
 		param->msg.n_handles = 0;
 		param->msg.n_fds = 0;
 		param->msg.n_secctx = 0;
+
+		param->msg.destination = bus1_handle_unref_queued(node);
 	}
 
 	if (has_continue)
 		param->msg.flags |= BUS1_MSG_FLAG_CONTINUE;
 
-	r = 0;
-
-exit:
-	mutex_unlock(&peer_info->lock);
-	bus1_message_unpin(message, peer_info);
-	bus1_message_unref(message);
-	return r;
+	return 0;
 }
 
 static int bus1_peer_ioctl_recv(struct bus1_peer *peer, unsigned long arg)
