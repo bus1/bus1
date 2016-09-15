@@ -333,15 +333,17 @@ void bus1_queue_commit_unstaged(struct bus1_queue *queue,
  * have a reference on their own (which is implied by passing @node as argument
  * to this function). The caller retains their reference after this call
  * returns.
+ *
+ * Returns: True if removed by this call, false if already removed.
  */
-void bus1_queue_remove(struct bus1_queue *queue, struct bus1_queue_node *node)
+bool bus1_queue_remove(struct bus1_queue *queue, struct bus1_queue_node *node)
 {
 	struct bus1_queue_node *iter;
 	struct rb_node *front, *n;
-	bool readable;
+	bool readable, queued = false;
 
 	if (!node)
-		return;
+		return false;
 
 	mutex_lock(&queue->lock);
 
@@ -372,12 +374,14 @@ void bus1_queue_remove(struct bus1_queue *queue, struct bus1_queue_node *node)
 	rb_erase(&node->rb, &queue->messages);
 	RB_CLEAR_NODE(&node->rb);
 	kref_put(&node->ref, bus1_queue_node_no_free);
+	queued = true;
 
 	if (!readable && bus1_queue_is_readable(queue))
 		wake_up_interruptible(queue->waitq);
 
 exit:
 	mutex_unlock(&queue->lock);
+	return queued;
 }
 
 /**

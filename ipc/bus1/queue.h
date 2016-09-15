@@ -154,7 +154,7 @@ bool bus1_queue_commit_staged(struct bus1_queue *queue,
 			      u64 timestamp);
 void bus1_queue_commit_unstaged(struct bus1_queue *queue,
 				struct bus1_queue_node *node);
-void bus1_queue_remove(struct bus1_queue *queue, struct bus1_queue_node *node);
+bool bus1_queue_remove(struct bus1_queue *queue, struct bus1_queue_node *node);
 struct bus1_queue_node *bus1_queue_peek_locked(struct bus1_queue *queue,
 					       bool *continuep);
 
