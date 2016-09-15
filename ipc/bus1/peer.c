@@ -15,14 +15,12 @@
 #include <linux/file.h>
 #include <linux/fs.h>
 #include <linux/kernel.h>
-#include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/pid_namespace.h>
 #include <linux/rbtree.h>
 #include <linux/rcupdate.h>
 #include <linux/seqlock.h>
 #include <linux/slab.h>
-#include <linux/spinlock.h>
 #include <linux/uaccess.h>
 #include <linux/wait.h>
 #include <uapi/linux/bus1.h>
