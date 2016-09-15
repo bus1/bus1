@@ -512,7 +512,8 @@ ssize_t bus1_pool_write_iovec(struct bus1_pool *pool,
 	ssize_t len;
 
 	if (WARN_ON(offset + total_len < offset) ||
-	    WARN_ON(offset + total_len > slice->size))
+	    WARN_ON(offset + total_len > slice->size) ||
+	    WARN_ON(slice->ref_user))
 		return -EFAULT;
 	if (total_len < 1)
 		return 0;
@@ -551,7 +552,8 @@ ssize_t bus1_pool_write_kvec(struct bus1_pool *pool,
 	ssize_t len;
 
 	if (WARN_ON(offset + total_len < offset) ||
-	    WARN_ON(offset + total_len > slice->size))
+	    WARN_ON(offset + total_len > slice->size) ||
+	    WARN_ON(slice->ref_user))
 		return -EFAULT;
 	if (total_len < 1)
 		return 0;
