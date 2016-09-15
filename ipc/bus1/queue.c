@@ -14,7 +14,6 @@
 #include <linux/rbtree.h>
 #include <linux/rcupdate.h>
 #include <linux/slab.h>
-#include "peer.h"
 #include "queue.h"
 #include "util.h"
 
