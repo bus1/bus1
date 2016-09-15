@@ -592,14 +592,24 @@ exit:
 	return r;
 }
 
-static int bus1_peer_dequeue(struct bus1_peer_info *peer_info,
-			     struct bus1_cmd_recv *param)
+static int bus1_peer_ioctl_recv(struct bus1_peer *peer, unsigned long arg)
 {
+	struct bus1_peer_info *peer_info = bus1_peer_dereference(peer);
 	struct bus1_queue_node *node = NULL;
 	struct bus1_message *msg = NULL;
 	unsigned int type = _BUS1_QUEUE_NODE_N;
+	struct bus1_cmd_recv param;
 	bool has_continue = false;
 	int r;
+
+	BUILD_BUG_ON(_IOC_SIZE(BUS1_CMD_RECV) != sizeof(param));
+
+	if (copy_from_user(&param, (void __user *)arg, sizeof(param)))
+		return -EFAULT;
+	if (unlikely(param.flags & ~(BUS1_RECV_FLAG_PEEK |
+				     BUS1_RECV_FLAG_SEED |
+				     BUS1_RECV_FLAG_INSTALL_FDS)))
+		return -EINVAL;
 
 	/*
 	 * Hold the peer lock over peek() -> remove() to make sure we never
@@ -616,7 +626,7 @@ static int bus1_peer_dequeue(struct bus1_peer_info *peer_info,
 	 * lock is redundant, but it is no fast-path, anyway.
 	 */
 	mutex_lock(&peer_info->queue.lock);
-	if (!(param->flags & BUS1_RECV_FLAG_SEED))
+	if (!(param.flags & BUS1_RECV_FLAG_SEED))
 		node = bus1_queue_peek_locked(&peer_info->queue, &has_continue);
 	else if (peer_info->seed)
 		node = &bus1_message_ref(peer_info->seed)->qnode;
@@ -636,15 +646,15 @@ static int bus1_peer_dequeue(struct bus1_peer_info *peer_info,
 		r = -EAGAIN;
 	} else if (!msg) {
 		r = 0;
-	} else if (param->max_offset < msg->slice->offset + msg->slice->size) {
+	} else if (param.max_offset < msg->slice->offset + msg->slice->size) {
 		r = -ERANGE;
 	} else {
-		r = bus1_message_install(msg, peer_info, param);
+		r = bus1_message_install(msg, peer_info, &param);
 	}
 
-	if (r >= 0 && !(param->flags & BUS1_RECV_FLAG_PEEK)) {
+	if (r >= 0 && !(param.flags & BUS1_RECV_FLAG_PEEK)) {
 		/* unpin() cannot be the last, so safe under peer lock */
-		if (param->flags & BUS1_RECV_FLAG_SEED) {
+		if (param.flags & BUS1_RECV_FLAG_SEED) {
 			peer_info->seed = bus1_message_unref(msg);
 			bus1_message_unpin(msg, peer_info);
 		} else if (bus1_queue_remove(&peer_info->queue, node)) {
@@ -664,64 +674,42 @@ static int bus1_peer_dequeue(struct bus1_peer_info *peer_info,
 		return r;
 
 	if (msg) {
-		param->msg.type = BUS1_MSG_DATA;
-		param->msg.flags = msg->flags;
-		param->msg.uid = msg->uid;
-		param->msg.gid = msg->gid;
-		param->msg.pid = msg->pid;
-		param->msg.tid = msg->tid;
-		param->msg.offset = msg->slice->offset;
-		param->msg.n_bytes = msg->n_bytes;
-		param->msg.n_handles = msg->handles.batch.n_entries;
-		param->msg.n_fds = msg->n_files;
-		param->msg.n_secctx = msg->n_secctx;
+		param.msg.type = BUS1_MSG_DATA;
+		param.msg.flags = msg->flags;
+		param.msg.uid = msg->uid;
+		param.msg.gid = msg->gid;
+		param.msg.pid = msg->pid;
+		param.msg.tid = msg->tid;
+		param.msg.offset = msg->slice->offset;
+		param.msg.n_bytes = msg->n_bytes;
+		param.msg.n_handles = msg->handles.batch.n_entries;
+		param.msg.n_fds = msg->n_files;
+		param.msg.n_secctx = msg->n_secctx;
 
-		param->msg.destination = msg->destination;
+		param.msg.destination = msg->destination;
 
 		bus1_message_unpin(msg, peer_info);
 		bus1_message_unref(msg);
 	} else {
-		param->msg.type = (type == BUS1_QUEUE_NODE_HANDLE_DESTRUCTION)
-				  ? BUS1_MSG_NODE_DESTROY
-				  : BUS1_MSG_NODE_RELEASE;
-		param->msg.flags = 0;
-		param->msg.uid = -1;
-		param->msg.gid = -1;
-		param->msg.pid = 0;
-		param->msg.tid = 0;
-		param->msg.offset = BUS1_OFFSET_INVALID;
-		param->msg.n_bytes = 0;
-		param->msg.n_handles = 0;
-		param->msg.n_fds = 0;
-		param->msg.n_secctx = 0;
+		param.msg.type = (type == BUS1_QUEUE_NODE_HANDLE_DESTRUCTION)
+				 ? BUS1_MSG_NODE_DESTROY
+				 : BUS1_MSG_NODE_RELEASE;
+		param.msg.flags = 0;
+		param.msg.uid = -1;
+		param.msg.gid = -1;
+		param.msg.pid = 0;
+		param.msg.tid = 0;
+		param.msg.offset = BUS1_OFFSET_INVALID;
+		param.msg.n_bytes = 0;
+		param.msg.n_handles = 0;
+		param.msg.n_fds = 0;
+		param.msg.n_secctx = 0;
 
-		param->msg.destination = bus1_handle_unref_queued(node);
+		param.msg.destination = bus1_handle_unref_queued(node);
 	}
 
 	if (has_continue)
-		param->msg.flags |= BUS1_MSG_FLAG_CONTINUE;
-
-	return 0;
-}
-
-static int bus1_peer_ioctl_recv(struct bus1_peer *peer, unsigned long arg)
-{
-	struct bus1_peer_info *peer_info = bus1_peer_dereference(peer);
-	struct bus1_cmd_recv param;
-	int r;
-
-	BUILD_BUG_ON(_IOC_SIZE(BUS1_CMD_RECV) != sizeof(param));
-
-	if (copy_from_user(&param, (void __user *)arg, sizeof(param)))
-		return -EFAULT;
-	if (unlikely(param.flags & ~(BUS1_RECV_FLAG_PEEK |
-				     BUS1_RECV_FLAG_SEED |
-				     BUS1_RECV_FLAG_INSTALL_FDS)))
-		return -EINVAL;
-
-	r = bus1_peer_dequeue(peer_info, &param);
-	if (r < 0)
-		return r;
+		param.msg.flags |= BUS1_MSG_FLAG_CONTINUE;
 
 	return copy_to_user((void __user *)arg,
 			    &param, sizeof(param)) ? -EFAULT : 0;
