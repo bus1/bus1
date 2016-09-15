@@ -64,9 +64,6 @@ struct bus1_message *bus1_message_new(size_t n_bytes,
 	bus1_queue_node_init(&message->qnode, BUS1_QUEUE_NODE_MESSAGE,
 			     (unsigned long)peer_info);
 	atomic_set(&message->n_pins, 0);
-	message->transaction.next = NULL;
-	message->transaction.dest.handle = NULL;
-	message->transaction.dest.raw_peer = NULL;
 	message->user = bus1_user_ref(peer_info->user);
 	message->slice = NULL;
 	message->files = (void *)((u8 *)message + base_size);
@@ -74,7 +71,6 @@ struct bus1_message *bus1_message_new(size_t n_bytes,
 	message->n_files = n_files;
 	message->n_secctx = n_secctx;
 	message->n_accounted_handles = 0;
-	message->error = 0;
 	bus1_handle_inflight_init(&message->handles, n_handles);
 	memset(message->files, 0, n_files * sizeof(*message->files));
 
@@ -103,9 +99,6 @@ static void bus1_message_free(struct kref *ref)
 	size_t i;
 
 	BUS1_WARN_ON(message->slice);
-	BUS1_WARN_ON(message->transaction.dest.raw_peer);
-	BUS1_WARN_ON(message->transaction.dest.handle);
-	BUS1_WARN_ON(message->transaction.next);
 	BUS1_WARN_ON(atomic_read(&message->n_pins) > 0);
 
 	for (i = 0; i < message->n_files; ++i)
@@ -190,8 +183,6 @@ int bus1_message_allocate(struct bus1_message *message,
 
 exit:
 	mutex_unlock(&peer_info->lock);
-	if (r == -EDQUOT || r == -EXFULL)
-		message->error = r;
 	return r;
 }
 

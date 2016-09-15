@@ -48,12 +48,14 @@ struct bus1_transaction {
 
 	/* flags */
 	bool has_secctx : 1;
+	bool has_faulted : 1;
 
 	/* payload */
 	struct iovec *vecs;
 	struct file **files;
 
 	/* transaction state */
+	int error;
 	size_t length_vecs;
 	struct bus1_message *entries;
 	struct bus1_handle_transfer handles;
@@ -93,12 +95,14 @@ static void bus1_transaction_init(struct bus1_transaction *transaction,
 	transaction->n_secctx = 0;
 
 	transaction->has_secctx = false;
+	transaction->has_faulted = false;
 
 	transaction->vecs = (void *)((u8 *)(transaction + 1) +
 			bus1_handle_batch_inline_size(param->n_handles));
 	transaction->files = (void *)(transaction->vecs + param->n_vecs);
 	memset(transaction->files, 0, param->n_fds * sizeof(struct file *));
 
+	transaction->error = 0;
 	transaction->length_vecs = 0;
 	transaction->entries = NULL;
 	bus1_handle_transfer_init(&transaction->handles, param->n_handles);
@@ -324,16 +328,8 @@ bus1_transaction_instantiate_message(struct bus1_transaction *transaction,
 
 	r = bus1_message_allocate(message, peer_info);
 	if (r < 0) {
-		/*
-		 * If BUS1_SEND_FLAG_CONTINUE is specified, target errors are
-		 * not fatal. That is, any error that is caused by the *target*,
-		 * rather than the sender, will not cause an abort of the
-		 * transaction.
-		 */
-		if ((transaction->param->flags & BUS1_SEND_FLAG_CONTINUE) &&
-		    (r == -EXFULL || r == -EDQUOT))
-			r = 0;
-		goto error;
+		bus1_message_unref(message);
+		return ERR_PTR(r);
 	}
 
 	r = bus1_pool_write_iovec(&peer_info->pool,	/* pool to write to */
@@ -393,35 +389,9 @@ bus1_transaction_instantiate_message(struct bus1_transaction *transaction,
 	return message;
 
 error:
-	if (message)
-		bus1_message_unpin(message, peer_info);
-	if (r < 0) {
-		bus1_message_unref(message);
-		message = ERR_PTR(r);
-	}
-	return message;
-}
-
-static struct bus1_message *
-bus1_transaction_instantiate(struct bus1_transaction *transaction,
-			     struct bus1_handle_dest *dest,
-			     u64 __user *idp,
-			     u64 __user *errorp)
-{
-	struct bus1_peer_info *peer_info = NULL;
-	struct bus1_message *message;
-	int r;
-
-	r = bus1_handle_dest_import(dest, transaction->peer, idp, errorp);
-	if (r < 0)
-		return ERR_PTR(r);
-
-	bus1_active_lockdep_acquired(&dest->raw_peer->active);
-	peer_info = bus1_peer_dereference(dest->raw_peer);
-	message = bus1_transaction_instantiate_message(transaction, peer_info);
-	bus1_active_lockdep_released(&dest->raw_peer->active);
-
-	return message;
+	bus1_message_unpin(message, peer_info);
+	bus1_message_unref(message);
+	return ERR_PTR(r);
 }
 
 /**
@@ -435,34 +405,58 @@ bus1_transaction_instantiate(struct bus1_transaction *transaction,
  * message is queued as in-flight message on the transaction object. The
  * message is not linked on the destination, yet. You need to commit the
  * transaction to actually link it on the destination queue.
- *
- * Return: 0 on success, negative error code on failure.
  */
-int bus1_transaction_instantiate_for_id(struct bus1_transaction *transaction,
-					u64 __user *idp,
-					u64 __user *errorp)
+void bus1_transaction_instantiate_for_id(struct bus1_transaction *transaction,
+					 size_t index)
 {
+	struct bus1_cmd_send *param = transaction->param;
+	struct bus1_peer_info *peer_info;
+	u64 __user *idp, __user *errorp;
 	struct bus1_handle_dest dest;
 	struct bus1_message *message;
 	int r;
 
+	idp = (u64 __user *)(unsigned long)param->ptr_destinations;
+	idp = idp + index;
+	errorp = (u64 __user *)(unsigned long)param->ptr_errors;
+	errorp = errorp ? errorp + index : NULL;
+
 	bus1_handle_dest_init(&dest);
 
-	message = bus1_transaction_instantiate(transaction, &dest, idp, errorp);
+	r = bus1_handle_dest_import(&dest, transaction->peer, idp, errorp);
+	if (r < 0)
+		goto error;
+
+	bus1_active_lockdep_acquired(&dest.raw_peer->active);
+	peer_info = bus1_peer_dereference(dest.raw_peer);
+	message = bus1_transaction_instantiate_message(transaction, peer_info);
+	bus1_active_lockdep_released(&dest.raw_peer->active);
+
 	if (IS_ERR(message)) {
 		r = PTR_ERR(message);
 		goto error;
 	}
 
+	message->transaction.index = index;
 	message->transaction.next = transaction->entries;
 	message->transaction.dest = dest; /* consume */
 	transaction->entries = message;
 
-	return 0;
+	return;
 
 error:
 	bus1_handle_dest_destroy(&dest, transaction->peer_info);
-	return r;
+	/*
+	 * If an error happens, we remember it for commit() to return. We always
+	 * continue with the remaining messages of the transaction, so failure
+	 * handling is predictable.
+	 * If per-destination error-fields are provided, we additionally
+	 * transfer the error code to user-space. If that fails, we remember to
+	 * have faulted (which is always an out-of-band error code).
+	 */
+	transaction->error = r;
+	if (errorp && put_user(r, errorp))
+		transaction->has_faulted = true;
 }
 
 static void bus1_transaction_commit_one(struct bus1_transaction *transaction,
@@ -475,18 +469,6 @@ static void bus1_transaction_commit_one(struct bus1_transaction *transaction,
 
 	peer_info = bus1_peer_dereference(dest->raw_peer);
 
-	if (!message->slice) {
-		/*
-		 * The message failed to be allocated, due to an error at the
-		 * receiver, and the CONTINUE flag was set. Drop the message
-		 * without informing the sender. The count of dropped messages
-		 * is increased in the receiving queue.
-		 */
-		bus1_queue_remove(&peer_info->queue, &message->qnode);
-		bus1_message_unref(message);
-		return;
-	}
-
 	mutex_lock(&peer_info->lock);
 	id = bus1_handle_dest_export(dest, peer_info, timestamp,
 				     message->qnode.sender, true);
@@ -498,19 +480,17 @@ static void bus1_transaction_commit_one(struct bus1_transaction *transaction,
 		 */
 		bus1_queue_remove(&peer_info->queue, &message->qnode);
 		bus1_message_unpin(message, peer_info);
-		bus1_message_unref(message);
-		return;
-	}
+	} else {
+		message->destination = id;
 
-	message->destination = id;
-
-	if (!bus1_queue_commit_staged(&peer_info->queue, &message->qnode,
-				      timestamp)) {
-		/*
-		 * The message has been flushed from the queue, but it has not
-		 * been cleaned up. Release all resources.
-		 */
-		bus1_message_unpin(message, peer_info);
+		if (!bus1_queue_commit_staged(&peer_info->queue,
+					      &message->qnode, timestamp)) {
+			/*
+			 * The message has been flushed from the queue, but it
+			 * has not been cleaned up. Release all resources.
+			 */
+			bus1_message_unpin(message, peer_info);
+		}
 	}
 
 	bus1_message_unref(message);
@@ -544,14 +524,16 @@ int bus1_transaction_commit(struct bus1_transaction *transaction)
 	struct bus1_cmd_send *param = transaction->param;
 	struct bus1_peer_info *peer_info;
 	struct bus1_message *message, *list;
+	u64 __user *idp, __user *errorp;
 	struct bus1_handle_dest dest;
 	struct bus1_peer *peer;
 	u64 id, timestamp;
-	u64 __user *idp, *errorp;
-	int r = 0;
+	int r;
 
 	list = transaction->entries;
 	timestamp = 0;
+	idp = (u64 __user *)(unsigned long)param->ptr_destinations;
+	errorp = (u64 __user *)(unsigned long)param->ptr_errors;
 
 	/*
 	 * Add each message to its destination queue as a staging entry. The
@@ -590,11 +572,7 @@ int bus1_transaction_commit(struct bus1_transaction *transaction)
 	 * timestamp than the final one for this transaction.
 	 */
 	for (message = list; message; message = message->transaction.next) {
-		int error = message->error;
-
 		peer = message->transaction.dest.raw_peer;
-		idp = message->transaction.dest.idp;
-		errorp = message->transaction.dest.errorp;
 		bus1_active_lockdep_acquired(&peer->active);
 		peer_info = bus1_peer_dereference(peer);
 
@@ -604,28 +582,28 @@ int bus1_transaction_commit(struct bus1_transaction *transaction)
 
 		mutex_lock(&peer_info->lock);
 		id = bus1_handle_dest_export(&message->transaction.dest,
-					peer_info, timestamp,
-					message->qnode.sender, false);
+					     peer_info, timestamp,
+					     message->qnode.sender, false);
 		mutex_unlock(&peer_info->lock);
 
 		bus1_active_lockdep_released(&peer->active);
 
-		if (id != BUS1_HANDLE_INVALID) {
-			if (idp && put_user(id, idp))
-				return -EFAULT;
-		} else {
-			error = EHOSTUNREACH;
-		}
+		r = 0;
+		if (id == BUS1_HANDLE_INVALID)
+			r = transaction->error = -EHOSTUNREACH;
+		else if (message->transaction.dest.idp &&
+			 put_user(id, idp + message->transaction.index))
+			transaction->has_faulted = true;
 
-		if (errorp && put_user(error, errorp))
-			return -EFAULT;
-
-		if (error && r != -EHOSTUNREACH)
-			r = -error;
+		if (errorp && put_user(r, errorp + message->transaction.index))
+			transaction->has_faulted = true;
 	}
 
-	if (r < 0 && !(transaction->param->flags & BUS1_SEND_FLAG_CONTINUE))
-		return r;
+	if (transaction->has_faulted)
+		return -EFAULT;
+	if (transaction->error < 0 &&
+	    !(transaction->param->flags & BUS1_SEND_FLAG_CONTINUE))
+		return transaction->error;
 
 	if (param->n_handles) {
 		idp = (u64 __user *)(unsigned long)param->ptr_handles;
@@ -656,9 +634,6 @@ int bus1_transaction_commit(struct bus1_transaction *transaction)
 	while ((message = transaction->entries)) {
 		transaction->entries = message->transaction.next;
 		dest = message->transaction.dest;
-
-		message->transaction.next = NULL;
-		message->transaction.dest = (struct bus1_handle_dest){};
 
 		bus1_active_lockdep_acquired(&dest.raw_peer->active);
 		peer_info = bus1_peer_dereference(dest.raw_peer);

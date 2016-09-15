@@ -39,6 +39,7 @@ struct bus1_user;
  * @pid:			sender PID
  * @tid:			sender TID
  * @qnode:			embedded queue node
+ * @transaction.index:		index into multicast destination array
  * @transaction.next:		message list (during transactions)
  * @transaction.dest:		pinned destination (during transactions)
  * @user:			sending user
@@ -48,7 +49,6 @@ struct bus1_user;
  * @n_files:			number of files transmitted
  * @n_secctx:			number of bytes of security context transmitted
  * @n_accounted_handles:	number of accounted handles
- * @error:			error code for message delivery
  * @handles:			passed handles
  */
 struct bus1_message {
@@ -62,6 +62,7 @@ struct bus1_message {
 	atomic_t n_pins;
 
 	struct {
+		size_t index;
 		struct bus1_message *next;
 		struct bus1_handle_dest dest;
 	} transaction;
@@ -73,7 +74,6 @@ struct bus1_message {
 	size_t n_files;
 	size_t n_secctx;
 	size_t n_accounted_handles;
-	int error;
 	struct bus1_handle_inflight handles;
 	/* handles must be last */
 };
