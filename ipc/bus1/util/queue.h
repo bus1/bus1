@@ -18,49 +18,45 @@
  *  implementation has its roots in Lamport Timestamps, treating a set of local
  *  CPUs as a distributed system to avoid any global synchronization.)
  *
- * Every peer on the bus has its own message queue. This is used to queue all
- * messages that are sent to this peer. From a user-space perspective, this
- * queue is a FIFO, that is, messages are linearly ordered by their time they
- * were sent. User-space can peek the first message, or dequeue it.
+ * A message queue is a FIFO, i.e., messages are linearly ordered by the time
+ * they were sent. Moreover, atomic delivery of messages to multiple queues are
+ * supported, without any global synchronization, i.e., the order of message
+ * delivery is consistent across queues.
  *
- * Messages can be destined for multiple peers, hence, we need to be careful
- * that all peers get a consistent partial order of incoming messages. We
- * define the concept of `global order' to give user-space a basic set of
- * guarantees. This global order is a partial order on the set of all messages.
- * The order is defined as:
+ * Messages can be destined for multiple queues, hence, we need to be careful
+ * that all queues get a consistent partial order of incoming messages. We
+ * define the concept of `global order' to provide a basic set of guarantees.
+ * This global order is a partial order on the set of all messages. The order is
+ * defined as:
  *
- *   1) If a message B was queued *after* a message A (i.e., the send-ioctl of
- *      A returned *before* the send-ioctl for B was entered), then: A < B
+ *   1) If a message B was queued *after* a message A, then: A < B
  *
- *   2) If a message B was queued *after* a message A was dequeued (i.e., the
- *      recv-ioctl of A returned *before* the send-ioctl for B was entered),
+ *   2) If a message B was queued *after* a message A was dequeued, then: A < B
+ *
+ *   3) If a message B was dequeued *after* it a message A on the same queue,
  *      then: A < B
  *
- *   3) If a peer dequeues a message B *after* it dequeued a message A (i.e.,
- *      the recv-ioctl of A returned *before* the recv-ioctl for B was
- *      entered), then: A < B
- *
  *      (Note: Causality is honored. `after' and `before' do not refer to the
- *             same task, nor the same peer, but rather any kind of
+ *             same task, nor the same queue, but rather any kind of
  *             synchronization between the two operations.)
  *
  * The queue object implements this global order in a lockless fashion. It
- * solely relies on a distributed clock on each peer. Each message to be sent
+ * solely relies on a distributed clock on each queue. Each message to be sent
  * causes a clock tick on the local clock and on all destination clocks.
  * Furthermore, all clocks are synchronized, meaning they're fast-forwarded in
  * case they're behind the highest of all participating peers. No global state
  * tracking is involved.
  *
- * During a message transaction, we first queue a message as "staging" entry in
+ * During a message transaction, we first queue a message as 'staging' entry in
  * each destination with a preliminary timestamp. This timestamp is explicitly
  * odd numbered. Any odd numbered timestamp is considered 'staging' and causes
  * *any* message ordered after it to be blocked until it is no longer staging.
  * This allows us to queue the message in parallel with any racing multicast,
- * and be guaranteed that all possible conflicts are blocked until we
- * eventually committed a transaction.
- * To commit a transaction (after all staging entries are queued), we choose
- * the highest timestamp we have seen across all destinations and re-queue all
- * our entries on each peer. Here we use a commit timestamp (even numbered).
+ * and be guaranteed that all possible conflicts are blocked until we eventually
+ * commit a transaction. To commit a transaction (after all staging entries are
+ * queued), we choose the highest timestamp we have seen across all destinations
+ * and re-queue all our entries on each peer. Here we use a commit timestamp
+ * (even numbered).
  *
  * With this in mind, we define that a client can only dequeue messages from
  * its queue, which have an even timestamp. Furthermore, if there is a message
@@ -71,20 +67,18 @@
  * dequeued by a peer if their ordering has been established (via commit
  * timestamps).
  *
- * NOTE: So far, in-flight messages is not blocked on. That is, a send-ioctl
- *       might return to user-space, but a following recv-ioctl on the
- *       destination of the message might fail with EAGAIN. That is, a message
- *       might be in-flight for an undefined amount of time.
- *
- *       In other words: Message transmission is not instantaneous. This is
- *       purely by choice, though. If required, transmissions could be easily
- *       made instantaneous, at the cost of shortly blocking on other
+ * NOTE: A fully committed message is not guaranteed to be ready to be dequeued
+ *       as it may be blocked by a staging entry. This means that there is an
+ *       arbitrary (though bounded) time from a message transaction completing
+ *       when the queue may still appear to be empty. In other words, message
+ *       transmission is not instantaneous. It would be possible to change this
+ *       at the cost of shortly blocking each message transaction on all other
  *       conflicting tasks.
  *
- * The queue implementation uses an rb-tree (ordered by timestamps), with a
- * cached pointer to the front of the queue. The front pointer is only set if
- * the first entry in the queue is ready to be dequeued (that is, it has an
- * even timestamp). If the first entry is not ready to be dequeued, or if the
+ * The queue implementation uses an rb-tree (ordered by timestamps and sender),
+ * with a cached pointer to the front of the queue. The front pointer is only
+ * set if the first entry in the queue is ready to be dequeued (that is, it has
+ * an even timestamp). If the first entry is not ready to be dequeued, or if the
  * queue is empty, the front pointer is NULL.
  */
 
