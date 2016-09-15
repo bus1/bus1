@@ -91,6 +91,16 @@ struct bus1_peer {
 	u64 id;
 };
 
+/**
+ * struct bus1_peer_list - list of acquired peers
+ * @peer:		acquired peer
+ * @next:		next list element
+ */
+struct bus1_peer_list {
+	struct bus1_peer *peer;
+	void *next;
+};
+
 struct bus1_peer *bus1_peer_new(void);
 struct bus1_peer *bus1_peer_free(struct bus1_peer *peer);
 int bus1_peer_connect(struct bus1_peer *peer);
@@ -167,6 +177,46 @@ bus1_peer_dereference(struct bus1_peer *peer)
 {
 	return rcu_dereference_protected(peer->info,
 					 lockdep_is_held(&peer->active));
+}
+
+/**
+ * bus1_peer_list_bind() - temporarily bind a peer of a peer list
+ * @list:		entry to bind
+ * @peer_infop:		return storage for dereferenced peer-info, or NULL
+ *
+ * Whenever you deal with an unbound set of peers that must be acquired at the
+ * same time, we need to work around lockdep limitations (see
+ * bus1_active_lockdep_{acquired,released}() for details). The bus1_peer_list
+ * object is a simple wrapper to store a list of peers. Whenever your iterate
+ * that list, you call bus1_peer_list_bind() to temporarily enable lockdep
+ * annotations for that single peer, and bus1_peer_list_unbind() when done.
+ *
+ * That is, each access to a peer in a peer-list is guarded by the bind() and
+ * unbind() calls, enabling/disabling lockdep. Note that acquire() returns
+ * peers bound, so after initializing a peer-list, you first have to unbind the
+ * peer.
+ *
+ * Return: Pointer to bound peer.
+ */
+static inline struct bus1_peer *
+bus1_peer_list_bind(struct bus1_peer_list *list,
+		    struct bus1_peer_info **peer_infop)
+{
+	bus1_active_lockdep_acquired(&list->peer->active);
+	if (peer_infop)
+		*peer_infop = bus1_peer_dereference(list->peer);
+	return list->peer;
+}
+
+/**
+ * bus1_peer_list_unbind() - temporarily unbind a peer of a peer list
+ * @list:		entry to unbind
+ *
+ * See bus1_peer_list_bind() for details. This is the inverse operation.
+ */
+static inline void bus1_peer_list_unbind(struct bus1_peer_list *list)
+{
+	bus1_active_lockdep_released(&list->peer->active);
 }
 
 #endif /* __BUS1_PEER_H */

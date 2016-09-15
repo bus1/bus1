@@ -43,8 +43,7 @@
  * @id:			current ID of this handle
  * @holder:		holder of this node
  * @link_node:		link into the node
- * @next:		temporary single-linked list during destruction
- * @raw_peer:		temporarily pinned raw peer during destruction
+ * @link:		temporary single-linked list during destruction
  *
  * Handle objects represent an accessor to nodes. A handle is always held by a
  * specific peer, and by that peer only. The peer-lock (or queue-lock,
@@ -104,10 +103,7 @@ struct bus1_handle {
 	struct bus1_peer __rcu *holder;
 	union {
 		struct list_head link_node;
-		struct {
-			struct bus1_handle *next;
-			struct bus1_peer *raw_peer;
-		} transaction;
+		struct bus1_peer_list link;
 	};
 };
 
@@ -581,26 +577,21 @@ static void bus1_node_commit_notifications(struct bus1_handle *list)
 	struct bus1_peer *peer;
 
 	/* sync all clocks so side-channels are ordered */
-	for (h = list; h; h = h->transaction.next) {
-		peer = h->transaction.raw_peer;
-		bus1_active_lockdep_acquired(&peer->active);
-		peer_info = bus1_peer_dereference(peer);
+	for (h = list; h; h = h->link.next) {
+		peer = bus1_peer_list_bind(&h->link, &peer_info);
 
 		mutex_lock(&peer_info->queue.lock);
 		bus1_queue_sync(&peer_info->queue, h->node->timestamp);
 		mutex_unlock(&peer_info->queue.lock);
 
-		bus1_active_lockdep_released(&peer->active);
+		bus1_peer_list_unbind(&h->link);
 	}
 
 	/* commit all queued notifications */
 	while ((h = list)) {
-		list = h->transaction.next;
-		peer = h->transaction.raw_peer;
+		list = h->link.next;
+		peer = bus1_peer_list_bind(&h->link, &peer_info);
 		INIT_LIST_HEAD(&h->link_node);
-
-		bus1_active_lockdep_acquired(&peer->active);
-		peer_info = bus1_peer_dereference(peer);
 
 		bus1_queue_commit_staged(&peer_info->queue, &h->qnode,
 					 h->node->timestamp);
@@ -635,9 +626,9 @@ static void bus1_node_destroy(struct bus1_node *node,
 		if (holder) {
 			timestamp = bus1_queue_stage(&holder_info->queue,
 						     &h->qnode, timestamp);
-			bus1_active_lockdep_released(&holder->active);
-			h->transaction.raw_peer = holder;
-			h->transaction.next = list;
+			h->link.peer = holder;
+			h->link.next = list;
+			bus1_peer_list_unbind(&h->link);
 			list = h;
 		} else {
 			INIT_LIST_HEAD(&h->link_node);

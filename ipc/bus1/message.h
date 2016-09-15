@@ -21,6 +21,7 @@
 #include <linux/kernel.h>
 #include <uapi/linux/bus1.h>
 #include "handle.h"
+#include "peer.h"
 #include "util.h"
 #include "util/queue.h"
 
@@ -40,7 +41,7 @@ struct bus1_user;
  * @tid:			sender TID
  * @qnode:			embedded queue node
  * @transaction.index:		index into multicast destination array
- * @transaction.next:		message list (during transactions)
+ * @transaction.link:		message list (during transactions)
  * @transaction.dest:		pinned destination (during transactions)
  * @user:			sending user
  * @slice:			actual message data
@@ -63,7 +64,7 @@ struct bus1_message {
 
 	struct {
 		size_t index;
-		struct bus1_message *next;
+		struct bus1_peer_list link;
 		struct bus1_handle_dest dest;
 	} transaction;
 

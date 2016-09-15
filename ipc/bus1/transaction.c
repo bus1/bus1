@@ -112,22 +112,21 @@ static void bus1_transaction_destroy(struct bus1_transaction *transaction)
 {
 	struct bus1_peer_info *peer_info;
 	struct bus1_handle_dest dest;
+	struct bus1_peer_list link;
 	struct bus1_message *message;
 	size_t i;
 
 	while ((message = transaction->entries)) {
-		transaction->entries = message->transaction.next;
+		link = message->transaction.link;
 		dest = message->transaction.dest;
-		bus1_active_lockdep_acquired(&dest.raw_peer->active);
-		peer_info = bus1_peer_dereference(dest.raw_peer);
-
-		message->transaction.next = NULL;
-		message->transaction.dest = (struct bus1_handle_dest){};
+		transaction->entries = link.next;
+		bus1_peer_list_bind(&link, &peer_info);
 
 		bus1_queue_remove(&peer_info->queue, &message->qnode);
 		bus1_message_unpin(message, peer_info);
 		bus1_message_unref(message);
-		bus1_active_lockdep_released(&dest.raw_peer->active);
+
+		bus1_peer_list_unbind(&link);
 		bus1_handle_dest_destroy(&dest, transaction->peer_info);
 	}
 
@@ -413,6 +412,7 @@ void bus1_transaction_instantiate_for_id(struct bus1_transaction *transaction,
 	struct bus1_peer_info *peer_info;
 	u64 __user *idp, __user *errorp;
 	struct bus1_handle_dest dest;
+	struct bus1_peer_list link;
 	struct bus1_message *message;
 	int r;
 
@@ -427,10 +427,12 @@ void bus1_transaction_instantiate_for_id(struct bus1_transaction *transaction,
 	if (r < 0)
 		goto error;
 
-	bus1_active_lockdep_acquired(&dest.raw_peer->active);
-	peer_info = bus1_peer_dereference(dest.raw_peer);
+	link.peer = dest.raw_peer;
+	link.next = transaction->entries;
+
+	bus1_peer_list_bind(&link, &peer_info);
 	message = bus1_transaction_instantiate_message(transaction, peer_info);
-	bus1_active_lockdep_released(&dest.raw_peer->active);
+	bus1_peer_list_unbind(&link);
 
 	if (IS_ERR(message)) {
 		r = PTR_ERR(message);
@@ -438,7 +440,7 @@ void bus1_transaction_instantiate_for_id(struct bus1_transaction *transaction,
 	}
 
 	message->transaction.index = index;
-	message->transaction.next = transaction->entries;
+	message->transaction.link = link; /* consume */
 	message->transaction.dest = dest; /* consume */
 	transaction->entries = message;
 
@@ -526,6 +528,7 @@ int bus1_transaction_commit(struct bus1_transaction *transaction)
 	struct bus1_message *message, *list;
 	u64 __user *idp, __user *errorp;
 	struct bus1_handle_dest dest;
+	struct bus1_peer_list link;
 	struct bus1_peer *peer;
 	u64 id, timestamp;
 	int r;
@@ -543,15 +546,12 @@ int bus1_transaction_commit(struct bus1_transaction *transaction)
 	 * was staged are blocked. At the end of the loop, it is guaranteed that
 	 * all messages after @timestamp are blocked on all destination queues.
 	 */
-	for (message = list; message; message = message->transaction.next) {
-		peer = message->transaction.dest.raw_peer;
-		bus1_active_lockdep_acquired(&peer->active);
-		peer_info = bus1_peer_dereference(peer);
-
+	for (message = list; message; message = message->transaction.link.next) {
+		peer = bus1_peer_list_bind(&message->transaction.link,
+					   &peer_info);
 		timestamp = bus1_queue_stage(&peer_info->queue, &message->qnode,
 					     timestamp);
-
-		bus1_active_lockdep_released(&peer->active);
+		bus1_peer_list_unbind(&message->transaction.link);
 	}
 
 	/*
@@ -571,10 +571,9 @@ int bus1_transaction_commit(struct bus1_transaction *transaction)
 	 * dequeued, none of the other destination queues may use a lower
 	 * timestamp than the final one for this transaction.
 	 */
-	for (message = list; message; message = message->transaction.next) {
-		peer = message->transaction.dest.raw_peer;
-		bus1_active_lockdep_acquired(&peer->active);
-		peer_info = bus1_peer_dereference(peer);
+	for (message = list; message; message = message->transaction.link.next) {
+		peer = bus1_peer_list_bind(&message->transaction.link,
+					   &peer_info);
 
 		mutex_lock(&peer_info->queue.lock);
 		bus1_queue_sync(&peer_info->queue, timestamp);
@@ -586,7 +585,7 @@ int bus1_transaction_commit(struct bus1_transaction *transaction)
 					     message->qnode.sender, false);
 		mutex_unlock(&peer_info->lock);
 
-		bus1_active_lockdep_released(&peer->active);
+		bus1_peer_list_unbind(&message->transaction.link);
 
 		r = 0;
 		if (id == BUS1_HANDLE_INVALID)
@@ -632,18 +631,17 @@ int bus1_transaction_commit(struct bus1_transaction *transaction)
 	 * corresponding staging messages.
 	 */
 	while ((message = transaction->entries)) {
-		transaction->entries = message->transaction.next;
+		link = message->transaction.link;
 		dest = message->transaction.dest;
+		transaction->entries = link.next;
 
-		bus1_active_lockdep_acquired(&dest.raw_peer->active);
-		peer_info = bus1_peer_dereference(dest.raw_peer);
+		peer = bus1_peer_list_bind(&link, &peer_info);
 
 		bus1_handle_inflight_install(&message->handles, dest.raw_peer);
-
 		bus1_transaction_commit_one(transaction, message, &dest,
 					    timestamp);
 
-		bus1_active_lockdep_released(&dest.raw_peer->active);
+		bus1_peer_list_unbind(&link);
 		bus1_handle_dest_destroy(&dest, transaction->peer_info);
 	}
 
