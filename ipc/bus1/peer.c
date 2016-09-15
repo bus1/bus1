@@ -449,9 +449,9 @@ static int bus1_peer_ioctl_node_destroy(struct bus1_peer *peer,
 	struct bus1_cmd_node_destroy param;
 	struct bus1_peer_info *peer_info = bus1_peer_dereference(peer);
 	u64 __user *ptr_nodes;
-	size_t n_handles;
+	size_t n_handles = 0;
 	unsigned int i;
-	int r, res;
+	int r, res = 0;
 	u64 id;
 
 	BUILD_BUG_ON(_IOC_SIZE(BUS1_CMD_NODE_DESTROY) != sizeof(param));
@@ -464,8 +464,6 @@ static int bus1_peer_ioctl_node_destroy(struct bus1_peer *peer,
 		return -EFAULT;
 
 	ptr_nodes = (u64 __user *)(unsigned long)param.ptr_nodes;
-	n_handles = 0;
-	res = 0;
 
 	/* XXX: make atomic and disallow partial failures */
 	for (i = 0; i < param.n_nodes; ++i) {
