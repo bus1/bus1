@@ -94,7 +94,6 @@
 #include <linux/mutex.h>
 #include <linux/rbtree.h>
 #include <linux/rcupdate.h>
-#include "util.h"
 
 /* shift/mask for @timestamp_and_type field of queue nodes */
 #define BUS1_QUEUE_TYPE_SHIFT (62)
@@ -173,7 +172,7 @@ static inline void bus1_queue_node_init(struct bus1_queue_node *node,
 {
 	BUILD_BUG_ON((_BUS1_QUEUE_NODE_N - 1) > (BUS1_QUEUE_TYPE_MASK >>
 							BUS1_QUEUE_TYPE_SHIFT));
-	BUS1_WARN_ON(type & ~(BUS1_QUEUE_TYPE_MASK >> BUS1_QUEUE_TYPE_SHIFT));
+	WARN_ON(type & ~(BUS1_QUEUE_TYPE_MASK >> BUS1_QUEUE_TYPE_SHIFT));
 
 	RB_CLEAR_NODE(&node->rb);
 	kref_init(&node->ref);
@@ -193,8 +192,8 @@ static inline void bus1_queue_node_init(struct bus1_queue_node *node,
 static inline void bus1_queue_node_destroy(struct bus1_queue_node *node)
 {
 	if (node) {
-		BUS1_WARN_ON(!RB_EMPTY_NODE(&node->rb));
-		BUS1_WARN_ON(kref_get_unless_zero(&node->ref));
+		WARN_ON(!RB_EMPTY_NODE(&node->rb));
+		WARN_ON(kref_get_unless_zero(&node->ref));
 	}
 }
 
