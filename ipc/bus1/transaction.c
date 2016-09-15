@@ -422,7 +422,7 @@ void bus1_transaction_instantiate_for_id(struct bus1_transaction *transaction,
 
 	bus1_handle_dest_init(&dest);
 
-	r = bus1_handle_dest_import(&dest, transaction->peer, idp, errorp);
+	r = bus1_handle_dest_import(&dest, transaction->peer, idp);
 	if (r < 0)
 		goto error;
 

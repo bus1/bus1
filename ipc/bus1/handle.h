@@ -83,7 +83,6 @@ struct bus1_handle_dest {
 	struct bus1_handle *handle;
 	struct bus1_peer *raw_peer;
 	u64 __user *idp;
-	u64 __user *errorp;
 };
 
 /**
@@ -202,8 +201,7 @@ void bus1_handle_dest_destroy(struct bus1_handle_dest *dest,
 			      struct bus1_peer_info *peer_info);
 int bus1_handle_dest_import(struct bus1_handle_dest *dest,
 			    struct bus1_peer *peer,
-			    u64 __user *idp,
-			    u64 __user *errorp);
+			    u64 __user *idp);
 u64 bus1_handle_dest_export(struct bus1_handle_dest *dest,
 			    struct bus1_peer_info *peer_info,
 			    u64 timestamp,
