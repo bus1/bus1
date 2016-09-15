@@ -635,10 +635,8 @@ static void bus1_node_destroy(struct bus1_node *node,
 
 		holder = bus1_handle_acquire_holder(h, &holder_info);
 		if (holder) {
-			mutex_lock(&holder_info->queue.lock);
 			timestamp = bus1_queue_stage(&holder_info->queue,
 						     &h->qnode, timestamp);
-			mutex_unlock(&holder_info->queue.lock);
 			bus1_active_lockdep_released(&holder->active);
 			h->transaction.raw_peer = holder;
 			h->transaction.next = list;

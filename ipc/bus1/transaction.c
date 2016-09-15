@@ -569,10 +569,8 @@ int bus1_transaction_commit(struct bus1_transaction *transaction)
 		bus1_active_lockdep_acquired(&peer->active);
 		peer_info = bus1_peer_dereference(peer);
 
-		mutex_lock(&peer_info->queue.lock);
 		timestamp = bus1_queue_stage(&peer_info->queue, &message->qnode,
 					     timestamp);
-		mutex_unlock(&peer_info->queue.lock);
 
 		bus1_active_lockdep_released(&peer->active);
 	}

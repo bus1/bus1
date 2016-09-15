@@ -247,8 +247,10 @@ u64 bus1_queue_stage(struct bus1_queue *queue,
 	BUS1_WARN_ON(!RB_EMPTY_NODE(&node->rb));
 	BUS1_WARN_ON(timestamp & 1);
 
+	mutex_lock(&queue->lock);
 	timestamp = bus1_queue_sync(queue, timestamp);
 	bus1_queue_add(queue, node, timestamp + 1);
+	mutex_unlock(&queue->lock);
 
 	return timestamp;
 }
