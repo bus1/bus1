@@ -371,6 +371,28 @@ static int bus1_peer_ioctl_reset(struct bus1_peer *peer, unsigned long arg)
 	return 0;
 }
 
+static int bus1_peer_ioctl_handle_release(struct bus1_peer *peer,
+					  unsigned long arg)
+{
+	struct bus1_peer_info *peer_info = bus1_peer_dereference(peer);
+	size_t n_handles = 0;
+	u64 id;
+	int r;
+
+	BUILD_BUG_ON(_IOC_SIZE(BUS1_CMD_HANDLE_RELEASE) != sizeof(id));
+
+	if (get_user(id, (const u64 __user *)arg))
+		return -EFAULT;
+
+	r = bus1_handle_release_by_id(peer, id, &n_handles);
+	if (r < 0)
+		return r;
+
+	atomic_add(n_handles, &peer_info->user->n_handles);
+
+	return 0;
+}
+
 static int bus1_peer_ioctl_handle_transfer(struct bus1_peer *src,
 					   unsigned long arg)
 {
@@ -463,28 +485,6 @@ static int bus1_peer_ioctl_node_destroy(struct bus1_peer *peer,
 	atomic_add(n_handles, &peer_info->user->n_handles);
 
 	return res;
-}
-
-static int bus1_peer_ioctl_handle_release(struct bus1_peer *peer,
-					  unsigned long arg)
-{
-	struct bus1_peer_info *peer_info = bus1_peer_dereference(peer);
-	size_t n_handles = 0;
-	u64 id;
-	int r;
-
-	BUILD_BUG_ON(_IOC_SIZE(BUS1_CMD_HANDLE_RELEASE) != sizeof(id));
-
-	if (get_user(id, (const u64 __user *)arg))
-		return -EFAULT;
-
-	r = bus1_handle_release_by_id(peer, id, &n_handles);
-	if (r < 0)
-		return r;
-
-	atomic_add(n_handles, &peer_info->user->n_handles);
-
-	return 0;
 }
 
 static int bus1_peer_ioctl_slice_release(struct bus1_peer *peer,
@@ -754,12 +754,12 @@ int bus1_peer_ioctl(struct bus1_peer *peer,
 		return bus1_peer_ioctl_query(peer, arg);
 	case BUS1_CMD_PEER_RESET:
 		return bus1_peer_ioctl_reset(peer, arg);
+	case BUS1_CMD_HANDLE_RELEASE:
+		return bus1_peer_ioctl_handle_release(peer, arg);
 	case BUS1_CMD_HANDLE_TRANSFER:
 		return bus1_peer_ioctl_handle_transfer(peer, arg);
 	case BUS1_CMD_NODE_DESTROY:
 		return bus1_peer_ioctl_node_destroy(peer, arg);
-	case BUS1_CMD_HANDLE_RELEASE:
-		return bus1_peer_ioctl_handle_release(peer, arg);
 	case BUS1_CMD_SLICE_RELEASE:
 		return bus1_peer_ioctl_slice_release(peer, arg);
 	case BUS1_CMD_SEND:
