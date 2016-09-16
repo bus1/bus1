@@ -305,7 +305,7 @@ static inline u64 bus1_queue_sync(struct bus1_queue *queue, u64 timestamp)
  *                a staging message
  *   - ready: the message is committed and ready to be dequeued
  *
- * This function checks that there is at least one ready or one dropped entry.
+ * This function checks that there is at least one ready entry.
  *
  * Return: True if the queue is readable, false if not.
  */
