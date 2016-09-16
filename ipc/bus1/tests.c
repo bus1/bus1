@@ -11,6 +11,7 @@
 #include <linux/err.h>
 #include <linux/kernel.h>
 #include <linux/slab.h>
+#include <linux/uio.h>
 #include <uapi/linux/bus1.h>
 #include "main.h"
 #include "peer.h"
@@ -73,6 +74,57 @@ static void bus1_test_active(void)
 	WARN_ON(!clean);
 
 	bus1_active_destroy(&active);
+}
+
+static void bus1_test_pool(void)
+{
+	struct bus1_pool pool = BUS1_POOL_NULL;
+	struct bus1_pool_slice *slice;
+	char *payload = "PAYLOAD";
+	struct iovec vec = {
+		.iov_base = payload,
+		.iov_len = strlen(payload),
+	};
+	struct kvec kvec = {
+		.iov_base = payload,
+		.iov_len = strlen(payload),
+	};
+	size_t n_slices;
+
+	bus1_pool_destroy(&pool);
+	WARN_ON(bus1_pool_create(&pool) < 0);
+
+	slice = bus1_pool_alloc(&pool, 0);
+	WARN_ON(PTR_ERR(slice) != -EMSGSIZE);
+	slice = bus1_pool_alloc(&pool, -1);
+	WARN_ON(PTR_ERR(slice) != -EMSGSIZE);
+	slice = bus1_pool_alloc(&pool, 1024);
+	WARN_ON(IS_ERR_OR_NULL(slice));
+	bus1_pool_release_kernel(&pool, slice);
+	slice = bus1_pool_alloc(&pool, 1024);
+	WARN_ON(IS_ERR_OR_NULL(slice));
+	WARN_ON(bus1_pool_release_user(&pool, slice->offset, &n_slices)
+		>= 0);
+	bus1_pool_publish(&pool, slice);
+	WARN_ON(bus1_pool_release_user(&pool, slice->offset + 1, &n_slices)
+		>= 0);
+	WARN_ON(bus1_pool_release_user(&pool, slice->offset, &n_slices) < 0);
+	WARN_ON(n_slices != 0);
+	bus1_pool_release_kernel(&pool, slice);
+
+	slice = bus1_pool_alloc(&pool, 1024);
+	WARN_ON(IS_ERR_OR_NULL(slice));
+
+	WARN_ON(bus1_pool_write_iovec(&pool, slice, 0, &vec, 1, vec.iov_len)
+		< 0);
+	WARN_ON(bus1_pool_write_kvec(&pool, slice, 0, &kvec, 1, kvec.iov_len)
+		< 0);
+	bus1_pool_publish(&pool, slice);
+	bus1_pool_release_kernel(&pool, slice);
+	WARN_ON(bus1_pool_release_user(&pool, slice->offset, &n_slices) < 0);
+	WARN_ON(n_slices != 1);
+
+	bus1_pool_destroy(&pool);
 }
 
 static void bus1_test_user(void)
@@ -386,6 +438,7 @@ void bus1_tests_run(void)
 {
 	pr_info("run selftests..\n");
 	bus1_test_active();
+	bus1_test_pool();
 	bus1_test_user();
 	bus1_test_quota();
 }
