@@ -12,6 +12,7 @@
 #include <linux/kernel.h>
 #include <linux/slab.h>
 #include <linux/uio.h>
+#include <linux/wait.h>
 #include <uapi/linux/bus1.h>
 #include "main.h"
 #include "peer.h"
@@ -125,6 +126,95 @@ static void bus1_test_pool(void)
 	WARN_ON(n_slices != 1);
 
 	bus1_pool_destroy(&pool);
+}
+
+static void bus1_test_queue(void)
+{
+	wait_queue_head_t waitq;
+	struct bus1_queue q1, q2, qa, qb;
+	struct bus1_queue_node n1a, n1b, n2a, n2b;
+	u64 ts1 = 0, ts2 = 0;
+	bool has_continue;
+
+	init_waitqueue_head(&waitq);
+
+	bus1_queue_init(&q1, &waitq);
+	bus1_queue_init(&q2, &waitq);
+	bus1_queue_init(&qa, &waitq);
+	bus1_queue_init(&qb, &waitq);
+
+	/* set type to 0 and sender stamp to numbers to make order obvious */
+	bus1_queue_node_init(&n1a, 0, 1);
+	bus1_queue_node_init(&n1b, 0, 1);
+	bus1_queue_node_init(&n2a, 0, 2);
+	bus1_queue_node_init(&n2b, 0, 2);
+
+	/* arbitrarily initialize the clocks */
+	WARN_ON(bus1_queue_sync(&q1, 2) != 2);
+	WARN_ON(bus1_queue_sync(&q2, 4) != 4);
+	WARN_ON(bus1_queue_sync(&qa, 6) != 6);
+	WARN_ON(bus1_queue_sync(&qb, 8) != 8);
+
+	/* 'racing' staging of nodes */
+	ts2 = bus1_queue_stage(&qa, &n2a, ts2);
+	ts1 = bus1_queue_stage(&qa, &n1a, ts1);
+	ts2 = bus1_queue_stage(&qb, &n2b, ts2);
+	ts1 = bus1_queue_stage(&qb, &n1b, ts1);
+
+	/* obtain final timestamps from source queues */
+	mutex_lock(&q1.lock);
+	ts1 = bus1_queue_sync(&q1, ts1);
+	ts1 = bus1_queue_tick(&q1);
+	mutex_unlock(&q1.lock);
+	mutex_lock(&q2.lock);
+	ts2 = bus1_queue_sync(&q2, ts2);
+	ts2 = bus1_queue_tick(&q2);
+	mutex_unlock(&q2.lock);
+
+	/* 'racing' sync clocks on destination queues */
+	mutex_lock(&qa.lock);
+	bus1_queue_sync(&qa, ts2);
+	bus1_queue_sync(&qa, ts1);
+	mutex_unlock(&qa.lock);
+	mutex_lock(&qb.lock);
+	bus1_queue_sync(&qb, ts1);
+	bus1_queue_sync(&qb, ts2);
+	mutex_unlock(&qb.lock);
+
+	/* 'racing' commit the entries */
+	WARN_ON(!bus1_queue_commit_staged(&qa, &n1a, ts1));
+	WARN_ON(!bus1_queue_commit_staged(&qb, &n1b, ts1));
+	WARN_ON(!bus1_queue_commit_staged(&qb, &n2b, ts2));
+	WARN_ON(!bus1_queue_commit_staged(&qa, &n2a, ts2));
+
+	/* dequeue queue a */
+	mutex_lock(&qa.lock);
+	WARN_ON(bus1_queue_peek_locked(&qa, &has_continue) != &n1a);
+	mutex_unlock(&qa.lock);
+	WARN_ON(has_continue);
+	WARN_ON(!bus1_queue_remove(&qa, &n1a));
+	mutex_lock(&qa.lock);
+	WARN_ON(bus1_queue_peek_locked(&qa, &has_continue) != &n2a);
+	mutex_unlock(&qa.lock);
+	WARN_ON(has_continue);
+	WARN_ON(!bus1_queue_remove(&qa, &n2a));
+
+	/* dequeue queue b */
+	mutex_lock(&qb.lock);
+	WARN_ON(bus1_queue_peek_locked(&qb, &has_continue) != &n1b);
+	mutex_unlock(&qb.lock);
+	WARN_ON(has_continue);
+	WARN_ON(!bus1_queue_remove(&qb, &n1b));
+	mutex_lock(&qb.lock);
+	WARN_ON(bus1_queue_peek_locked(&qb, &has_continue) != &n2b);
+	mutex_unlock(&qb.lock);
+	WARN_ON(has_continue);
+	WARN_ON(!bus1_queue_remove(&qb, &n2b));
+
+	bus1_queue_destroy(&q1);
+	bus1_queue_destroy(&q2);
+	bus1_queue_destroy(&qa);
+	bus1_queue_destroy(&qb);
 }
 
 static void bus1_test_user(void)
@@ -439,6 +529,7 @@ void bus1_tests_run(void)
 	pr_info("run selftests..\n");
 	bus1_test_active();
 	bus1_test_pool();
+	bus1_test_queue();
 	bus1_test_user();
 	bus1_test_quota();
 }
