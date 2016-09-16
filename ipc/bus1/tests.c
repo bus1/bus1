@@ -16,6 +16,65 @@
 #include "peer.h"
 #include "tests.h"
 
+static void active_cleanup(struct bus1_active *active, void *userdata)
+{
+	bool *clean = userdata;
+
+	WARN_ON(*clean);
+	*clean = true;
+}
+
+static void bus1_test_active(void)
+{
+	struct bus1_active active;
+	bool clean = false;
+
+	/* simple api tests only, only single-threaded so no waitq tests */
+
+	bus1_active_init(&active);
+
+	WARN_ON(!bus1_active_is_new(&active));
+	WARN_ON(bus1_active_is_active(&active));
+	WARN_ON(bus1_active_is_deactivated(&active));
+	WARN_ON(bus1_active_is_drained(&active));
+
+	WARN_ON(bus1_active_acquire(&active));
+	WARN_ON(!bus1_active_activate(&active));
+	WARN_ON(bus1_active_activate(&active));
+	WARN_ON(!bus1_active_acquire(&active));
+
+	WARN_ON(bus1_active_is_new(&active));
+	WARN_ON(!bus1_active_is_active(&active));
+	WARN_ON(bus1_active_is_deactivated(&active));
+	WARN_ON(bus1_active_is_drained(&active));
+
+	WARN_ON(!bus1_active_deactivate(&active));
+	WARN_ON(bus1_active_deactivate(&active));
+	WARN_ON(bus1_active_activate(&active));
+
+	WARN_ON(bus1_active_acquire(&active));
+
+	WARN_ON(bus1_active_is_new(&active));
+	WARN_ON(bus1_active_is_active(&active));
+	WARN_ON(!bus1_active_is_deactivated(&active));
+	WARN_ON(bus1_active_is_drained(&active));
+
+	WARN_ON(bus1_active_release(&active, NULL));
+
+	bus1_active_drain(&active, NULL);
+
+	WARN_ON(bus1_active_is_new(&active));
+	WARN_ON(bus1_active_is_active(&active));
+	WARN_ON(!bus1_active_is_deactivated(&active));
+	WARN_ON(!bus1_active_is_drained(&active));
+
+	WARN_ON(!bus1_active_cleanup(&active, NULL, active_cleanup, &clean));
+	WARN_ON(bus1_active_cleanup(&active, NULL, active_cleanup, &clean));
+	WARN_ON(!clean);
+
+	bus1_active_destroy(&active);
+}
+
 static void bus1_test_user(void)
 {
 	struct bus1_user *user1, *user2;
@@ -326,6 +385,7 @@ static void bus1_test_quota(void)
 void bus1_tests_run(void)
 {
 	pr_info("run selftests..\n");
+	bus1_test_active();
 	bus1_test_user();
 	bus1_test_quota();
 }
