@@ -396,14 +396,13 @@ error:
 /**
  * bus1_transaction_instantiate_for_id() - instantiate a message
  * @transaction:	transaction to work with
- * @idp:		user-space pointer with destination ID
- * @errorp:		user-space pointer with destination errno
+ * @index:		index into destination array
  *
  * Instantiate the message from the given transaction for the handle id
- * in @idp. A new pool-slice is allocated, a queue entry is created and the
- * message is queued as in-flight message on the transaction object. The
- * message is not linked on the destination, yet. You need to commit the
- * transaction to actually link it on the destination queue.
+ * at @index in the destination array. A new pool-slice is allocated, a queue
+ * entry is created and the message is queued as in-flight message on the
+ * transaction object. The message is not linked on the destination, yet. You
+ * need to commit the transaction to actually link it on the destination queue.
  */
 void bus1_transaction_instantiate_for_id(struct bus1_transaction *transaction,
 					 size_t index)
