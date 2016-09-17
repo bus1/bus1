@@ -56,18 +56,18 @@ process, but can be shared freely. The peer context provides a message queue to
 store all incoming messages, a registry for all locally owned objects, and
 tracks access rights to remote objects. A peer context never serves as
 routing entity, but merely as anchor for peer-owned resources. Any message on
-the bus is always destined at an object, and the bus takes care to transfer a
+the bus is always destined for an object, and the bus takes care to transfer a
 message into the message queue of the peer context that owns this object.
     </para>
     <para>
-The message bus manages object access using capability-based security. That is,
-by default only the owner of an object is granted access rights. No other peer
-can access the object, nor are they aware of the existance of the object.
-However, access rights can be transmitted as auxiliary data with any message,
-effectively granting them to the receiver of the message. This even works
-transitively, that is, any peer that was granted access to an object can pass on
-those rights, even if they do not own the object. But mind that no access rights
-can ever be revoked, besides the owner destroying the object.
+The message bus manages object access using capabilities. That is, by default
+only the owner of an object is granted access rights. No other peer can access
+the object, nor are they aware of the existance of the object. However, access
+rights can be transmitted as auxiliary data with any message, effectively
+granting them to the receiver of the message. This even works transitively, that
+is, any peer that was granted access to an object can pass on those rights, even
+if they do not own the object. But mind that no access rights can ever be
+revoked, besides the owner destroying the object.
     </para>
 
     <refsect2>
@@ -75,53 +75,62 @@ can ever be revoked, besides the owner destroying the object.
       <para>
 Each peer context comes with a registry of owned objects, which in bus1
 parlance are called <emphasis>nodes</emphasis>. A peer is always the exclusive
-owner of all nodes it has created. Ownership cannot be transferred. Furthermore, 
-initially, the node owner is the only peer with access to a newly created node.
-The message bus manages access rights to nodes as a set of
-<emphasis>handles</emphasis> held by each peer. For each node a peer has access
-to, whether it is local or remote, the message bus keeps a handle on the peer.
-Those handles are local to each peer, but can be transmitted as auxiliary data
-with any message, effectively allocating a new handle to the same node in the
-destination peer. This works transitively, and each peer with access rights can
-pass them on further, or deliberately drop them again. As long as a peer has
-access rights to a node it can send messages to it. However, a node owner can,
-at any time, decide to destroy a node. This causes all further message
-transactions to this node to fail, and all peers holding access rights to the
-node (i.e., they own a handle for that node) are notified of the destruction.
+owner of all nodes it has created. Ownership cannot be transferred. The message
+bus manages access rights to nodes as a set of <emphasis>handles</emphasis> held
+by each peer. For each node a peer has access to, whether it is local or remote,
+the message bus keeps a handle on the peer. Initially when a node is created the
+node owner is the only peer with a handle to the newly created node. Handles are
+local to each peer, but can be transmitted as auxiliary data with any message,
+effectively allocating a new handle to the same node in the destination peer.
+This works transitively, and each peer that holds a handle can pass it on
+further, or deliberately drop it. As long as a peer has a handle to a node it
+can send messages to it. However, a node owner can, at any time, decide to
+destroy a node. This causes all further message transactions to this node to
+fail, although messages that have already been queued for the node are still
+delivered. When a node is destroyed, all peers that hold handles to the node are
+notified of the destruction. Moreover, if the owner of a node that has been
+destroyed releases all its handles to the node, no further messages or
+notifications destined for the node are delivered.
       </para>
       <para>
 Handles are the only way to refer to both local and remote nodes. For each
 handle allocated on a peer, a 64-bit ID is assigned to identify that particular
-handle on that particular peer. The ID is only valid locally on that peer. It
+handle on that particular peer. The ID is only valid locally on that peer, it
 cannot be used by remote peers to address the handle (in other words, the ID
-namespace is tied to each peer and does not define global entities).
-Furthermore, an assigned ID is never reused, even if a handle is dropped. The
-kernel keeps a user-reference count for each handle. Every time a handle is
-exposed to a peer, the user-reference count of that handle is incremented by
-one. This is never done asynchronously, but only synchronously when an ioctl is
-called by the holding peer. Therefore, a peer can reliable deduce the current
-user-reference count of all its handles, regardless of any ongoing message
-transaction. References can be explicitly dropped by a peer. Once the counter of
-a handle hits zero, it is destroyed, its ID becomes invalid, and will not be
-reused again. Note that a peer can never have multiple different handles to the
-same node, rather the kernel always coalesces them into a single handle, using
-the user-reference counter to track it. However, if a handle is fully released,
-but the peer later acquires a handle to the same node again, its ID will be
-different, as IDs are never reused.
+namespace is tied to each peer and does not define global entities). When
+creating a new node, userspace freely selects the ID except that the
+<constant>BUS1_HANDLE_FLAG_REMOTE</constant> bit must be cleared, and when
+receiving a handle from a remote peer the kernel assigns the ID, which always
+has the <constant>BUS1_HANDLE_FLAG_REMOTE</constant> set. An ID assigned by the
+kernel is never reused, even after a handle has been dropped. The kernel keeps a
+user-reference count for each handle. Every time a handle is exposed to a peer,
+the user-reference count of that handle is incremented by one. This is never
+done asynchronously, but only synchronously when an ioctl is called by the
+holding peer. Therefore, a peer can reliable deduce the current user-reference
+count of all its handles, regardless of any ongoing message transaction.
+References can be explicitly dropped by a peer. Once the counter of a handle
+hits zero, it is destroyed, its ID becomes invalid, and if it was assigned by
+the kernel, it will not be reused again. Note that a peer can never have
+multiple different handles to the same node, rather the kernel always coalesces
+them into a single handle, using the user-reference counter to track it.
+However, if a handle is fully released, but the peer later acquires a handle to
+the same remote node again, its ID will be different, as IDs are never reused.
       </para>
       <para>
-When allocating a new node, the node owner implicitly also gets a handle to that
-node. As long as the node is valid, the kernel will pin a single user-reference
-to the owner's handle. This guarantees that a node owner always retains access
-to their node, until they explicitly destroy it (which will make it possible for
-userspace to release the handle like any other). Once all the handles to a local
-node have been released, no more messages destined for the node will be
-received. Otherwise, a handle to a local node behaves just like any other
-handle, that is, user-references are acquired and released according to its use.
-However, whenever the overall sum of all user-references on all handles to a
-node drops to one (which implies that only the pinned reference of the owner is
-left), a notification is queued on the node owner. If the counter is incremented
-again, any such notification is dropped, if not already dequeued.
+New nodes are allocated on-demand by passing the desired ID to the kernel in any
+ioctl that accepts a handle ID. When allocating a new node, the node owner
+implicitly also gets a handle to that node. As long as the node is valid, the
+kernel will pin a single user-referenceto the owner's handle. This guarantees
+that a node owner always retains access to their node, until they explicitly
+destroy it (which will make it possible for userspace to release the handle like
+any other). Once all the handles to a local node have been released, no more
+messages destined for the node will be received. Otherwise, a handle to a local
+node behaves just like any other handle, that is, user-references are acquired
+and released according to its use. However, whenever the overall sum of all
+user-references on all handles to a node drops to one (which implies that only
+the pinned reference of the owner is left), a notification is queued on the node
+owner. If the counter is incremented again, any such notification is dropped, if
+not already dequeued.
       </para>
     </refsect2>
 
@@ -134,7 +143,7 @@ or fully fails.
       </para>
       <para>
 To receive messag payloads, each peer has an associated shmem-backed
-<emphasis>pool</emphasis> which may be mmapped read-only by the receiving peer.
+<emphasis>pool</emphasis> which may be mapped read-only by the receiving peer.
 The kernel copies the message payload directly from the sending peer to each of
 the receivers' pool without an intermediary kernel buffer. The pool is divided
 into <emphasis>slices</emphasis> to hold each message. When a message is
@@ -156,36 +165,28 @@ namespaces of the receiving peer (which was pinned when the peer was created).
       <para>
 Each user has a fixed amount of available resources. The limits are static, but
 may be overridden by module parameters. Limits are placed on the amount of
-memory a users pools may consume, the number of handles a user may hold and, the
-number of inflight messages may be destined for a user and the number of file
-descriptors may be inflight to a user. All inflight resources are accounted on
-the receiving peer.
+memory a user's pools may consume, the number of handles a user may hold and,
+the number of inflight messages may be destined for a user and the number of
+file descriptors may be inflight to a user. All inflight resources are accounted
+on the receiving peer.
       </para>
       <para>
 As resources are accounted on the receiver, a quota mechanism is in place in
 order to avoid intentional or unintentional resource exhaustion by a malicious
-or broken sending user. As the number of users taking part in the bus and their
-usage patterns are not known-up front, a dynamic quota is put in place to try
-to strike a balance between reserving resources for the future and maximize the
-usage of available resources. At the time of a message transaction, the sending
-user may consume in total (including what is consumed by previous transactions)
-half of the total resources of the receiving user that have not been consumed by
+or broken sending user. At the time of a message transaction, the sending user
+may consume in total (including what is consumed by previous transactions) half
+of the total resources of the receiving user that have not been consumed by
 another user. When a message is dequeued its resource consumption is deaccounted
 from the sending users quota.
       </para>
       <para>
-If a receiving peer does not dequeue any of its incoming messages (possibly due
-to bug) it would be possible for a users quota to be fully consumed by one peer,
-making it impossible to communicate with other functioning peers owned by the
-same user. A second quota is therefore enforced per-peer, enforcing that at the
-time of a message transaction the receiving peer may consume at in total
-(including what is consumed by previous transactions) half of the total
-resources available to the sending user that have not been consumed by another
-peer.
-      </para>
-      <para>
-For a given message transaction, the available resources are determined by the
-combination of the receiving user, the sending user and the receiving peer.
+If a receiving peer does not dequeue any of its incoming messages it would be
+possible for a users quota to be fully consumed by one peer, making it
+impossible to communicate with other functioning peers owned by the same user. A
+second quota is therefore enforced per-peer, enforcing that at the time of a
+message transaction the receiving peer may consume at in total (including what
+is consumed by previous transactions) half of the total resources available to
+the sending user that have not been consumed by another peer.
       </para>
     </refsect2>
 
@@ -220,8 +221,8 @@ before another (such as sending a message) was started, then they are ordered
 accordingly.
       </para>
       <para>
-Also in the case where there can be no causal relationship, are we guaranteed
-a global order. In case two events happend concurrently, there can never be any
+Also in the case where there can be no causal relationship, we are guaranteed a
+global order. In case two events happend concurrently, there can never be any
 inconsistency in which occurred before the other. By way of example, consider
 two peers sending one message each to two different peers, we are guaranteed
 that both the recipient peers receive the two messages in the same order, even
@@ -379,8 +380,8 @@ The following bus1-specific commands are supported:
                 <listitem>
                   <para>
 This argument disconnects a peer and does not take an argument. All slices,
-handles and nodes are released and destroyed and all future operations on the
-peer will fail with <constant>-ESHUTDOWN</constant>.
+handles, nodes and queued messages are released and destroyed and all future
+operations on the peer will fail with <constant>-ESHUTDOWN</constant>.
                   </para>
                 </listitem>
               </varlistentry>
@@ -402,7 +403,8 @@ struct bus1_cmd_peer_reset {
 };
 </programlisting>
 <varname>flags</varname> must always be set to 0. The state as set via
-<constant>BUS1_CMD_PEER_RESET</constant> is returned.
+<constant>BUS1_CMD_PEER_RESET</constant>, or the default state if it was never
+reset, is returned.
                   </para>
                 </listitem>
               </varlistentry>
@@ -423,20 +425,20 @@ struct bus1_cmd_peer_reset {
         __u64 max_inflight_fds;
 };
 </programlisting>
-If <varname>flags</varname> has
-<constant>BUS1_CMD_PEER_RESET_FLAG_DESTROY_NODES</constant> set, all nodes
-are simultaneously destroyed. If
-<constant>BUS1_CMD_PEER_RESET_FLAG_RELEASE_HANDLES</constant> is set, all
-handles are simultaneously released. If <varname>peer_flags</varname> is
-<constant>BUS1_PEER_FLAG_WANT_SECCTX</constant> the security context of the
-sending task is attached to each received message destined for this peer.
+If <varname>peer_flags</varname> has
+<constant>BUS1_PEER_FLAG_WANT_SECCTX</constant> set, the security context of the
+sending task is attached to each message received by this peer.
 <varname>max_slices</varname>, <varname>max_handles</varname>,
 <varname>max_inflight_bytes</varname>, and <varname>max_inflight_fds</varname>
-sets the resource limits on this peer.
+are the resource limits for this peer. Note that these are simply max valuse,
+the resource usage is also limited per user.
                   </para>
                   <para>
-All pending messages are dropped except the seed message, which is preserved.
-All user references to slices are also dropped from the pool.
+If <varname>flags</varname> has
+<constant>BUS1_CMD_PEER_RESET_FLAG_FLUSH_SEED</constant> set, the seed message
+is dropped, and if <constant>BUS1_CMD_PEER_RESET_FLAG_FLUSH</constant> is set,
+all slices and handles are released, all messages are dropped from the queue and
+all nodes that are not pinned by the seed message are destroyed.
                   </para>
                 </listitem>
               </varlistentry>
@@ -461,13 +463,10 @@ is the handle ID of the handle being transferred in the source context,
 peer context and <varname>dst_handle</varname> must be
 <constant>BUS1_HANDLE_INVALID</constant> and is set to the new handle ID in the
 destination context on return.
-		</para>
-		<para>
-If the <constant>BUS1_NODE_FLAG_ALLOCATE</constant> flag is set in
-<varname>src_handle</varname> a new node is allocated in the source peer context
-and <varname>src_handle</varname> is set to its handle ID on return. If
-<varname>dst_fd</varname> is set to <constant>-1</constant> the source context
-is also used as the destination.
+                  </para>
+                  <para>
+If <varname>dst_fd</varname> is set to <constant>-1</constant> the source
+context is also used as the destination.
                   </para>
                 </listitem>
               </varlistentry>
@@ -547,11 +546,8 @@ replaces the seed message on the local peer. In this case,
 <varname>ptr_destinations</varname> is a pointer to an array of handle IDs,
 <varname>ptr_errors</varname> is a pointer to an array of corresponding
 errno codes, and <varname>n_destinations</varname> is the length of the arrays.
-If the <constant>BUS1_NODE_FLAG_ALLOCATE</constant> is set in either of the
-handle IDs a new node is allocated in the local peer context, and the handle ID is replaced
-by the ID of the new node on return. The message being sent is delivered to
-the peer context owning the nodes pointed to by each of the handles in the
-array.
+The message being sent is delivered to the peer context owning the nodes pointed
+to by each of the handles in the array.
                   </para>
                   <para>
 <varname>ptr_vecs</varname> is a pointer to an array of iovecs and
@@ -560,9 +556,11 @@ payload of the message which is delivered to each destination.
                   </para>
                   <para>
 <varname>ptr_handles</varname> is a pointer to an array of handle IDs and
-<varname>n_handles</varname> is the length of the array. Nodes may be allocated
-on-demand as described above. Each of the handles in this array is installed
-in each destination peer context at receive time.
+<varname>n_handles</varname> is the length of the array. Each of the handles in
+this array is installed in each destination peer context at receive time. If the
+underlying node has been destroyed at the time the message is delivered (the
+message would be ordered after the node's destruction notification) then
+<constant>BUS1_HANDLE_INVALID</constant> will be delivered instead.
                   </para>
                   <para>
 <varname>ptr_fds</varname> is a pointer to an integer array of file descriptors
@@ -602,7 +600,7 @@ the received message is not dropped from the queue. If
 rather than a message from the queue. If
 <constant>BUS1_RECV_FLAG_INSTALL_FDS</constant> the file descriptors attached to
 the received message are installed in the receiving process. Care must be taken
-when using the last flag from more than one process on the same message as file
+when using this flag from more than one process on the same message as file
 descriptor numbers are per-process and not per-peer.
                   </para>
                   <para>
@@ -645,6 +643,7 @@ message, or 0 if <constant>BUS1_RECV_FLAG_INSTALL_FDS</constant> was not set.
 The file descriptor numbers are stored in the pool following the handle array
 (and possibly padding to make the array 8-byte aligned).
                   </para>
+<!-- XXX: document n_secctx and verify the behavior without INSTALL_FDS -->
                 </listitem>
               </varlistentry>
             </variablelist>
@@ -668,7 +667,7 @@ releases the passed file descriptor. When all file descriptors associated with
 the same peer context have been closed, the peer is shut down. This destroys all
 nodes of that peer, releases all handles, flushes its queue and pool, and
 deallocates all related resources. Messages that have been sent by the peer and
-are still queued on destination queues, are unaffected by this.
+are still queued on destination queues are unaffected by this.
             </para>
           </listitem>
         </varlistentry> <!-- FOPS CLOSE -->
