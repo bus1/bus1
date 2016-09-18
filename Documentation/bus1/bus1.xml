@@ -161,6 +161,16 @@ namespaces of the receiving peer (which was pinned when the peer was created).
     </refsect2>
 
     <refsect2>
+      <title>Seed Message</title>
+      <para>
+Every peer may pin a special <emphasis>seed</emphasis> message. Only the peer
+itself may set and retrieve the seed, and at most one seed message may be pinned
+at any given time. The seed typically describes the peer itself and pins any
+nodes and handles necessary to bootstrap the peer.
+      </para>
+    </refsect2>
+
+    <refsect2>
       <title>Resource quotas</title>
       <para>
 Each user has a fixed amount of available resources. The limits are static, but
