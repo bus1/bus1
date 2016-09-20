@@ -612,15 +612,15 @@ static int bus1_peer_ioctl_recv(struct bus1_peer *peer, unsigned long arg)
 	 * install the payload before dequeueing the message. If that fails, we
 	 * must skip the dequeue and instead return an error to user-space.
 	 */
-	if (!node) {
+	if (!node)
 		r = -EAGAIN;
-	} else if (!msg) {
+	else if (!msg)
 		r = 0;
-	} else if (param.max_offset < msg->slice->offset + msg->slice->size) {
+	else if (param.max_offset < msg->slice->offset + msg->slice->size)
 		r = -ERANGE;
-	} else {
+	else
 		r = bus1_message_install(msg, peer_info, &param);
-	}
+
 
 	if (r >= 0 && !(param.flags & BUS1_RECV_FLAG_PEEK)) {
 		/* unpin() cannot be the last, so safe under peer lock */
