@@ -331,23 +331,23 @@ static int bus1_user_quota_charge_one(atomic_t *remaining,
 
 /**
  * bus1_user_quota_charge() - try charging a user
- * @peer_info:		peer with quota to operate on
+ * @peer:		peer with quota to operate on
  * @user:		user to charge
  * @n_bytes:		number of bytes to charge
  * @n_handles:		number of handles to charge
  * @n_fds:		number of FDs to charge
  *
- * This charges @user for the given resources on @peer_info. If the charge would
+ * This charges @user for the given resources on @peer. If the charge would
  * exceed the given quotas at this time, the function fails without making any
  * charge. If the charge is successful, the available resources are adjusted
- * accordingly both locally on @peer_info and globally on the associated user.
+ * accordingly both locally on @peer and globally on the associated user.
  *
  * This charges for _one_ message with a size of @n_bytes, carrying
  * @n_handles handles and @n_fds file descriptors as payload.
  *
  * Return: 0 on success, negative error code on failure.
  */
-int bus1_user_quota_charge(struct bus1_peer_info *peer_info,
+int bus1_user_quota_charge(struct bus1_peer *peer,
 			   struct bus1_user *user,
 			   size_t n_bytes,
 			   size_t n_handles,
@@ -356,9 +356,9 @@ int bus1_user_quota_charge(struct bus1_peer_info *peer_info,
 	struct bus1_user_stats *stats;
 	int r;
 
-	lockdep_assert_held(&peer_info->lock);
+	lockdep_assert_held(&peer->lock);
 
-	stats = bus1_user_quota_query(&peer_info->quota, user);
+	stats = bus1_user_quota_query(&peer->quota, user);
 	if (IS_ERR(stats))
 		return PTR_ERR(stats);
 
@@ -373,22 +373,22 @@ int bus1_user_quota_charge(struct bus1_peer_info *peer_info,
 	BUILD_BUG_ON((typeof(bus1_user_bytes_max))-1 > U32_MAX);
 	BUILD_BUG_ON((typeof(bus1_user_fds_max))-1 > U16_MAX);
 
-	r = bus1_user_quota_charge_one(&peer_info->user->n_slices,
+	r = bus1_user_quota_charge_one(&peer->user->n_slices,
 				       stats->n_slices, 1);
 	if (r < 0)
 		return r;
 
-	r = bus1_user_quota_charge_one(&peer_info->user->n_handles,
+	r = bus1_user_quota_charge_one(&peer->user->n_handles,
 				       stats->n_handles, n_handles);
 	if (r < 0)
 		goto error_slices;
 
-	r = bus1_user_quota_charge_one(&peer_info->user->n_inflight_bytes,
+	r = bus1_user_quota_charge_one(&peer->user->n_inflight_bytes,
 				       stats->n_bytes, n_bytes);
 	if (r < 0)
 		goto error_handles;
 
-	r = bus1_user_quota_charge_one(&peer_info->user->n_inflight_fds,
+	r = bus1_user_quota_charge_one(&peer->user->n_inflight_fds,
 				       stats->n_fds, n_fds);
 	if (r < 0)
 		goto error_bytes;
@@ -402,17 +402,17 @@ int bus1_user_quota_charge(struct bus1_peer_info *peer_info,
 	return 0;
 
 error_bytes:
-	atomic_add(n_bytes, &peer_info->user->n_inflight_bytes);
+	atomic_add(n_bytes, &peer->user->n_inflight_bytes);
 error_handles:
-	atomic_add(n_handles, &peer_info->user->n_handles);
+	atomic_add(n_handles, &peer->user->n_handles);
 error_slices:
-	atomic_inc(&peer_info->user->n_slices);
+	atomic_inc(&peer->user->n_slices);
 	return r;
 }
 
 /**
  * bus1_user_quota_discharge() - discharge a user
- * @peer_info:		peer with quota to operate on
+ * @peer:		peer with quota to operate on
  * @user:		user to discharge
  * @n_bytes:		number of bytes to discharge
  * @n_handles:		number of handles to discharge
@@ -422,7 +422,7 @@ error_slices:
  * discharges a single message with a slice of size @n_bytes, @n_handles handles
  * and @n_fds file-descriptors.
  */
-void bus1_user_quota_discharge(struct bus1_peer_info *peer_info,
+void bus1_user_quota_discharge(struct bus1_peer *peer,
 			       struct bus1_user *user,
 			       size_t n_bytes,
 			       size_t n_handles,
@@ -430,9 +430,9 @@ void bus1_user_quota_discharge(struct bus1_peer_info *peer_info,
 {
 	struct bus1_user_stats *stats;
 
-	lockdep_assert_held(&peer_info->lock);
+	lockdep_assert_held(&peer->lock);
 
-	stats = bus1_user_quota_query(&peer_info->quota, user);
+	stats = bus1_user_quota_query(&peer->quota, user);
 	if (WARN_ON(IS_ERR_OR_NULL(stats)))
 		return;
 
@@ -445,15 +445,15 @@ void bus1_user_quota_discharge(struct bus1_peer_info *peer_info,
 	stats->n_handles -= n_handles;
 	stats->n_bytes -= n_bytes;
 	stats->n_fds -= n_fds;
-	atomic_inc(&peer_info->user->n_slices);
-	atomic_add(n_handles, &peer_info->user->n_handles);
-	atomic_add(n_bytes, &peer_info->user->n_inflight_bytes);
-	atomic_add(n_fds, &peer_info->user->n_inflight_fds);
+	atomic_inc(&peer->user->n_slices);
+	atomic_add(n_handles, &peer->user->n_handles);
+	atomic_add(n_bytes, &peer->user->n_inflight_bytes);
+	atomic_add(n_fds, &peer->user->n_inflight_fds);
 }
 
 /**
  * bus1_user_quota_commit() - commit a quota charge
- * @peer_info:		peer with quota to operate on
+ * @peer:		peer with quota to operate on
  * @user:		user to commit for
  * @n_bytes:		number of bytes to commit
  * @n_handles:		number of handles to commit
@@ -463,7 +463,7 @@ void bus1_user_quota_discharge(struct bus1_peer_info *peer_info,
  * charges, but keeps the actual object charges on the receiver. The caller must
  * make sure the actual objects are de-accounted once they are destructed.
  */
-void bus1_user_quota_commit(struct bus1_peer_info *peer_info,
+void bus1_user_quota_commit(struct bus1_peer *peer,
 			    struct bus1_user *user,
 			    size_t n_bytes,
 			    size_t n_handles,
@@ -471,9 +471,9 @@ void bus1_user_quota_commit(struct bus1_peer_info *peer_info,
 {
 	struct bus1_user_stats *stats;
 
-	lockdep_assert_held(&peer_info->lock);
+	lockdep_assert_held(&peer->lock);
 
-	stats = bus1_user_quota_query(&peer_info->quota, user);
+	stats = bus1_user_quota_query(&peer->quota, user);
 	if (WARN_ON(IS_ERR_OR_NULL(stats)))
 		return;
 
@@ -488,6 +488,6 @@ void bus1_user_quota_commit(struct bus1_peer_info *peer_info,
 	stats->n_fds -= n_fds;
 
 	/* discharge any inflight-only resources */
-	atomic_add(n_bytes, &peer_info->user->n_inflight_bytes);
-	atomic_add(n_fds, &peer_info->user->n_inflight_fds);
+	atomic_add(n_bytes, &peer->user->n_inflight_bytes);
+	atomic_add(n_fds, &peer->user->n_inflight_fds);
 }

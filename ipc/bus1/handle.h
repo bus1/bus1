@@ -70,7 +70,6 @@
 
 struct bus1_handle;
 struct bus1_peer;
-struct bus1_peer_info;
 struct bus1_queue_node;
 
 /**
@@ -191,19 +190,19 @@ int bus1_handle_release_by_id(struct bus1_peer *peer,
 int bus1_node_destroy_by_id(struct bus1_peer *peer,
 			    u64 *idp,
 			    size_t *n_handlesp);
-void bus1_handle_flush_all(struct bus1_peer_info *peer_info,
+void bus1_handle_flush_all(struct bus1_peer *peer,
 			   size_t *n_handlesp,
 			   bool final);
 
 /* destination context */
 void bus1_handle_dest_init(struct bus1_handle_dest *dest);
 void bus1_handle_dest_destroy(struct bus1_handle_dest *dest,
-			      struct bus1_peer_info *peer_info);
+			      struct bus1_peer *peer);
 int bus1_handle_dest_import(struct bus1_handle_dest *dest,
 			    struct bus1_peer *peer,
 			    u64 __user *idp);
 u64 bus1_handle_dest_export(struct bus1_handle_dest *dest,
-			    struct bus1_peer_info *peer_info,
+			    struct bus1_peer *peer,
 			    u64 timestamp,
 			    unsigned long sender,
 			    bool commit);
@@ -212,10 +211,10 @@ u64 bus1_handle_dest_export(struct bus1_handle_dest *dest,
 void bus1_handle_transfer_init(struct bus1_handle_transfer *transfer,
 			       size_t n_entries);
 void bus1_handle_transfer_release(struct bus1_handle_transfer *transfer,
-				  struct bus1_peer_info *peer_info);
+				  struct bus1_peer *peer);
 void bus1_handle_transfer_destroy(struct bus1_handle_transfer *transfer);
 int bus1_handle_transfer_import(struct bus1_handle_transfer *transfer,
-				struct bus1_peer_info *peer_info,
+				struct bus1_peer *peer,
 				const u64 __user *ids,
 				size_t n_ids);
 int bus1_handle_transfer_export(struct bus1_handle_transfer *transfer,
@@ -228,15 +227,15 @@ void bus1_handle_inflight_init(struct bus1_handle_inflight *inflight,
 			       size_t n_entries);
 void bus1_handle_inflight_destroy(struct bus1_handle_inflight *inflight);
 void bus1_handle_inflight_flush(struct bus1_handle_inflight *inflight,
-				struct bus1_peer_info *peer_info);
+				struct bus1_peer *peer);
 int bus1_handle_inflight_import(struct bus1_handle_inflight *inflight,
-				struct bus1_peer_info *peer_info,
+				struct bus1_peer *peer,
 				struct bus1_handle_transfer *transfer,
-				struct bus1_peer_info *transfer_info);
+				struct bus1_peer *src);
 void bus1_handle_inflight_install(struct bus1_handle_inflight *inflight,
 				  struct bus1_peer *dst);
 size_t bus1_handle_inflight_walk(struct bus1_handle_inflight *inflight,
-				 struct bus1_peer_info *peer_info,
+				 struct bus1_peer *peer,
 				 size_t *pos,
 				 size_t *new,
 				 void **iter,
@@ -244,7 +243,7 @@ size_t bus1_handle_inflight_walk(struct bus1_handle_inflight *inflight,
 				 u64 timestamp,
 				 unsigned long sender);
 void bus1_handle_inflight_commit(struct bus1_handle_inflight *inflight,
-				 struct bus1_peer_info *peer_info,
+				 struct bus1_peer *peer,
 				 u64 timestamp,
 				 unsigned long sender);
 

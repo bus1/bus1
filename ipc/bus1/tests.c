@@ -276,7 +276,7 @@ static void bus1_test_user(void)
 
 static void bus1_test_quota(void)
 {
-	struct bus1_peer_info peer = {};
+	struct bus1_peer peer = {};
 	struct bus1_user *owner, *user1, *user2;
 	int r;
 

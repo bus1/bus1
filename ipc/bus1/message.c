@@ -29,7 +29,7 @@
  * @n_files:		number of files to pre-allocate
  * @n_handles:		number of handles to pre-allocate
  * @n_secctx:		number of bytes of the security context to transmit
- * @peer_info:		sending peer
+ * @peer:		sending peer
  *
  * This allocates a new, unused message for free use to the caller. Storage for
  * files and handles is (partially) pre-allocated. The number of embedded
@@ -42,7 +42,7 @@ struct bus1_message *bus1_message_new(size_t n_bytes,
 				      size_t n_files,
 				      size_t n_handles,
 				      size_t n_secctx,
-				      struct bus1_peer_info *peer_info)
+				      struct bus1_peer *peer)
 {
 	struct bus1_message *message;
 	size_t base_size, fds_size;
@@ -62,9 +62,9 @@ struct bus1_message *bus1_message_new(size_t n_bytes,
 	message->pid = 0;
 	message->tid = 0;
 	bus1_queue_node_init(&message->qnode, BUS1_QUEUE_NODE_MESSAGE,
-			     (unsigned long)peer_info);
+			     (unsigned long)peer);
 	atomic_set(&message->n_pins, 0);
-	message->user = bus1_user_ref(peer_info->user);
+	message->user = bus1_user_ref(peer->user);
 	message->slice = NULL;
 	message->files = (void *)((u8 *)message + base_size);
 	message->n_bytes = n_bytes; /* does *not* match slice->size! */
@@ -130,7 +130,7 @@ struct bus1_message *bus1_message_unref(struct bus1_message *message)
 /**
  * bus1_message_allocate() - allocate message resources
  * @message:		message to operate on
- * @peer_info:		owning peer of the message
+ * @peer:		owning peer of the message
  *
  * Allocate a pool slice for the given message, and charge the quota of the
  * given user for all the associated in-flight resources.
@@ -141,7 +141,7 @@ struct bus1_message *bus1_message_unref(struct bus1_message *message)
  * Return: 0 on success, negative error code on failure.
  */
 int bus1_message_allocate(struct bus1_message *message,
-			  struct bus1_peer_info *peer_info)
+			  struct bus1_peer *peer)
 {
 	struct bus1_pool_slice *slice;
 	size_t slice_size;
@@ -159,17 +159,17 @@ int bus1_message_allocate(struct bus1_message *message,
 	/* empty slices are forbidden, so make sure to allocate a minimum */
 	slice_size = max_t(size_t, slice_size, 8);
 
-	mutex_lock(&peer_info->lock);
+	mutex_lock(&peer->lock);
 
-	r = bus1_user_quota_charge(peer_info, message->user, slice_size,
+	r = bus1_user_quota_charge(peer, message->user, slice_size,
 				   message->handles.batch.n_entries,
 				   message->n_files);
 	if (r < 0)
 		goto exit;
 
-	slice = bus1_pool_alloc(&peer_info->pool, slice_size);
+	slice = bus1_pool_alloc(&peer->pool, slice_size);
 	if (IS_ERR(slice)) {
-		bus1_user_quota_discharge(peer_info, message->user, slice_size,
+		bus1_user_quota_discharge(peer, message->user, slice_size,
 					  message->handles.batch.n_entries,
 					  message->n_files);
 		r = PTR_ERR(slice);
@@ -182,30 +182,30 @@ int bus1_message_allocate(struct bus1_message *message,
 	r = 0;
 
 exit:
-	mutex_unlock(&peer_info->lock);
+	mutex_unlock(&peer->lock);
 	return r;
 }
 
 static void bus1_message_deallocate(struct bus1_message *message,
-				    struct bus1_peer_info *peer_info)
+				    struct bus1_peer *peer)
 {
-	mutex_lock(&peer_info->lock);
+	mutex_lock(&peer->lock);
 	if (message->slice) {
-		bus1_user_quota_commit(peer_info, message->user,
+		bus1_user_quota_commit(peer, message->user,
 				       message->slice->size,
 				       message->handles.batch.n_entries,
 				       message->n_files);
 		if (!bus1_pool_slice_is_public(message->slice))
-			atomic_inc(&peer_info->user->n_slices);
+			atomic_inc(&peer->user->n_slices);
 		if (message->n_accounted_handles > 0)
 			atomic_add(message->n_accounted_handles,
-				   &peer_info->user->n_handles);
-		message->slice = bus1_pool_release_kernel(&peer_info->pool,
+				   &peer->user->n_handles);
+		message->slice = bus1_pool_release_kernel(&peer->pool,
 							  message->slice);
 	}
-	mutex_unlock(&peer_info->lock);
+	mutex_unlock(&peer->lock);
 
-	bus1_handle_inflight_flush(&message->handles, peer_info);
+	bus1_handle_inflight_flush(&message->handles, peer);
 }
 
 /**
@@ -229,7 +229,7 @@ struct bus1_message *bus1_message_pin(struct bus1_message *message)
 /**
  * bus1_message_unpin() - release pinned message resources
  * @message:		message to unpin, or NULL
- * @peer_info:		owner of the message
+ * @peer:		owner of the message
  *
  * This unpins the resources of the message. If this was the last pin, the
  * resources are deallocated and flushed.
@@ -239,27 +239,27 @@ struct bus1_message *bus1_message_pin(struct bus1_message *message)
  * Return: NULL is returned.
  */
 struct bus1_message *bus1_message_unpin(struct bus1_message *message,
-					struct bus1_peer_info *peer_info)
+					struct bus1_peer *peer)
 {
 	if (message && atomic_dec_and_test(&message->n_pins))
-		bus1_message_deallocate(message, peer_info);
+		bus1_message_deallocate(message, peer);
 	return NULL;
 }
 
 /**
  * bus1_message_install() - install message payload into target process
  * @message:		message to operate on
- * @peer_info:		calling peer
+ * @peer:		calling peer
  * @inst_fds:		whether to install FDs
  *
- * This installs the payload FDs and handles of @message into @peer_info and
+ * This installs the payload FDs and handles of @message into @peer and
  * the calling process. Handles are always installed, FDs are only installed if
  * explicitly requested via @inst_fds.
  *
  * Return: 0 on success, negative error code on failure.
  */
 int bus1_message_install(struct bus1_message *message,
-			 struct bus1_peer_info *peer_info,
+			 struct bus1_peer *peer,
 			 struct bus1_cmd_recv *param)
 {
 	const bool inst_fds = param->flags & BUS1_RECV_FLAG_INSTALL_FDS;
@@ -270,7 +270,7 @@ int bus1_message_install(struct bus1_message *message,
 	struct kvec vec;
 	void *iter;
 
-	lockdep_assert_held(&peer_info->lock);
+	lockdep_assert_held(&peer->lock);
 
 	if (BUS1_WARN_ON(!message->slice))
 		return -ENOTRECOVERABLE;
@@ -300,7 +300,7 @@ int bus1_message_install(struct bus1_message *message,
 		pos = 0;
 
 		while ((n = bus1_handle_inflight_walk(&message->handles,
-						peer_info, &pos, &n_handles,
+						peer, &pos, &n_handles,
 						&iter, ids, ts,
 						message->qnode.sender)) > 0) {
 			BUS1_WARN_ON(n > n_ids);
@@ -308,7 +308,7 @@ int bus1_message_install(struct bus1_message *message,
 			vec.iov_base = ids;
 			vec.iov_len = n * sizeof(u64);
 
-			r = bus1_pool_write_kvec(&peer_info->pool,
+			r = bus1_pool_write_kvec(&peer->pool,
 						 message->slice, offset, &vec,
 						 1, vec.iov_len);
 			if (r < 0)
@@ -340,7 +340,7 @@ int bus1_message_install(struct bus1_message *message,
 			 ALIGN(message->handles.batch.n_entries * sizeof(u64),
 			       8);
 
-		r = bus1_pool_write_kvec(&peer_info->pool, message->slice,
+		r = bus1_pool_write_kvec(&peer->pool, message->slice,
 					 offset, &vec, 1, vec.iov_len);
 		if (r < 0)
 			goto exit;
@@ -351,10 +351,10 @@ int bus1_message_install(struct bus1_message *message,
 		if (!peek) {
 			BUS1_WARN_ON(n_handles > message->n_accounted_handles);
 			atomic_add(message->n_accounted_handles - n_handles,
-				   &peer_info->user->n_handles);
+				   &peer->user->n_handles);
 			message->n_accounted_handles = 0;
 			n_handles = 0;
-		} else if (!bus1_atomic_sub_if_ge(&peer_info->user->n_handles,
+		} else if (!bus1_atomic_sub_if_ge(&peer->user->n_handles,
 						  n_handles, n_handles)) {
 			r = -EDQUOT;
 			goto exit;
@@ -362,11 +362,11 @@ int bus1_message_install(struct bus1_message *message,
 	}
 
 	/* publish pool slice */
-	bus1_pool_publish(&peer_info->pool, message->slice);
+	bus1_pool_publish(&peer->pool, message->slice);
 
 	/* commit handles */
 	if (n_ids > 0)
-		bus1_handle_inflight_commit(&message->handles, peer_info, ts,
+		bus1_handle_inflight_commit(&message->handles, peer, ts,
 					    message->qnode.sender);
 
 	/* commit FDs */

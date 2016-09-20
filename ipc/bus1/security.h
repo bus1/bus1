@@ -19,24 +19,24 @@
  */
 
 struct bus1_node;
-struct bus1_peer_info;
+struct bus1_peer;
 struct file;
 
-static inline int security_bus1_transfer_message(struct bus1_peer_info *from,
-						 struct bus1_peer_info *to)
+static inline int security_bus1_transfer_message(struct bus1_peer *from,
+						 struct bus1_peer *to)
 {
 	return 0;
 }
 
-static inline int security_bus1_transfer_handle(struct bus1_peer_info *from,
-						struct bus1_peer_info *to,
+static inline int security_bus1_transfer_handle(struct bus1_peer *from,
+						struct bus1_peer *to,
 						struct bus1_node *node)
 {
 	return 0;
 }
 
-static inline int security_bus1_transfer_file(struct bus1_peer_info *from,
-					      struct bus1_peer_info *to,
+static inline int security_bus1_transfer_file(struct bus1_peer *from,
+					      struct bus1_peer *to,
 					      struct file *what)
 {
 	return 0;

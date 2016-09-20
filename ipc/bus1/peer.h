@@ -37,31 +37,41 @@
 struct bus1_message;
 
 /**
- * struct bus1_peer_info - peer specific runtime information
- * @rcu:			rcu
- * @lock:			data lock
+ * struct bus1_peer - peer handle
+ * @id:				unique peer ID
  * @flags:			peer flags
  * @cred:			user creds
  * @pid_ns:			user pid namespace
  * @user:			object owner
  * @quota:			quota handling
+ * @waitq:			peer wide wait queue
+ * @active:			active references
+ * @debugdir:			debugfs directory, or NULL/ERR_PTR
+ * @rcu:			rcu
+ * @lock:			data lock
  * @pool:			data pool
  * @queue:			message queue, rcu-accessible
+ * @seed:			seed message
  * @map_handles_by_id:		map of owned handles, by handle id
  * @map_handles_by_node:	map of owned handles, by node pointer
  * @seqcount:			sequence counter
  * @handle_ids:			handle ID allocator
  */
-struct bus1_peer_info {
-	union {
-		struct rcu_head rcu;
-		struct mutex lock;
-	};
+struct bus1_peer {
+	u64 id;
 	u64 flags;
 	const struct cred *cred;
 	struct pid_namespace *pid_ns;
 	struct bus1_user *user;
 	struct bus1_user_quota quota;
+	wait_queue_head_t waitq;
+	struct bus1_active active;
+	union {
+		struct dentry *debugdir;
+		struct rcu_head rcu;
+	};
+
+	struct mutex lock;
 	struct bus1_pool pool;
 	struct bus1_queue queue;
 	struct bus1_message *seed;
@@ -69,26 +79,6 @@ struct bus1_peer_info {
 	struct rb_root map_handles_by_node;
 	struct seqcount seqcount;
 	u64 handle_ids;
-};
-
-/**
- * struct bus1_peer - peer handle
- * @rcu:		rcu
- * @debugdir:		debugfs directory, or NULL/ERR_PTR
- * @waitq:		peer wide wait queue
- * @active:		active references
- * @info:		underlying peer information
- * @id:			unique peer ID
- */
-struct bus1_peer {
-	union {
-		struct rcu_head rcu;
-		struct dentry *debugdir;
-	};
-	wait_queue_head_t waitq;
-	struct bus1_active active;
-	struct bus1_peer_info __rcu *info;
-	u64 id;
 };
 
 /**
@@ -103,7 +93,6 @@ struct bus1_peer_list {
 
 struct bus1_peer *bus1_peer_new(void);
 struct bus1_peer *bus1_peer_free(struct bus1_peer *peer);
-int bus1_peer_connect(struct bus1_peer *peer);
 int bus1_peer_disconnect(struct bus1_peer *peer);
 int bus1_peer_ioctl(struct bus1_peer *peer,
 		    unsigned int cmd,
@@ -157,32 +146,8 @@ static inline struct bus1_peer *bus1_peer_release(struct bus1_peer *peer)
 }
 
 /**
- * bus1_peer_dereference() - dereference a peer
- * @peer:	peer to dereference
- *
- * Dereference a peer to get access to the underlying peer info object. This
- * function simply returns the pointer to the linked peer information object,
- * which then can be accessed directly by the caller. The caller must hold an
- * active reference to the peer, and retain it as long as the peer info object
- * is used.
- *
- * You are perfectly free to access @peer->info directly, if you are aware of
- * the lifetime restrictions. This function provides lockdep-annotations to
- * protect against gross misuse.
- *
- * Return: Pointer to the underlying peer information object is returned.
- */
-static inline struct bus1_peer_info *
-bus1_peer_dereference(struct bus1_peer *peer)
-{
-	return rcu_dereference_protected(peer->info,
-					 lockdep_is_held(&peer->active));
-}
-
-/**
  * bus1_peer_list_bind() - temporarily bind a peer of a peer list
  * @list:		entry to bind
- * @peer_infop:		return storage for dereferenced peer-info, or NULL
  *
  * Whenever you deal with an unbound set of peers that must be acquired at the
  * same time, we need to work around lockdep limitations (see
@@ -199,12 +164,9 @@ bus1_peer_dereference(struct bus1_peer *peer)
  * Return: Pointer to bound peer.
  */
 static inline struct bus1_peer *
-bus1_peer_list_bind(struct bus1_peer_list *list,
-		    struct bus1_peer_info **peer_infop)
+bus1_peer_list_bind(struct bus1_peer_list *list)
 {
 	bus1_active_lockdep_acquired(&list->peer->active);
-	if (peer_infop)
-		*peer_infop = bus1_peer_dereference(list->peer);
 	return list->peer;
 }
 

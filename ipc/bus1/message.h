@@ -27,7 +27,6 @@
 
 struct bus1_message;
 struct bus1_peer;
-struct bus1_peer_info;
 struct bus1_pool_slice;
 struct bus1_user;
 
@@ -83,17 +82,17 @@ struct bus1_message *bus1_message_new(size_t n_bytes,
 				      size_t n_files,
 				      size_t n_handles,
 				      size_t n_secctx,
-				      struct bus1_peer_info *peer_info);
+				      struct bus1_peer *peer);
 struct bus1_message *bus1_message_ref(struct bus1_message *message);
 struct bus1_message *bus1_message_unref(struct bus1_message *message);
 int bus1_message_allocate(struct bus1_message *message,
-			  struct bus1_peer_info *peer_info);
+			  struct bus1_peer *peer);
 int bus1_message_install(struct bus1_message *message,
-			 struct bus1_peer_info *peer_info,
+			 struct bus1_peer *peer,
 			 struct bus1_cmd_recv *param);
 struct bus1_message *bus1_message_pin(struct bus1_message *message);
 struct bus1_message *bus1_message_unpin(struct bus1_message *message,
-					struct bus1_peer_info *peer_info);
+					struct bus1_peer *peer);
 
 /**
  * bus1_message_from_node - get parent message of a queue node

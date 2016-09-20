@@ -38,7 +38,6 @@
 struct bus1_transaction {
 	/* sender context */
 	struct bus1_peer *peer;
-	struct bus1_peer_info *peer_info;
 	struct bus1_cmd_send *param;
 	const struct cred *cred;
 	struct pid *pid;
@@ -86,7 +85,6 @@ static void bus1_transaction_init(struct bus1_transaction *transaction,
 				  struct bus1_cmd_send *param)
 {
 	transaction->peer = peer;
-	transaction->peer_info = bus1_peer_dereference(peer);
 	transaction->param = param;
 	transaction->cred = current_cred();
 	transaction->pid = task_tgid(current);
@@ -110,7 +108,7 @@ static void bus1_transaction_init(struct bus1_transaction *transaction,
 
 static void bus1_transaction_destroy(struct bus1_transaction *transaction)
 {
-	struct bus1_peer_info *peer_info;
+	struct bus1_peer *peer;
 	struct bus1_handle_dest dest;
 	struct bus1_peer_list link;
 	struct bus1_message *message;
@@ -120,21 +118,21 @@ static void bus1_transaction_destroy(struct bus1_transaction *transaction)
 		link = message->transaction.link;
 		dest = message->transaction.dest;
 		transaction->entries = link.next;
-		bus1_peer_list_bind(&link, &peer_info);
+		peer = bus1_peer_list_bind(&link);
 
-		bus1_queue_remove(&peer_info->queue, &message->qnode);
-		bus1_message_unpin(message, peer_info);
+		bus1_queue_remove(&peer->queue, &message->qnode);
+		bus1_message_unpin(message, peer);
 		bus1_message_unref(message);
 
 		bus1_peer_list_unbind(&link);
-		bus1_handle_dest_destroy(&dest, transaction->peer_info);
+		bus1_handle_dest_destroy(&dest, transaction->peer);
 	}
 
 	for (i = 0; i < transaction->param->n_fds; ++i)
 		bus1_fput(transaction->files[i]);
 
 	bus1_handle_transfer_release(&transaction->handles,
-				     transaction->peer_info);
+				     transaction->peer);
 	bus1_handle_transfer_destroy(&transaction->handles);
 
 	if (transaction->has_secctx)
@@ -176,7 +174,7 @@ static int bus1_transaction_import_handles(struct bus1_transaction *transaction)
 
 	ptr_handles = (const u64 __user *)(unsigned long)param->ptr_handles;
 	return bus1_handle_transfer_import(&transaction->handles,
-					   transaction->peer_info,
+					   transaction->peer,
 					   ptr_handles,
 					   param->n_handles);
 }
@@ -303,17 +301,17 @@ bus1_transaction_free(struct bus1_transaction *transaction, u8 *stack_buffer)
 
 static struct bus1_message *
 bus1_transaction_instantiate_message(struct bus1_transaction *transaction,
-				     struct bus1_peer_info *peer_info)
+				     struct bus1_peer *peer)
 {
 	struct bus1_message *message;
-	const bool want_secctx = READ_ONCE(peer_info->flags) &
+	const bool want_secctx = READ_ONCE(peer->flags) &
 						BUS1_PEER_FLAG_WANT_SECCTX;
 	const bool transmit_secctx = want_secctx && transaction->has_secctx;
 	size_t offset, i;
 	struct kvec vec;
 	int r;
 
-	r = security_bus1_transfer_message(transaction->peer_info, peer_info);
+	r = security_bus1_transfer_message(transaction->peer, peer);
 	if (r < 0)
 		return ERR_PTR(r);
 
@@ -321,17 +319,17 @@ bus1_transaction_instantiate_message(struct bus1_transaction *transaction,
 				   transaction->param->n_fds,
 				   transaction->param->n_handles,
 				   transmit_secctx ? transaction->n_secctx : 0,
-				   transaction->peer_info);
+				   transaction->peer);
 	if (IS_ERR(message))
 		return message;
 
-	r = bus1_message_allocate(message, peer_info);
+	r = bus1_message_allocate(message, peer);
 	if (r < 0) {
 		bus1_message_unref(message);
 		return ERR_PTR(r);
 	}
 
-	r = bus1_pool_write_iovec(&peer_info->pool,	/* pool to write to */
+	r = bus1_pool_write_iovec(&peer->pool,	/* pool to write to */
 				  message->slice,	/* slice to write to */
 				  0,			/* offset into slice */
 				  transaction->vecs,	/* vectors */
@@ -350,7 +348,7 @@ bus1_transaction_instantiate_message(struct bus1_transaction *transaction,
 			.iov_len = transaction->n_secctx,
 		};
 
-		r = bus1_pool_write_kvec(&peer_info->pool,
+		r = bus1_pool_write_kvec(&peer->pool,
 					 message->slice,
 					 offset,
 					 &vec,
@@ -362,22 +360,22 @@ bus1_transaction_instantiate_message(struct bus1_transaction *transaction,
 		message->flags |= BUS1_MSG_FLAG_HAS_SECCTX;
 	}
 
-	r = bus1_handle_inflight_import(&message->handles, peer_info,
+	r = bus1_handle_inflight_import(&message->handles, peer,
 					&transaction->handles,
-					transaction->peer_info);
+					transaction->peer);
 	if (r < 0)
 		goto error;
 
-	message->uid = from_kuid_munged(peer_info->cred->user_ns,
+	message->uid = from_kuid_munged(peer->cred->user_ns,
 					transaction->cred->uid);
-	message->gid = from_kgid_munged(peer_info->cred->user_ns,
+	message->gid = from_kgid_munged(peer->cred->user_ns,
 					transaction->cred->gid);
-	message->pid = pid_nr_ns(transaction->pid, peer_info->pid_ns);
-	message->tid = pid_nr_ns(transaction->tid, peer_info->pid_ns);
+	message->pid = pid_nr_ns(transaction->pid, peer->pid_ns);
+	message->tid = pid_nr_ns(transaction->tid, peer->pid_ns);
 
 	for (i = 0; i < transaction->param->n_fds; ++i) {
-		r = security_bus1_transfer_file(transaction->peer_info,
-						peer_info,
+		r = security_bus1_transfer_file(transaction->peer,
+						peer,
 						transaction->files[i]);
 		if (r < 0)
 			goto error;
@@ -388,7 +386,7 @@ bus1_transaction_instantiate_message(struct bus1_transaction *transaction,
 	return message;
 
 error:
-	bus1_message_unpin(message, peer_info);
+	bus1_message_unpin(message, peer);
 	bus1_message_unref(message);
 	return ERR_PTR(r);
 }
@@ -408,7 +406,7 @@ void bus1_transaction_instantiate_for_id(struct bus1_transaction *transaction,
 					 size_t index)
 {
 	struct bus1_cmd_send *param = transaction->param;
-	struct bus1_peer_info *peer_info;
+	struct bus1_peer *peer;
 	u64 __user *idp, __user *errorp;
 	struct bus1_handle_dest dest;
 	struct bus1_peer_list link;
@@ -429,8 +427,8 @@ void bus1_transaction_instantiate_for_id(struct bus1_transaction *transaction,
 	link.peer = dest.raw_peer;
 	link.next = transaction->entries;
 
-	bus1_peer_list_bind(&link, &peer_info);
-	message = bus1_transaction_instantiate_message(transaction, peer_info);
+	peer = bus1_peer_list_bind(&link);
+	message = bus1_transaction_instantiate_message(transaction, peer);
 	bus1_peer_list_unbind(&link);
 
 	if (IS_ERR(message)) {
@@ -446,7 +444,7 @@ void bus1_transaction_instantiate_for_id(struct bus1_transaction *transaction,
 	return;
 
 error:
-	bus1_handle_dest_destroy(&dest, transaction->peer_info);
+	bus1_handle_dest_destroy(&dest, transaction->peer);
 	/*
 	 * If an error happens, we remember it for commit() to return. We always
 	 * continue with the remaining messages of the transaction, so failure
@@ -465,32 +463,30 @@ static void bus1_transaction_commit_one(struct bus1_transaction *transaction,
 					struct bus1_handle_dest *dest,
 					u64 timestamp)
 {
-	struct bus1_peer_info *peer_info;
+	struct bus1_peer *peer = dest->raw_peer;
 	u64 id;
 
-	peer_info = bus1_peer_dereference(dest->raw_peer);
-
-	mutex_lock(&peer_info->lock);
-	id = bus1_handle_dest_export(dest, peer_info, timestamp,
+	mutex_lock(&peer->lock);
+	id = bus1_handle_dest_export(dest, peer, timestamp,
 				     message->qnode.sender, true);
-	mutex_unlock(&peer_info->lock);
+	mutex_unlock(&peer->lock);
 	if (id == BUS1_HANDLE_INVALID) {
 		/*
 		 * The destination node is no longer valid, and the CONTINUE
 		 * flag was set. Drop the message.
 		 */
-		bus1_queue_remove(&peer_info->queue, &message->qnode);
-		bus1_message_unpin(message, peer_info);
+		bus1_queue_remove(&peer->queue, &message->qnode);
+		bus1_message_unpin(message, peer);
 	} else {
 		message->destination = id;
 
-		if (!bus1_queue_commit_staged(&peer_info->queue,
+		if (!bus1_queue_commit_staged(&peer->queue,
 					      &message->qnode, timestamp)) {
 			/*
 			 * The message has been flushed from the queue, but it
 			 * has not been cleaned up. Release all resources.
 			 */
-			bus1_message_unpin(message, peer_info);
+			bus1_message_unpin(message, peer);
 		}
 	}
 
@@ -523,12 +519,11 @@ static void bus1_transaction_commit_one(struct bus1_transaction *transaction,
 int bus1_transaction_commit(struct bus1_transaction *transaction)
 {
 	struct bus1_cmd_send *param = transaction->param;
-	struct bus1_peer_info *peer_info;
+	struct bus1_peer *peer;
 	struct bus1_message *message, *list;
 	u64 __user *idp, __user *errorp;
 	struct bus1_handle_dest dest;
 	struct bus1_peer_list link;
-	struct bus1_peer *peer;
 	u64 id, timestamp;
 	int r;
 
@@ -546,9 +541,8 @@ int bus1_transaction_commit(struct bus1_transaction *transaction)
 	 * all messages after @timestamp are blocked on all destination queues.
 	 */
 	for (message = list; message; message = message->transaction.link.next) {
-		peer = bus1_peer_list_bind(&message->transaction.link,
-					   &peer_info);
-		timestamp = bus1_queue_stage(&peer_info->queue, &message->qnode,
+		peer = bus1_peer_list_bind(&message->transaction.link);
+		timestamp = bus1_queue_stage(&peer->queue, &message->qnode,
 					     timestamp);
 		bus1_peer_list_unbind(&message->transaction.link);
 	}
@@ -559,10 +553,10 @@ int bus1_transaction_commit(struct bus1_transaction *transaction)
 	 * sending clock. Note that it may not be unique on the destination
 	 * queues.
 	 */
-	mutex_lock(&transaction->peer_info->queue.lock);
-	timestamp = bus1_queue_sync(&transaction->peer_info->queue, timestamp);
-	timestamp = bus1_queue_tick(&transaction->peer_info->queue);
-	mutex_unlock(&transaction->peer_info->queue.lock);
+	mutex_lock(&transaction->peer->queue.lock);
+	timestamp = bus1_queue_sync(&transaction->peer->queue, timestamp);
+	timestamp = bus1_queue_tick(&transaction->peer->queue);
+	mutex_unlock(&transaction->peer->queue.lock);
 
 	/*
 	 * Sync all the destination queues to the final timestamp. This
@@ -571,18 +565,17 @@ int bus1_transaction_commit(struct bus1_transaction *transaction)
 	 * timestamp than the final one for this transaction.
 	 */
 	for (message = list; message; message = message->transaction.link.next) {
-		peer = bus1_peer_list_bind(&message->transaction.link,
-					   &peer_info);
+		peer = bus1_peer_list_bind(&message->transaction.link);
 
-		mutex_lock(&peer_info->queue.lock);
-		bus1_queue_sync(&peer_info->queue, timestamp);
-		mutex_unlock(&peer_info->queue.lock);
+		mutex_lock(&peer->queue.lock);
+		bus1_queue_sync(&peer->queue, timestamp);
+		mutex_unlock(&peer->queue.lock);
 
-		mutex_lock(&peer_info->lock);
+		mutex_lock(&peer->lock);
 		id = bus1_handle_dest_export(&message->transaction.dest,
-					     peer_info, timestamp,
+					     peer, timestamp,
 					     message->qnode.sender, false);
-		mutex_unlock(&peer_info->lock);
+		mutex_unlock(&peer->lock);
 
 		bus1_peer_list_unbind(&message->transaction.link);
 
@@ -605,11 +598,11 @@ int bus1_transaction_commit(struct bus1_transaction *transaction)
 
 	if (param->n_handles) {
 		idp = (u64 __user *)(unsigned long)param->ptr_handles;
-		mutex_lock(&transaction->peer_info->lock);
+		mutex_lock(&transaction->peer->lock);
 		r = bus1_handle_transfer_export(&transaction->handles,
 						transaction->peer,
 						idp, param->n_handles);
-		mutex_unlock(&transaction->peer_info->lock);
+		mutex_unlock(&transaction->peer->lock);
 		if (r < 0)
 			return r;
 	}
@@ -634,14 +627,14 @@ int bus1_transaction_commit(struct bus1_transaction *transaction)
 		dest = message->transaction.dest;
 		transaction->entries = link.next;
 
-		peer = bus1_peer_list_bind(&link, &peer_info);
+		peer = bus1_peer_list_bind(&link);
 
 		bus1_handle_inflight_install(&message->handles, dest.raw_peer);
 		bus1_transaction_commit_one(transaction, message, &dest,
 					    timestamp);
 
 		bus1_peer_list_unbind(&link);
-		bus1_handle_dest_destroy(&dest, transaction->peer_info);
+		bus1_handle_dest_destroy(&dest, transaction->peer);
 	}
 
 	return 0;
@@ -666,26 +659,26 @@ int bus1_transaction_commit_seed(struct bus1_transaction *transaction)
 	idp = (u64 __user *)(unsigned long)transaction->param->ptr_handles;
 
 	seed = bus1_transaction_instantiate_message(transaction,
-						    transaction->peer_info);
+						    transaction->peer);
 	if (IS_ERR(seed))
 		return PTR_ERR(seed);
 
-	mutex_lock(&transaction->peer_info->lock);
+	mutex_lock(&transaction->peer->lock);
 	r = bus1_handle_transfer_export(&transaction->handles,
 					transaction->peer,
 					idp, transaction->param->n_handles);
-	mutex_unlock(&transaction->peer_info->lock);
+	mutex_unlock(&transaction->peer->lock);
 	if (r < 0)
 		goto exit;
 
 	bus1_handle_inflight_install(&seed->handles, transaction->peer);
 
-	mutex_lock(&transaction->peer_info->lock);
-	swap(seed, transaction->peer_info->seed);
-	mutex_unlock(&transaction->peer_info->lock);
+	mutex_lock(&transaction->peer->lock);
+	swap(seed, transaction->peer->seed);
+	mutex_unlock(&transaction->peer->lock);
 
 exit:
-	bus1_message_unpin(seed, transaction->peer_info);
+	bus1_message_unpin(seed, transaction->peer);
 	bus1_message_unref(seed);
 	return r;
 }

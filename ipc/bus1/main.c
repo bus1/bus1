@@ -36,22 +36,13 @@
 static int bus1_fop_open(struct inode *inode, struct file *file)
 {
 	struct bus1_peer *peer;
-	int r;
 
 	peer = bus1_peer_new();
 	if (IS_ERR(peer))
 		return PTR_ERR(peer);
 
-	r = bus1_peer_connect(peer);
-	if (r < 0)
-		goto error;
-
 	file->private_data = peer;
 	return 0;
-
-error:
-	bus1_peer_free(peer);
-	return r;
 }
 
 static int bus1_fop_release(struct inode *inode, struct file *file)
@@ -68,7 +59,6 @@ static unsigned int bus1_fop_poll(struct file *file,
 				  struct poll_table_struct *wait)
 {
 	struct bus1_peer *peer = file->private_data;
-	struct bus1_peer_info *peer_info;
 	unsigned int mask;
 
 	poll_wait(file, &peer->waitq, wait);
@@ -80,12 +70,11 @@ static unsigned int bus1_fop_poll(struct file *file,
 	 * writable. If data is queued, it is readable as well.
 	 */
 	rcu_read_lock();
-	peer_info = rcu_dereference(peer->info);
-	if (!peer_info || bus1_active_is_deactivated(&peer->active)) {
+	if (bus1_active_is_deactivated(&peer->active)) {
 		mask = POLLHUP;
 	} else {
 		mask = POLLOUT | POLLWRNORM;
-		if (bus1_queue_is_readable(&peer_info->queue))
+		if (bus1_queue_is_readable(&peer->queue))
 			mask |= POLLIN | POLLRDNORM;
 	}
 	rcu_read_unlock();
@@ -96,15 +85,12 @@ static unsigned int bus1_fop_poll(struct file *file,
 static int bus1_fop_mmap(struct file *file, struct vm_area_struct *vma)
 {
 	struct bus1_peer *peer = file->private_data;
-	struct bus1_peer_info *peer_info;
 	int r;
 
 	if (!bus1_peer_acquire(peer))
 		return -ESHUTDOWN;
 
-	peer_info = bus1_peer_dereference(peer);
-
-	r = bus1_pool_mmap(&peer_info->pool, vma);
+	r = bus1_pool_mmap(&peer->pool, vma);
 	bus1_peer_release(peer);
 	return r;
 }
