@@ -74,7 +74,7 @@ static unsigned int bus1_fop_poll(struct file *file,
 		mask = POLLHUP;
 	} else {
 		mask = POLLOUT | POLLWRNORM;
-		if (bus1_queue_is_readable(&peer->queue))
+		if (bus1_queue_is_readable(&peer->data.queue))
 			mask |= POLLIN | POLLRDNORM;
 	}
 	rcu_read_unlock();
@@ -90,7 +90,7 @@ static int bus1_fop_mmap(struct file *file, struct vm_area_struct *vma)
 	if (!bus1_peer_acquire(peer))
 		return -ESHUTDOWN;
 
-	r = bus1_pool_mmap(&peer->pool, vma);
+	r = bus1_pool_mmap(&peer->data.pool, vma);
 	bus1_peer_release(peer);
 	return r;
 }

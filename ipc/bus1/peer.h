@@ -48,14 +48,14 @@ struct bus1_message;
  * @active:			active references
  * @debugdir:			debugfs directory, or NULL/ERR_PTR
  * @rcu:			rcu
- * @lock:			data lock
- * @pool:			data pool
- * @queue:			message queue, rcu-accessible
- * @seed:			seed message
- * @map_handles_by_id:		map of owned handles, by handle id
- * @map_handles_by_node:	map of owned handles, by node pointer
+ * @lock:			peer lock
  * @seqcount:			sequence counter
- * @handle_ids:			handle ID allocator
+ * @data.pool:			data pool
+ * @data.queue:			message queue, rcu-accessible
+ * @data.map_handles_by_node:	map of owned handles, by node pointer
+ * @local.seed:			seed message
+ * @local.map_handles_by_id:	map of owned handles, by handle id
+ * @local.handle_ids:		handle ID allocator
  */
 struct bus1_peer {
 	u64 id;
@@ -72,13 +72,19 @@ struct bus1_peer {
 	};
 
 	struct mutex lock;
-	struct bus1_pool pool;
-	struct bus1_queue queue;
-	struct bus1_message *seed;
-	struct rb_root map_handles_by_id;
-	struct rb_root map_handles_by_node;
 	struct seqcount seqcount;
-	u64 handle_ids;
+
+	struct {
+		struct bus1_pool pool;
+		struct bus1_queue queue;
+		struct rb_root map_handles_by_node;
+	} data;
+
+	struct {
+		struct bus1_message *seed;
+		struct rb_root map_handles_by_id;
+		u64 handle_ids;
+	} local;
 };
 
 /**

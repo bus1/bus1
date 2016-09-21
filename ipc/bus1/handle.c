@@ -403,7 +403,7 @@ static void bus1_handle_attach_internal(struct bus1_handle *handle,
 	lockdep_assert_held(&owner->lock);
 
 	/* flush any release-notification whenever a new handle is attached */
-	bus1_queue_remove(&owner->queue, &handle->node->qnode);
+	bus1_queue_remove(&owner->data.queue, &handle->node->qnode);
 }
 
 static void bus1_handle_attach_owner(struct bus1_handle *handle,
@@ -456,7 +456,7 @@ bus1_handle_install_internal(struct bus1_handle *handle,
 	 */
 	write_seqcount_begin(&peer->seqcount);
 	n = NULL;
-	slot = &peer->map_handles_by_node.rb_node;
+	slot = &peer->data.map_handles_by_node.rb_node;
 	while (*slot) {
 		n = *slot;
 		iter = container_of(n, struct bus1_handle, rb_node);
@@ -481,7 +481,7 @@ bus1_handle_install_internal(struct bus1_handle *handle,
 	if (likely(!old)) {
 		rb_link_node_rcu(&handle->rb_node, n, slot);
 		rb_insert_color(&handle->rb_node,
-				&peer->map_handles_by_node);
+				&peer->data.map_handles_by_node);
 		bus1_handle_ref(handle);
 	}
 	write_seqcount_end(&peer->seqcount);
@@ -518,12 +518,12 @@ static void bus1_handle_uninstall_internal(struct bus1_handle *handle,
 
 	write_seqcount_begin(&peer->seqcount);
 	if (!RB_EMPTY_NODE(&handle->rb_node)) {
-		rb_erase(&handle->rb_node, &peer->map_handles_by_node);
+		rb_erase(&handle->rb_node, &peer->data.map_handles_by_node);
 		RB_CLEAR_NODE(&handle->rb_node);
 		bus1_handle_unref(handle);
 	}
 	if (!RB_EMPTY_NODE(&handle->rb_id)) {
-		rb_erase(&handle->rb_id, &peer->map_handles_by_id);
+		rb_erase(&handle->rb_id, &peer->local.map_handles_by_id);
 		RB_CLEAR_NODE(&handle->rb_id);
 	}
 	write_seqcount_end(&peer->seqcount);
@@ -562,7 +562,7 @@ static void bus1_handle_uninstall_holder(struct bus1_handle *handle,
 	 * dequeue it so we can use the handle->qnode as a union for other
 	 * state *after* a handle is uninstalled.
 	 */
-	bus1_queue_remove(&peer->queue, &handle->qnode);
+	bus1_queue_remove(&peer->data.queue, &handle->qnode);
 }
 
 static void bus1_node_commit_notifications(struct bus1_handle *list)
@@ -574,9 +574,9 @@ static void bus1_node_commit_notifications(struct bus1_handle *list)
 	for (h = list; h; h = h->link.next) {
 		peer = bus1_peer_list_bind(&h->link);
 
-		mutex_lock(&peer->queue.lock);
-		bus1_queue_sync(&peer->queue, h->node->timestamp);
-		mutex_unlock(&peer->queue.lock);
+		mutex_lock(&peer->data.queue.lock);
+		bus1_queue_sync(&peer->data.queue, h->node->timestamp);
+		mutex_unlock(&peer->data.queue.lock);
 
 		bus1_peer_list_unbind(&h->link);
 	}
@@ -587,7 +587,7 @@ static void bus1_node_commit_notifications(struct bus1_handle *list)
 		peer = bus1_peer_list_bind(&h->link);
 		INIT_LIST_HEAD(&h->link_node);
 
-		bus1_queue_commit_staged(&peer->queue, &h->qnode,
+		bus1_queue_commit_staged(&peer->data.queue, &h->qnode,
 					 h->node->timestamp);
 
 		bus1_peer_release(peer);
@@ -617,7 +617,7 @@ static void bus1_node_destroy(struct bus1_node *node,
 
 		holder = bus1_handle_acquire_holder(h);
 		if (holder) {
-			timestamp = bus1_queue_stage(&holder->queue,
+			timestamp = bus1_queue_stage(&holder->data.queue,
 						     &h->qnode, timestamp);
 			h->link.peer = holder;
 			h->link.next = list;
@@ -629,12 +629,12 @@ static void bus1_node_destroy(struct bus1_node *node,
 		}
 	}
 
-	mutex_lock(&peer->queue.lock);
-	bus1_queue_sync(&peer->queue, timestamp);
-	node->timestamp = bus1_queue_tick(&peer->queue);
+	mutex_lock(&peer->data.queue.lock);
+	bus1_queue_sync(&peer->data.queue, timestamp);
+	node->timestamp = bus1_queue_tick(&peer->data.queue);
 	/* test_and_set_bit() provides barriers for node->timestamp */
 	WARN_ON(test_and_set_bit(BUS1_NODE_BIT_DESTROYED, &node->flags));
-	mutex_unlock(&peer->queue.lock);
+	mutex_unlock(&peer->data.queue.lock);
 
 	bus1_node_commit_notifications(list);
 
@@ -682,7 +682,7 @@ static void bus1_handle_detach_internal(struct bus1_handle *handle,
 		if (RB_EMPTY_NODE(&handle->node->owner.rb_id))
 			bus1_node_destroy(handle->node, owner);
 		else if (!bus1_node_is_destroyed(handle->node))
-			bus1_queue_commit_unstaged(&owner->queue,
+			bus1_queue_commit_unstaged(&owner->data.queue,
 						   &handle->node->qnode);
 	}
 }
@@ -740,7 +740,7 @@ bus1_handle_acquire(struct bus1_handle *handle,
 				      &handle->node->list_handles);
 
 			/* flush any release-notification */
-			bus1_queue_remove(&peer->queue,
+			bus1_queue_remove(&peer->data.queue,
 					  &handle->node->qnode);
 		}
 		mutex_unlock(&peer->lock);
@@ -895,13 +895,13 @@ static void bus1_handle_refresh_id(struct bus1_handle *handle,
 	 */
 
 	if (!RB_EMPTY_NODE(&handle->rb_id) && !bus1_handle_is_owner(handle)) {
-		rb_erase(&handle->rb_id, &peer->map_handles_by_id);
+		rb_erase(&handle->rb_id, &peer->local.map_handles_by_id);
 		RB_CLEAR_NODE(&handle->rb_id);
 		handle->id = BUS1_HANDLE_INVALID;
 	}
 	if (RB_EMPTY_NODE(&handle->rb_id)) {
 		if (handle->id == BUS1_HANDLE_INVALID)
-			handle->id = (++peer->handle_ids << 2) |
+			handle->id = (++peer->local.handle_ids << 2) |
 							BUS1_NODE_FLAG_MANAGED;
 	}
 }
@@ -961,7 +961,7 @@ static u64 bus1_handle_publish(struct bus1_handle *handle,
 	bus1_handle_refresh_id(handle, peer);
 	if (RB_EMPTY_NODE(&handle->rb_id)) {
 		n = NULL;
-		slot = &peer->map_handles_by_id.rb_node;
+		slot = &peer->local.map_handles_by_id.rb_node;
 		while (*slot) {
 			n = *slot;
 			iter = container_of(n, struct bus1_handle,
@@ -975,7 +975,7 @@ static u64 bus1_handle_publish(struct bus1_handle *handle,
 		}
 		rb_link_node_rcu(&handle->rb_id, n, slot);
 		rb_insert_color(&handle->rb_id,
-				&peer->map_handles_by_id);
+				&peer->local.map_handles_by_id);
 	}
 	write_seqcount_end(&peer->seqcount);
 
@@ -999,7 +999,7 @@ bus1_handle_find_by_id(struct bus1_peer *peer, u64 id)
 	do {
 		res = bus1_handle_unref(res);
 		seq = read_seqcount_begin(&peer->seqcount);
-		n = rcu_dereference(peer->map_handles_by_id.rb_node);
+		n = rcu_dereference(peer->local.map_handles_by_id.rb_node);
 		while (n) {
 			handle = container_of(n, struct bus1_handle, rb_id);
 			if (id == handle->id) {
@@ -1030,7 +1030,7 @@ bus1_handle_find_by_node(struct bus1_peer *peer,
 	do {
 		res = bus1_handle_unref(res);
 		seq = read_seqcount_begin(&peer->seqcount);
-		n = rcu_dereference(peer->map_handles_by_node.rb_node);
+		n = rcu_dereference(peer->data.map_handles_by_node.rb_node);
 		while (n) {
 			handle = container_of(n, struct bus1_handle, rb_node);
 			if (node == handle->node) {
@@ -1349,7 +1349,7 @@ void bus1_handle_flush_all(struct bus1_peer *peer,
 	size_t n_handles = 0;
 
 	mutex_lock(&peer->lock);
-	for (n = rb_first(&peer->map_handles_by_node); n; n = next) {
+	for (n = rb_first(&peer->data.map_handles_by_node); n; n = next) {
 		h = container_of(n, struct bus1_handle, rb_node);
 		next = rb_next(n);
 
@@ -1369,7 +1369,7 @@ void bus1_handle_flush_all(struct bus1_peer *peer,
 			++n_handles;
 			if (atomic_dec_and_test(&h->n_inflight)) {
 				rb_erase(&h->rb_node,
-					 &peer->map_handles_by_node);
+					 &peer->data.map_handles_by_node);
 				RB_CLEAR_NODE(&h->rb_node); /* steal ref */
 				bus1_handle_uninstall_holder(h, peer);
 				BUS1_WARN_ON(!RB_EMPTY_NODE(&h->qnode.rb));

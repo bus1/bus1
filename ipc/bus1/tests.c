@@ -305,7 +305,7 @@ static void bus1_test_quota(void)
 	mutex_init(&peer.lock);
 	peer.user = owner;
 	mutex_lock(&peer.lock);
-	bus1_pool_create(&peer.pool);
+	bus1_pool_create(&peer.data.pool);
 
 	/* charge nothing: allocates the user stats, charge one message */
 	r = bus1_user_quota_charge(&peer, user1, 0, 0, 0);
@@ -516,7 +516,7 @@ static void bus1_test_quota(void)
 	WARN_ON(peer.quota.stats[1].n_bytes != 0);
 	WARN_ON(peer.quota.stats[1].n_fds != 0);
 
-	bus1_pool_destroy(&peer.pool);
+	bus1_pool_destroy(&peer.data.pool);
 	mutex_unlock(&peer.lock);
 	bus1_user_quota_destroy(&peer.quota);
 	WARN_ON(bus1_user_unref(user1));

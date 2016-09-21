@@ -167,7 +167,7 @@ int bus1_message_allocate(struct bus1_message *message,
 	if (r < 0)
 		goto exit;
 
-	slice = bus1_pool_alloc(&peer->pool, slice_size);
+	slice = bus1_pool_alloc(&peer->data.pool, slice_size);
 	if (IS_ERR(slice)) {
 		bus1_user_quota_discharge(peer, message->user, slice_size,
 					  message->handles.batch.n_entries,
@@ -200,7 +200,7 @@ static void bus1_message_deallocate(struct bus1_message *message,
 		if (message->n_accounted_handles > 0)
 			atomic_add(message->n_accounted_handles,
 				   &peer->user->n_handles);
-		message->slice = bus1_pool_release_kernel(&peer->pool,
+		message->slice = bus1_pool_release_kernel(&peer->data.pool,
 							  message->slice);
 	}
 	mutex_unlock(&peer->lock);
@@ -308,7 +308,7 @@ int bus1_message_install(struct bus1_message *message,
 			vec.iov_base = ids;
 			vec.iov_len = n * sizeof(u64);
 
-			r = bus1_pool_write_kvec(&peer->pool,
+			r = bus1_pool_write_kvec(&peer->data.pool,
 						 message->slice, offset, &vec,
 						 1, vec.iov_len);
 			if (r < 0)
@@ -340,7 +340,7 @@ int bus1_message_install(struct bus1_message *message,
 			 ALIGN(message->handles.batch.n_entries * sizeof(u64),
 			       8);
 
-		r = bus1_pool_write_kvec(&peer->pool, message->slice,
+		r = bus1_pool_write_kvec(&peer->data.pool, message->slice,
 					 offset, &vec, 1, vec.iov_len);
 		if (r < 0)
 			goto exit;
@@ -362,7 +362,7 @@ int bus1_message_install(struct bus1_message *message,
 	}
 
 	/* publish pool slice */
-	bus1_pool_publish(&peer->pool, message->slice);
+	bus1_pool_publish(&peer->data.pool, message->slice);
 
 	/* commit handles */
 	if (n_ids > 0)

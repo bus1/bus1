@@ -120,7 +120,7 @@ static void bus1_transaction_destroy(struct bus1_transaction *transaction)
 		transaction->entries = link.next;
 		peer = bus1_peer_list_bind(&link);
 
-		bus1_queue_remove(&peer->queue, &message->qnode);
+		bus1_queue_remove(&peer->data.queue, &message->qnode);
 		bus1_message_unpin(message, peer);
 		bus1_message_unref(message);
 
@@ -329,7 +329,7 @@ bus1_transaction_instantiate_message(struct bus1_transaction *transaction,
 		return ERR_PTR(r);
 	}
 
-	r = bus1_pool_write_iovec(&peer->pool,	/* pool to write to */
+	r = bus1_pool_write_iovec(&peer->data.pool,	/* pool to write to */
 				  message->slice,	/* slice to write to */
 				  0,			/* offset into slice */
 				  transaction->vecs,	/* vectors */
@@ -348,7 +348,7 @@ bus1_transaction_instantiate_message(struct bus1_transaction *transaction,
 			.iov_len = transaction->n_secctx,
 		};
 
-		r = bus1_pool_write_kvec(&peer->pool,
+		r = bus1_pool_write_kvec(&peer->data.pool,
 					 message->slice,
 					 offset,
 					 &vec,
@@ -475,12 +475,12 @@ static void bus1_transaction_commit_one(struct bus1_transaction *transaction,
 		 * The destination node is no longer valid, and the CONTINUE
 		 * flag was set. Drop the message.
 		 */
-		bus1_queue_remove(&peer->queue, &message->qnode);
+		bus1_queue_remove(&peer->data.queue, &message->qnode);
 		bus1_message_unpin(message, peer);
 	} else {
 		message->destination = id;
 
-		if (!bus1_queue_commit_staged(&peer->queue,
+		if (!bus1_queue_commit_staged(&peer->data.queue,
 					      &message->qnode, timestamp)) {
 			/*
 			 * The message has been flushed from the queue, but it
@@ -542,7 +542,7 @@ int bus1_transaction_commit(struct bus1_transaction *transaction)
 	 */
 	for (message = list; message; message = message->transaction.link.next) {
 		peer = bus1_peer_list_bind(&message->transaction.link);
-		timestamp = bus1_queue_stage(&peer->queue, &message->qnode,
+		timestamp = bus1_queue_stage(&peer->data.queue, &message->qnode,
 					     timestamp);
 		bus1_peer_list_unbind(&message->transaction.link);
 	}
@@ -553,10 +553,10 @@ int bus1_transaction_commit(struct bus1_transaction *transaction)
 	 * sending clock. Note that it may not be unique on the destination
 	 * queues.
 	 */
-	mutex_lock(&transaction->peer->queue.lock);
-	timestamp = bus1_queue_sync(&transaction->peer->queue, timestamp);
-	timestamp = bus1_queue_tick(&transaction->peer->queue);
-	mutex_unlock(&transaction->peer->queue.lock);
+	mutex_lock(&transaction->peer->data.queue.lock);
+	timestamp = bus1_queue_sync(&transaction->peer->data.queue, timestamp);
+	timestamp = bus1_queue_tick(&transaction->peer->data.queue);
+	mutex_unlock(&transaction->peer->data.queue.lock);
 
 	/*
 	 * Sync all the destination queues to the final timestamp. This
@@ -567,9 +567,9 @@ int bus1_transaction_commit(struct bus1_transaction *transaction)
 	for (message = list; message; message = message->transaction.link.next) {
 		peer = bus1_peer_list_bind(&message->transaction.link);
 
-		mutex_lock(&peer->queue.lock);
-		bus1_queue_sync(&peer->queue, timestamp);
-		mutex_unlock(&peer->queue.lock);
+		mutex_lock(&peer->data.queue.lock);
+		bus1_queue_sync(&peer->data.queue, timestamp);
+		mutex_unlock(&peer->data.queue.lock);
 
 		mutex_lock(&peer->lock);
 		id = bus1_handle_dest_export(&message->transaction.dest,
@@ -674,7 +674,7 @@ int bus1_transaction_commit_seed(struct bus1_transaction *transaction)
 	bus1_handle_inflight_install(&seed->handles, transaction->peer);
 
 	mutex_lock(&transaction->peer->lock);
-	swap(seed, transaction->peer->seed);
+	swap(seed, transaction->peer->local.seed);
 	mutex_unlock(&transaction->peer->lock);
 
 exit:
