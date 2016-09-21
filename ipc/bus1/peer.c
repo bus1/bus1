@@ -123,6 +123,7 @@ static void bus1_peer_reset(struct bus1_peer *peer, bool final)
 
 	mutex_lock(&peer->data.lock);
 	bus1_queue_flush(&peer->data.queue, &list);
+	bus1_pool_flush(&peer->data.pool, &n_slices);
 	mutex_unlock(&peer->data.lock);
 
 	mutex_lock(&peer->lock);
@@ -130,7 +131,6 @@ static void bus1_peer_reset(struct bus1_peer *peer, bool final)
 		list_add(&peer->local.seed->qnode.link, &list);
 		peer->local.seed = NULL;
 	}
-	bus1_pool_flush(&peer->data.pool, &n_slices);
 	mutex_unlock(&peer->lock);
 
 	atomic_add(n_slices, &peer->user->n_slices);
@@ -427,9 +427,9 @@ static int bus1_peer_ioctl_slice_release(struct bus1_peer *peer,
 	if (get_user(offset, (const u64 __user *)arg))
 		return -EFAULT;
 
-	mutex_lock(&peer->lock);
+	mutex_lock(&peer->data.lock);
 	r = bus1_pool_release_user(&peer->data.pool, offset, &n_slices);
-	mutex_unlock(&peer->lock);
+	mutex_unlock(&peer->data.lock);
 
 	atomic_add(n_slices, &peer->user->n_slices);
 	return r;

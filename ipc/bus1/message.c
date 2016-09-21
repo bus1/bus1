@@ -167,7 +167,9 @@ int bus1_message_allocate(struct bus1_message *message,
 	if (r < 0)
 		goto exit;
 
+	mutex_lock(&peer->data.lock);
 	slice = bus1_pool_alloc(&peer->data.pool, slice_size);
+	mutex_unlock(&peer->data.lock);
 	if (IS_ERR(slice)) {
 		bus1_user_quota_discharge(peer, message->user, slice_size,
 					  message->handles.batch.n_entries,
@@ -200,8 +202,10 @@ static void bus1_message_deallocate(struct bus1_message *message,
 		if (message->n_accounted_handles > 0)
 			atomic_add(message->n_accounted_handles,
 				   &peer->user->n_handles);
+		mutex_lock(&peer->data.lock);
 		message->slice = bus1_pool_release_kernel(&peer->data.pool,
 							  message->slice);
+		mutex_unlock(&peer->data.lock);
 	}
 	mutex_unlock(&peer->lock);
 
