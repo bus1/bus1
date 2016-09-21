@@ -73,6 +73,7 @@ struct bus1_peer *bus1_peer_new(void)
 	mutex_init(&peer->lock);
 	seqcount_init(&peer->seqcount);
 
+	mutex_init(&peer->data.lock);
 	peer->data.pool = BUS1_POOL_NULL;
 	bus1_queue_init(&peer->data.queue, &peer->waitq);
 	peer->data.map_handles_by_node = RB_ROOT;
@@ -119,7 +120,10 @@ static void bus1_peer_reset(struct bus1_peer *peer, bool final)
 	LIST_HEAD(list);
 
 	bus1_handle_flush_all(peer, &n_handles, final);
+
+	mutex_lock(&peer->data.lock);
 	bus1_queue_flush(&peer->data.queue, &list);
+	mutex_unlock(&peer->data.lock);
 
 	mutex_lock(&peer->lock);
 	if (peer->local.seed && final) {
@@ -214,6 +218,7 @@ struct bus1_peer *bus1_peer_free(struct bus1_peer *peer)
 	WARN_ON(!RB_EMPTY_ROOT(&peer->data.map_handles_by_node));
 	bus1_queue_destroy(&peer->data.queue);
 	bus1_pool_destroy(&peer->data.pool);
+	mutex_destroy(&peer->data.lock);
 
 	/* deinitialize constant fields */
 	mutex_destroy(&peer->lock);
@@ -535,9 +540,9 @@ static int bus1_peer_ioctl_recv(struct bus1_peer *peer, unsigned long arg)
 	 * racing RESET might deallocate the resources. In case of seeds the
 	 * lock is redundant, but it is no fast-path, anyway.
 	 */
-	mutex_lock(&peer->data.queue.lock);
+	mutex_lock(&peer->data.lock);
 	if (!(param.flags & BUS1_RECV_FLAG_SEED))
-		node = bus1_queue_peek_locked(&peer->data.queue, &has_continue);
+		node = bus1_queue_peek(&peer->data.queue, &has_continue);
 	else if (peer->local.seed)
 		node = &bus1_message_ref(peer->local.seed)->qnode;
 	if (node) {
@@ -545,7 +550,7 @@ static int bus1_peer_ioctl_recv(struct bus1_peer *peer, unsigned long arg)
 		if (type == BUS1_QUEUE_NODE_MESSAGE)
 			msg = bus1_message_pin(bus1_message_from_node(node));
 	}
-	mutex_unlock(&peer->data.queue.lock);
+	mutex_unlock(&peer->data.lock);
 
 	/*
 	 * Verify the message to return. In case of user messages we need to
@@ -567,8 +572,15 @@ static int bus1_peer_ioctl_recv(struct bus1_peer *peer, unsigned long arg)
 		if (param.flags & BUS1_RECV_FLAG_SEED) {
 			peer->local.seed = bus1_message_unref(msg);
 			bus1_message_unpin(msg, peer);
-		} else if (bus1_queue_remove(&peer->data.queue, node)) {
-			bus1_message_unpin(msg, peer);
+		} else {
+			bool removed;
+
+			mutex_lock(&peer->data.lock);
+			removed = bus1_queue_remove(&peer->data.queue, node);
+			mutex_unlock(&peer->data.lock);
+
+			if (removed)
+				bus1_message_unpin(msg, peer);
 		}
 	}
 

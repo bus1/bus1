@@ -85,7 +85,6 @@
 #include <linux/kernel.h>
 #include <linux/kref.h>
 #include <linux/list.h>
-#include <linux/mutex.h>
 #include <linux/rbtree.h>
 #include <linux/rcupdate.h>
 
@@ -126,14 +125,12 @@ struct bus1_queue_node {
  * @front:		cached front entry
  * @waitq:		pointer to wait-queue to use for wake-ups
  * @messages:		queued messages
- * @lock:		data lock
  */
 struct bus1_queue {
 	u64 clock;
 	struct rb_node __rcu *front;
 	wait_queue_head_t *waitq;
 	struct rb_root messages;
-	struct mutex lock;
 };
 
 void bus1_queue_init(struct bus1_queue *queue, wait_queue_head_t *waitq);
@@ -148,8 +145,8 @@ bool bus1_queue_commit_staged(struct bus1_queue *queue,
 void bus1_queue_commit_unstaged(struct bus1_queue *queue,
 				struct bus1_queue_node *node);
 bool bus1_queue_remove(struct bus1_queue *queue, struct bus1_queue_node *node);
-struct bus1_queue_node *bus1_queue_peek_locked(struct bus1_queue *queue,
-					       bool *continuep);
+struct bus1_queue_node *bus1_queue_peek(struct bus1_queue *queue,
+					bool *continuep);
 
 /**
  * bus1_queue_node_init() - initialize queue node
@@ -197,7 +194,8 @@ static inline void bus1_queue_node_destroy(struct bus1_queue_node *node)
  *
  * This queries the node type that was provided via the node constructor. A
  * node never changes its type during its entire lifetime.
- * The caller must hold the queue lock or own the queue-node.
+ *
+ * The caller must lock the queue or own the queue-node.
  *
  * Return: Type of @node is returned.
  */
@@ -212,8 +210,9 @@ bus1_queue_node_get_type(struct bus1_queue_node *node)
  * bus1_queue_node_get_timestamp() - query node timestamp
  * @node:		node to query
  *
- * This queries the node timestamp that is currently set on this node. The
- * caller must hold the queue lock or own the queue-node.
+ * This queries the node timestamp that is currently set on this node.
+ *
+ * The caller must lock the queue or own the queue-node.
  *
  * Return: Timestamp of @node is returned.
  */
@@ -261,7 +260,7 @@ static inline bool bus1_queue_node_is_staging(struct bus1_queue_node *node)
  * and its predecessor (odd numbered). Both are uniquely allocated to the
  * caller.
  *
- * The caller must hold the queue lock.
+ * The caller must lock the queue.
  *
  * Return: New clock value is returned.
  */
@@ -282,7 +281,7 @@ static inline u64 bus1_queue_tick(struct bus1_queue *queue)
  *
  * The passed in timestamp must be even.
  *
- * The caller must hold the queue lock.
+ * The caller must lock the queue.
  *
  * Return: New clock value is returned.
  */

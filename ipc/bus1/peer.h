@@ -50,6 +50,7 @@ struct bus1_message;
  * @rcu:			rcu
  * @lock:			peer lock
  * @seqcount:			sequence counter
+ * @data.lock:			data lock
  * @data.pool:			data pool
  * @data.queue:			message queue, rcu-accessible
  * @data.map_handles_by_node:	map of owned handles, by node pointer
@@ -75,6 +76,7 @@ struct bus1_peer {
 	struct seqcount seqcount;
 
 	struct {
+		struct mutex lock;
 		struct bus1_pool pool;
 		struct bus1_queue queue;
 		struct rb_root map_handles_by_node;

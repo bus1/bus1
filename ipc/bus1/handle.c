@@ -46,7 +46,7 @@
  * @link:		temporary single-linked list during destruction
  *
  * Handle objects represent an accessor to nodes. A handle is always held by a
- * specific peer, and by that peer only. The peer-lock (or queue-lock,
+ * specific peer, and by that peer only. The peer-lock (or data-lock,
  * respectively) protects access to this handle. Effectively, handles represent
  * a connection between two peers (between the holder of the handle and the
  * owner of its linked node). Such connections can exist both ways, hence, both
@@ -137,7 +137,7 @@ enum bus1_node_bit {
  * Every existing node is represented by a single bus1_node object. A node is
  * always connected to its owner, which is embedded with its own handle as
  * @owner. @ref and @flags must be accessed with atomic operations, everything
- * else is protected by the peer-lock (or queue-lock respectively) of
+ * else is protected by the peer-lock (or data-lock respectively) of
  * node->owner.holder.
  *
  * A node represents the context shared by all handles connected to that node.
@@ -403,7 +403,9 @@ static void bus1_handle_attach_internal(struct bus1_handle *handle,
 	lockdep_assert_held(&owner->lock);
 
 	/* flush any release-notification whenever a new handle is attached */
+	mutex_lock(&owner->data.lock);
 	bus1_queue_remove(&owner->data.queue, &handle->node->qnode);
+	mutex_unlock(&owner->data.lock);
 }
 
 static void bus1_handle_attach_owner(struct bus1_handle *handle,
@@ -562,7 +564,9 @@ static void bus1_handle_uninstall_holder(struct bus1_handle *handle,
 	 * dequeue it so we can use the handle->qnode as a union for other
 	 * state *after* a handle is uninstalled.
 	 */
+	mutex_lock(&peer->data.lock);
 	bus1_queue_remove(&peer->data.queue, &handle->qnode);
+	mutex_unlock(&peer->data.lock);
 }
 
 static void bus1_node_commit_notifications(struct bus1_handle *list)
@@ -574,9 +578,9 @@ static void bus1_node_commit_notifications(struct bus1_handle *list)
 	for (h = list; h; h = h->link.next) {
 		peer = bus1_peer_list_bind(&h->link);
 
-		mutex_lock(&peer->data.queue.lock);
+		mutex_lock(&peer->data.lock);
 		bus1_queue_sync(&peer->data.queue, h->node->timestamp);
-		mutex_unlock(&peer->data.queue.lock);
+		mutex_unlock(&peer->data.lock);
 
 		bus1_peer_list_unbind(&h->link);
 	}
@@ -587,8 +591,10 @@ static void bus1_node_commit_notifications(struct bus1_handle *list)
 		peer = bus1_peer_list_bind(&h->link);
 		INIT_LIST_HEAD(&h->link_node);
 
+		mutex_lock(&peer->data.lock);
 		bus1_queue_commit_staged(&peer->data.queue, &h->qnode,
 					 h->node->timestamp);
+		mutex_unlock(&peer->data.lock);
 
 		bus1_peer_release(peer);
 		bus1_handle_unref(h);
@@ -617,8 +623,10 @@ static void bus1_node_destroy(struct bus1_node *node,
 
 		holder = bus1_handle_acquire_holder(h);
 		if (holder) {
+			mutex_lock(&holder->data.lock);
 			timestamp = bus1_queue_stage(&holder->data.queue,
 						     &h->qnode, timestamp);
+			mutex_unlock(&holder->data.lock);
 			h->link.peer = holder;
 			h->link.next = list;
 			bus1_peer_list_unbind(&h->link);
@@ -629,12 +637,12 @@ static void bus1_node_destroy(struct bus1_node *node,
 		}
 	}
 
-	mutex_lock(&peer->data.queue.lock);
+	mutex_lock(&peer->data.lock);
 	bus1_queue_sync(&peer->data.queue, timestamp);
 	node->timestamp = bus1_queue_tick(&peer->data.queue);
 	/* test_and_set_bit() provides barriers for node->timestamp */
 	WARN_ON(test_and_set_bit(BUS1_NODE_BIT_DESTROYED, &node->flags));
-	mutex_unlock(&peer->data.queue.lock);
+	mutex_unlock(&peer->data.lock);
 
 	bus1_node_commit_notifications(list);
 
@@ -681,9 +689,12 @@ static void bus1_handle_detach_internal(struct bus1_handle *handle,
 	if (list_empty(&handle->node->list_handles)) {
 		if (RB_EMPTY_NODE(&handle->node->owner.rb_id))
 			bus1_node_destroy(handle->node, owner);
-		else if (!bus1_node_is_destroyed(handle->node))
+		else if (!bus1_node_is_destroyed(handle->node)) {
+			mutex_lock(&owner->data.lock);
 			bus1_queue_commit_unstaged(&owner->data.queue,
 						   &handle->node->qnode);
+			mutex_unlock(&owner->data.lock);
+		}
 	}
 }
 
@@ -740,8 +751,10 @@ bus1_handle_acquire(struct bus1_handle *handle,
 				      &handle->node->list_handles);
 
 			/* flush any release-notification */
+			mutex_lock(&peer->data.lock);
 			bus1_queue_remove(&peer->data.queue,
 					  &handle->node->qnode);
+			mutex_unlock(&peer->data.lock);
 		}
 		mutex_unlock(&peer->lock);
 	}

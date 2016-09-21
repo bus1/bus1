@@ -120,7 +120,10 @@ static void bus1_transaction_destroy(struct bus1_transaction *transaction)
 		transaction->entries = link.next;
 		peer = bus1_peer_list_bind(&link);
 
+		mutex_lock(&peer->data.lock);
 		bus1_queue_remove(&peer->data.queue, &message->qnode);
+		mutex_unlock(&peer->data.lock);
+
 		bus1_message_unpin(message, peer);
 		bus1_message_unref(message);
 
@@ -475,13 +478,22 @@ static void bus1_transaction_commit_one(struct bus1_transaction *transaction,
 		 * The destination node is no longer valid, and the CONTINUE
 		 * flag was set. Drop the message.
 		 */
+		mutex_lock(&peer->data.lock);
 		bus1_queue_remove(&peer->data.queue, &message->qnode);
+		mutex_unlock(&peer->data.lock);
+
 		bus1_message_unpin(message, peer);
 	} else {
+		bool committed;
+
 		message->destination = id;
 
-		if (!bus1_queue_commit_staged(&peer->data.queue,
-					      &message->qnode, timestamp)) {
+		mutex_lock(&peer->data.lock);
+		committed = bus1_queue_commit_staged(&peer->data.queue,
+						&message->qnode, timestamp);
+		mutex_unlock(&peer->data.lock);
+
+		if (!committed) {
 			/*
 			 * The message has been flushed from the queue, but it
 			 * has not been cleaned up. Release all resources.
@@ -542,8 +554,10 @@ int bus1_transaction_commit(struct bus1_transaction *transaction)
 	 */
 	for (message = list; message; message = message->transaction.link.next) {
 		peer = bus1_peer_list_bind(&message->transaction.link);
+		mutex_lock(&peer->data.lock);
 		timestamp = bus1_queue_stage(&peer->data.queue, &message->qnode,
 					     timestamp);
+		mutex_unlock(&peer->data.lock);
 		bus1_peer_list_unbind(&message->transaction.link);
 	}
 
@@ -553,10 +567,10 @@ int bus1_transaction_commit(struct bus1_transaction *transaction)
 	 * sending clock. Note that it may not be unique on the destination
 	 * queues.
 	 */
-	mutex_lock(&transaction->peer->data.queue.lock);
+	mutex_lock(&transaction->peer->data.lock);
 	timestamp = bus1_queue_sync(&transaction->peer->data.queue, timestamp);
 	timestamp = bus1_queue_tick(&transaction->peer->data.queue);
-	mutex_unlock(&transaction->peer->data.queue.lock);
+	mutex_unlock(&transaction->peer->data.lock);
 
 	/*
 	 * Sync all the destination queues to the final timestamp. This
@@ -567,9 +581,9 @@ int bus1_transaction_commit(struct bus1_transaction *transaction)
 	for (message = list; message; message = message->transaction.link.next) {
 		peer = bus1_peer_list_bind(&message->transaction.link);
 
-		mutex_lock(&peer->data.queue.lock);
+		mutex_lock(&peer->data.lock);
 		bus1_queue_sync(&peer->data.queue, timestamp);
-		mutex_unlock(&peer->data.queue.lock);
+		mutex_unlock(&peer->data.lock);
 
 		mutex_lock(&peer->lock);
 		id = bus1_handle_dest_export(&message->transaction.dest,

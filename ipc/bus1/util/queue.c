@@ -10,7 +10,6 @@
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 #include <linux/err.h>
 #include <linux/kernel.h>
-#include <linux/lockdep.h>
 #include <linux/rbtree.h>
 #include <linux/rcupdate.h>
 #include <linux/slab.h>
@@ -51,7 +50,6 @@ void bus1_queue_init(struct bus1_queue *queue, wait_queue_head_t *waitq)
 	rcu_assign_pointer(queue->front, NULL);
 	queue->waitq = waitq;
 	queue->messages = RB_ROOT;
-	mutex_init(&queue->lock);
 }
 
 /**
@@ -72,7 +70,6 @@ void bus1_queue_destroy(struct bus1_queue *queue)
 	if (!queue)
 		return;
 
-	mutex_destroy(&queue->lock);
 	WARN_ON(!RB_EMPTY_ROOT(&queue->messages));
 	WARN_ON(rcu_access_pointer(queue->front));
 }
@@ -85,12 +82,12 @@ void bus1_queue_destroy(struct bus1_queue *queue)
  * This flushes all entries from @queue and puts them into @list (no particular
  * order) for the caller to clean up. All the entries returned in @list must be
  * unref'ed by the caller.
+ *
+ * The caller must lock the queue.
  */
 void bus1_queue_flush(struct bus1_queue *queue, struct list_head *list)
 {
 	struct bus1_queue_node *node, *t;
-
-	mutex_lock(&queue->lock);
 
 	/*
 	 * A queue contains staging and committed nodes. A committed node is
@@ -118,8 +115,6 @@ void bus1_queue_flush(struct bus1_queue *queue, struct list_head *list)
 
 	queue->messages = RB_ROOT;
 	rcu_assign_pointer(queue->front, NULL);
-
-	mutex_unlock(&queue->lock);
 }
 
 static void bus1_queue_add(struct bus1_queue *queue,
@@ -132,7 +127,8 @@ static void bus1_queue_add(struct bus1_queue *queue,
 	u64 ts;
 	int r;
 
-	lockdep_assert_held(&queue->lock);
+	/* must be called locked */
+
 	ts = bus1_queue_node_get_timestamp(node);
 	readable = bus1_queue_is_readable(queue);
 
@@ -156,8 +152,7 @@ static void bus1_queue_add(struct bus1_queue *queue,
 	 * that we know that our entry must be marked staging, so it cannot be
 	 * set as front, yet. If there is a front, it is some other node.
 	 */
-	front = rcu_dereference_protected(queue->front,
-					  lockdep_is_held(&queue->lock));
+	front = rcu_dereference_raw(queue->front);
 	if (front) {
 		/*
 		 * If there already is a front entry, just verify that we will
@@ -236,6 +231,8 @@ static void bus1_queue_add(struct bus1_queue *queue,
  * The queue owns its own reference to the node, so the caller retains their
  * reference after this call returns.
  *
+ * The caller must lock the queue.
+ *
  * Return: The timestamp used.
  */
 u64 bus1_queue_stage(struct bus1_queue *queue,
@@ -245,10 +242,8 @@ u64 bus1_queue_stage(struct bus1_queue *queue,
 	WARN_ON(!RB_EMPTY_NODE(&node->rb));
 	WARN_ON(timestamp & 1);
 
-	mutex_lock(&queue->lock);
 	timestamp = bus1_queue_sync(queue, timestamp);
 	bus1_queue_add(queue, node, timestamp + 1);
-	mutex_unlock(&queue->lock);
 
 	return timestamp;
 }
@@ -273,6 +268,8 @@ u64 bus1_queue_stage(struct bus1_queue *queue,
  * The queue owns its own reference to the node, so the caller retains their
  * reference after this call returns.
  *
+ * The caller must lock the queue.
+ *
  * Returns: True if the entry was committed, false otherwise.
  */
 bool bus1_queue_commit_staged(struct bus1_queue *queue,
@@ -283,11 +280,9 @@ bool bus1_queue_commit_staged(struct bus1_queue *queue,
 
 	WARN_ON(timestamp & 1);
 
-	mutex_lock(&queue->lock);
 	committed = bus1_queue_node_is_queued(node);
 	if (committed)
 		bus1_queue_add(queue, node, timestamp);
-	mutex_unlock(&queue->lock);
 
 	return committed;
 }
@@ -305,14 +300,14 @@ bool bus1_queue_commit_staged(struct bus1_queue *queue,
  *
  * The queue owns its own reference to the node, so the caller retains their
  * reference after this call returns.
+ *
+ * The caller must lock the queue.
  */
 void bus1_queue_commit_unstaged(struct bus1_queue *queue,
 				struct bus1_queue_node *node)
 {
-	mutex_lock(&queue->lock);
 	if (!bus1_queue_node_is_queued(node))
 		bus1_queue_add(queue, node, bus1_queue_tick(queue));
-	mutex_unlock(&queue->lock);
 }
 
 /**
@@ -332,25 +327,24 @@ void bus1_queue_commit_unstaged(struct bus1_queue *queue,
  * to this function). The caller retains their reference after this call
  * returns.
  *
+ * The caller must lock the queue.
+ *
  * Returns: True if removed by this call, false if already removed.
  */
 bool bus1_queue_remove(struct bus1_queue *queue, struct bus1_queue_node *node)
 {
 	struct bus1_queue_node *iter;
 	struct rb_node *front, *n;
-	bool readable, queued = false;
+	bool readable;
 
 	if (!node)
 		return false;
 
-	mutex_lock(&queue->lock);
-
 	if (RB_EMPTY_NODE(&node->rb))
-		goto exit;
+		return false;
 
 	readable = bus1_queue_is_readable(queue);
-	front = rcu_dereference_protected(queue->front,
-					  lockdep_is_held(&queue->lock));
+	front = rcu_dereference_raw(queue->front);
 
 	if (!rb_prev(&node->rb)) {
 		/*
@@ -372,18 +366,15 @@ bool bus1_queue_remove(struct bus1_queue *queue, struct bus1_queue_node *node)
 	rb_erase(&node->rb, &queue->messages);
 	RB_CLEAR_NODE(&node->rb);
 	kref_put(&node->ref, bus1_queue_node_no_free);
-	queued = true;
 
 	if (!readable && bus1_queue_is_readable(queue))
 		wake_up_interruptible(queue->waitq);
 
-exit:
-	mutex_unlock(&queue->lock);
-	return queued;
+	return true;
 }
 
 /**
- * bus1_queue_peek_locked() - peek first available entry
+ * bus1_queue_peek() - peek first available entry
  * @queue:	queue to operate on
  * @continuep:	output variable to store continue-state of peeked node
  *
@@ -398,20 +389,19 @@ exit:
  * @continuep. The continue-state describes whether there are more nodes queued
  * that are part of the same transaction.
  *
- * The caller must hold @queue.lock.
+ * The caller must lock the queue.
  *
  * Return: Reference to first available entry, NULL if none available.
  */
-struct bus1_queue_node *bus1_queue_peek_locked(struct bus1_queue *queue,
-					       bool *continuep)
+struct bus1_queue_node *bus1_queue_peek(struct bus1_queue *queue,
+				        bool *continuep)
 {
 	struct bus1_queue_node *node, *next;
 	struct rb_node *n;
 
-	lockdep_assert_held(&queue->lock);
+	/* must be called locked */
 
-	n = rcu_dereference_protected(queue->front,
-				      lockdep_is_held(&queue->lock));
+	n = rcu_dereference_raw(queue->front);
 	if (!n)
 		return NULL;
 

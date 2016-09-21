@@ -162,24 +162,16 @@ static void bus1_test_queue(void)
 	ts1 = bus1_queue_stage(&qb, &n1b, ts1);
 
 	/* obtain final timestamps from source queues */
-	mutex_lock(&q1.lock);
 	ts1 = bus1_queue_sync(&q1, ts1);
 	ts1 = bus1_queue_tick(&q1);
-	mutex_unlock(&q1.lock);
-	mutex_lock(&q2.lock);
 	ts2 = bus1_queue_sync(&q2, ts2);
 	ts2 = bus1_queue_tick(&q2);
-	mutex_unlock(&q2.lock);
 
 	/* 'racing' sync clocks on destination queues */
-	mutex_lock(&qa.lock);
 	bus1_queue_sync(&qa, ts2);
 	bus1_queue_sync(&qa, ts1);
-	mutex_unlock(&qa.lock);
-	mutex_lock(&qb.lock);
 	bus1_queue_sync(&qb, ts1);
 	bus1_queue_sync(&qb, ts2);
-	mutex_unlock(&qb.lock);
 
 	/* 'racing' commit the entries */
 	WARN_ON(!bus1_queue_commit_staged(&qa, &n1a, ts1));
@@ -188,26 +180,18 @@ static void bus1_test_queue(void)
 	WARN_ON(!bus1_queue_commit_staged(&qa, &n2a, ts2));
 
 	/* dequeue queue a */
-	mutex_lock(&qa.lock);
-	WARN_ON(bus1_queue_peek_locked(&qa, &has_continue) != &n1a);
-	mutex_unlock(&qa.lock);
+	WARN_ON(bus1_queue_peek(&qa, &has_continue) != &n1a);
 	WARN_ON(has_continue);
 	WARN_ON(!bus1_queue_remove(&qa, &n1a));
-	mutex_lock(&qa.lock);
-	WARN_ON(bus1_queue_peek_locked(&qa, &has_continue) != &n2a);
-	mutex_unlock(&qa.lock);
+	WARN_ON(bus1_queue_peek(&qa, &has_continue) != &n2a);
 	WARN_ON(has_continue);
 	WARN_ON(!bus1_queue_remove(&qa, &n2a));
 
 	/* dequeue queue b */
-	mutex_lock(&qb.lock);
-	WARN_ON(bus1_queue_peek_locked(&qb, &has_continue) != &n1b);
-	mutex_unlock(&qb.lock);
+	WARN_ON(bus1_queue_peek(&qb, &has_continue) != &n1b);
 	WARN_ON(has_continue);
 	WARN_ON(!bus1_queue_remove(&qb, &n1b));
-	mutex_lock(&qb.lock);
-	WARN_ON(bus1_queue_peek_locked(&qb, &has_continue) != &n2b);
-	mutex_unlock(&qb.lock);
+	WARN_ON(bus1_queue_peek(&qb, &has_continue) != &n2b);
 	WARN_ON(has_continue);
 	WARN_ON(!bus1_queue_remove(&qb, &n2b));
 
