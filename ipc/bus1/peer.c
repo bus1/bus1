@@ -19,7 +19,6 @@
 #include <linux/pid_namespace.h>
 #include <linux/rbtree.h>
 #include <linux/rcupdate.h>
-#include <linux/seqlock.h>
 #include <linux/slab.h>
 #include <linux/uaccess.h>
 #include <linux/wait.h>
@@ -71,7 +70,6 @@ struct bus1_peer *bus1_peer_new(void)
 	peer->debugdir = NULL;
 
 	mutex_init(&peer->lock);
-	seqcount_init(&peer->seqcount);
 
 	mutex_init(&peer->data.lock);
 	peer->data.pool = BUS1_POOL_NULL;

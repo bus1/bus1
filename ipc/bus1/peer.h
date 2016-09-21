@@ -26,7 +26,6 @@
 #include <linux/rcupdate.h>
 #include <linux/rbtree.h>
 #include <linux/sched.h>
-#include <linux/seqlock.h>
 #include <linux/wait.h>
 #include <uapi/linux/bus1.h>
 #include "user.h"
@@ -49,7 +48,6 @@ struct bus1_message;
  * @debugdir:			debugfs directory, or NULL/ERR_PTR
  * @rcu:			rcu
  * @lock:			peer lock
- * @seqcount:			sequence counter
  * @data.lock:			data lock
  * @data.pool:			data pool
  * @data.queue:			message queue, rcu-accessible
@@ -73,7 +71,6 @@ struct bus1_peer {
 	};
 
 	struct mutex lock;
-	struct seqcount seqcount;
 
 	struct {
 		struct mutex lock;
