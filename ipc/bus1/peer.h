@@ -80,6 +80,7 @@ struct bus1_peer {
 	} data;
 
 	struct {
+		struct mutex lock;
 		struct bus1_message *seed;
 		struct rb_root map_handles_by_id;
 		u64 handle_ids;

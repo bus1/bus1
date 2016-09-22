@@ -687,9 +687,7 @@ int bus1_transaction_commit_seed(struct bus1_transaction *transaction)
 
 	bus1_handle_inflight_install(&seed->handles, transaction->peer);
 
-	mutex_lock(&transaction->peer->lock);
 	swap(seed, transaction->peer->local.seed);
-	mutex_unlock(&transaction->peer->lock);
 
 exit:
 	bus1_message_unpin(seed, transaction->peer);

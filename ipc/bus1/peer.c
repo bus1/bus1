@@ -76,6 +76,7 @@ struct bus1_peer *bus1_peer_new(void)
 	bus1_queue_init(&peer->data.queue, &peer->waitq);
 	peer->data.map_handles_by_node = RB_ROOT;
 
+	mutex_init(&peer->local.lock);
 	peer->local.seed = NULL;
 	peer->local.map_handles_by_id = RB_ROOT;
 	peer->local.handle_ids = 0;
@@ -124,12 +125,12 @@ static void bus1_peer_reset(struct bus1_peer *peer, bool final)
 	bus1_pool_flush(&peer->data.pool, &n_slices);
 	mutex_unlock(&peer->data.lock);
 
-	mutex_lock(&peer->lock);
+	mutex_lock(&peer->local.lock);
 	if (peer->local.seed && final) {
 		list_add(&peer->local.seed->qnode.link, &list);
 		peer->local.seed = NULL;
 	}
-	mutex_unlock(&peer->lock);
+	mutex_unlock(&peer->local.lock);
 
 	atomic_add(n_slices, &peer->user->n_slices);
 	atomic_add(n_handles, &peer->user->n_handles);
@@ -211,6 +212,7 @@ struct bus1_peer *bus1_peer_free(struct bus1_peer *peer)
 	/* deinitialize peer-private section */
 	WARN_ON(!RB_EMPTY_ROOT(&peer->local.map_handles_by_id));
 	WARN_ON(peer->local.seed);
+	mutex_destroy(&peer->local.lock);
 
 	/* deinitialize data section */
 	WARN_ON(!RB_EMPTY_ROOT(&peer->data.map_handles_by_node));
@@ -481,7 +483,9 @@ static int bus1_peer_ioctl_send(struct bus1_peer *peer, unsigned long arg)
 			goto exit;
 		}
 
+		mutex_lock(&peer->local.lock);
 		r = bus1_transaction_commit_seed(transaction);
+		mutex_unlock(&peer->local.lock);
 		if (r < 0)
 			goto exit;
 	} else {
@@ -531,6 +535,7 @@ static int bus1_peer_ioctl_recv(struct bus1_peer *peer, unsigned long arg)
 	 * We ignore racing RESETs. It does not matter which call drops the
 	 * message, since the dequeue is the only visible effect.
 	 */
+	mutex_lock(&peer->local.lock);
 	mutex_lock(&peer->lock);
 
 	/*
@@ -538,17 +543,20 @@ static int bus1_peer_ioctl_recv(struct bus1_peer *peer, unsigned long arg)
 	 * racing RESET might deallocate the resources. In case of seeds the
 	 * lock is redundant, but it is no fast-path, anyway.
 	 */
-	mutex_lock(&peer->data.lock);
-	if (!(param.flags & BUS1_RECV_FLAG_SEED))
+	if (param.flags & BUS1_RECV_FLAG_SEED) {
+		msg = bus1_message_pin(bus1_message_ref(peer->local.seed));
+		node = msg ? &msg->qnode : NULL;
+	} else {
+		mutex_lock(&peer->data.lock);
 		node = bus1_queue_peek(&peer->data.queue, &has_continue);
-	else if (peer->local.seed)
-		node = &bus1_message_ref(peer->local.seed)->qnode;
-	if (node) {
-		type = bus1_queue_node_get_type(node);
-		if (type == BUS1_QUEUE_NODE_MESSAGE)
-			msg = bus1_message_pin(bus1_message_from_node(node));
+		if (node) {
+			type = bus1_queue_node_get_type(node);
+			if (type == BUS1_QUEUE_NODE_MESSAGE)
+				msg = bus1_message_pin(
+						bus1_message_from_node(node));
+		}
+		mutex_unlock(&peer->data.lock);
 	}
-	mutex_unlock(&peer->data.lock);
 
 	/*
 	 * Verify the message to return. In case of user messages we need to
@@ -569,6 +577,7 @@ static int bus1_peer_ioctl_recv(struct bus1_peer *peer, unsigned long arg)
 		/* unpin() cannot be the last, so safe under peer lock */
 		if (param.flags & BUS1_RECV_FLAG_SEED) {
 			peer->local.seed = bus1_message_unref(msg);
+
 			bus1_message_unpin(msg, peer);
 		} else {
 			bool removed;
@@ -589,6 +598,7 @@ static int bus1_peer_ioctl_recv(struct bus1_peer *peer, unsigned long arg)
 	 * operations required.
 	 */
 	mutex_unlock(&peer->lock);
+	mutex_unlock(&peer->local.lock);
 
 	if (r < 0)
 		return r;
