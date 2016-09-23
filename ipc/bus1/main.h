@@ -58,9 +58,9 @@
  *
  *   bus1_peer.active
  *     bus1_user_lock
- *     bus1_peer_info.lock
- *       bus1_queue.qlock
- *       bus1_peer_info.seqcount
+ *     bus1_peer.local.lock
+ *       bus1_peer.lock
+ *         bus1_peer.data.lock
  */
 
 #include <linux/fs.h>
