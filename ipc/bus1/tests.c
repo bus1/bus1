@@ -130,18 +130,15 @@ static void bus1_test_pool(void)
 
 static void bus1_test_queue(void)
 {
-	wait_queue_head_t waitq;
 	struct bus1_queue q1, q2, qa, qb;
 	struct bus1_queue_node n1a, n1b, n2a, n2b;
 	u64 ts1 = 0, ts2 = 0;
 	bool has_continue;
 
-	init_waitqueue_head(&waitq);
-
-	bus1_queue_init(&q1, &waitq);
-	bus1_queue_init(&q2, &waitq);
-	bus1_queue_init(&qa, &waitq);
-	bus1_queue_init(&qb, &waitq);
+	bus1_queue_init(&q1);
+	bus1_queue_init(&q2);
+	bus1_queue_init(&qa);
+	bus1_queue_init(&qb);
 
 	/* set type to 0 and sender stamp to numbers to make order obvious */
 	bus1_queue_node_init(&n1a, 0, 1);
@@ -156,10 +153,10 @@ static void bus1_test_queue(void)
 	WARN_ON(bus1_queue_sync(&qb, 8) != 8);
 
 	/* 'racing' staging of nodes */
-	ts2 = bus1_queue_stage(&qa, &n2a, ts2);
-	ts1 = bus1_queue_stage(&qa, &n1a, ts1);
-	ts2 = bus1_queue_stage(&qb, &n2b, ts2);
-	ts1 = bus1_queue_stage(&qb, &n1b, ts1);
+	ts2 = bus1_queue_stage(&qa, NULL, &n2a, ts2);
+	ts1 = bus1_queue_stage(&qa, NULL, &n1a, ts1);
+	ts2 = bus1_queue_stage(&qb, NULL, &n2b, ts2);
+	ts1 = bus1_queue_stage(&qb, NULL, &n1b, ts1);
 
 	/* obtain final timestamps from source queues */
 	ts1 = bus1_queue_sync(&q1, ts1);
@@ -174,26 +171,26 @@ static void bus1_test_queue(void)
 	bus1_queue_sync(&qb, ts2);
 
 	/* 'racing' commit the entries */
-	WARN_ON(!bus1_queue_commit_staged(&qa, &n1a, ts1));
-	WARN_ON(!bus1_queue_commit_staged(&qb, &n1b, ts1));
-	WARN_ON(!bus1_queue_commit_staged(&qb, &n2b, ts2));
-	WARN_ON(!bus1_queue_commit_staged(&qa, &n2a, ts2));
+	WARN_ON(!bus1_queue_commit_staged(&qa, NULL, &n1a, ts1));
+	WARN_ON(!bus1_queue_commit_staged(&qb, NULL, &n1b, ts1));
+	WARN_ON(!bus1_queue_commit_staged(&qb, NULL, &n2b, ts2));
+	WARN_ON(!bus1_queue_commit_staged(&qa, NULL, &n2a, ts2));
 
 	/* dequeue queue a */
 	WARN_ON(bus1_queue_peek(&qa, &has_continue) != &n1a);
 	WARN_ON(has_continue);
-	WARN_ON(!bus1_queue_remove(&qa, &n1a));
+	WARN_ON(!bus1_queue_remove(&qa, NULL, &n1a));
 	WARN_ON(bus1_queue_peek(&qa, &has_continue) != &n2a);
 	WARN_ON(has_continue);
-	WARN_ON(!bus1_queue_remove(&qa, &n2a));
+	WARN_ON(!bus1_queue_remove(&qa, NULL, &n2a));
 
 	/* dequeue queue b */
 	WARN_ON(bus1_queue_peek(&qb, &has_continue) != &n1b);
 	WARN_ON(has_continue);
-	WARN_ON(!bus1_queue_remove(&qb, &n1b));
+	WARN_ON(!bus1_queue_remove(&qb, NULL, &n1b));
 	WARN_ON(bus1_queue_peek(&qb, &has_continue) != &n2b);
 	WARN_ON(has_continue);
-	WARN_ON(!bus1_queue_remove(&qb, &n2b));
+	WARN_ON(!bus1_queue_remove(&qb, NULL, &n2b));
 
 	bus1_queue_destroy(&q1);
 	bus1_queue_destroy(&q2);

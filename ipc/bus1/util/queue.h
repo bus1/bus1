@@ -123,28 +123,31 @@ struct bus1_queue_node {
  * struct bus1_queue - message queue
  * @clock:		local clock (used for Lamport Timestamps)
  * @front:		cached front entry
- * @waitq:		pointer to wait-queue to use for wake-ups
  * @messages:		queued messages
  */
 struct bus1_queue {
 	u64 clock;
 	struct rb_node __rcu *front;
-	wait_queue_head_t *waitq;
 	struct rb_root messages;
 };
 
-void bus1_queue_init(struct bus1_queue *queue, wait_queue_head_t *waitq);
+void bus1_queue_init(struct bus1_queue *queue);
 void bus1_queue_destroy(struct bus1_queue *queue);
 void bus1_queue_flush(struct bus1_queue *queue, struct list_head *list);
 u64 bus1_queue_stage(struct bus1_queue *queue,
+		     wait_queue_head_t *waitq,
 		     struct bus1_queue_node *node,
 		     u64 timestamp);
 bool bus1_queue_commit_staged(struct bus1_queue *queue,
+			      wait_queue_head_t *waitq,
 			      struct bus1_queue_node *node,
 			      u64 timestamp);
 void bus1_queue_commit_unstaged(struct bus1_queue *queue,
+				wait_queue_head_t *waitq,
 				struct bus1_queue_node *node);
-bool bus1_queue_remove(struct bus1_queue *queue, struct bus1_queue_node *node);
+bool bus1_queue_remove(struct bus1_queue *queue,
+		       wait_queue_head_t *waitq,
+		       struct bus1_queue_node *node);
 struct bus1_queue_node *bus1_queue_peek(struct bus1_queue *queue,
 					bool *continuep);
 

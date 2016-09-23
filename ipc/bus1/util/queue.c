@@ -8,11 +8,11 @@
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
-#include <linux/err.h>
 #include <linux/kernel.h>
 #include <linux/rbtree.h>
 #include <linux/rcupdate.h>
-#include <linux/slab.h>
+#include <linux/sched.h>
+#include <linux/wait.h>
 #include "queue.h"
 
 static void bus1_queue_node_set_timestamp(struct bus1_queue_node *node, u64 ts)
@@ -39,16 +39,14 @@ static int bus1_queue_node_compare(struct bus1_queue_node *node,
 /**
  * bus1_queue_init() - initialize queue
  * @queue:	queue to initialize
- * @waitq:	wait queue to use for wake-ups
  *
  * This initializes a new queue. The queue memory is considered uninitialized,
  * any previous content is unrecoverable.
  */
-void bus1_queue_init(struct bus1_queue *queue, wait_queue_head_t *waitq)
+void bus1_queue_init(struct bus1_queue *queue)
 {
 	queue->clock = 0;
 	rcu_assign_pointer(queue->front, NULL);
-	queue->waitq = waitq;
 	queue->messages = RB_ROOT;
 }
 
@@ -118,6 +116,7 @@ void bus1_queue_flush(struct bus1_queue *queue, struct list_head *list)
 }
 
 static void bus1_queue_add(struct bus1_queue *queue,
+			   wait_queue_head_t *waitq,
 			   struct bus1_queue_node *node,
 			   u64 timestamp)
 {
@@ -210,13 +209,14 @@ static void bus1_queue_add(struct bus1_queue *queue,
 	if (!(timestamp & 1) && is_leftmost)
 		rcu_assign_pointer(queue->front, &node->rb);
 
-	if (!readable && bus1_queue_is_readable(queue))
-		wake_up_interruptible(queue->waitq);
+	if (waitq && !readable && bus1_queue_is_readable(queue))
+		wake_up_interruptible(waitq);
 }
 
 /**
  * bus1_queue_stage() - stage queue entry with fresh timestamp
  * @queue:		queue to operate on
+ * @waitq:		wait queue to use for wake-ups, or NULL
  * @node:		queue entry to stage
  * @timestamp:		minimum timestamp for @node
  *
@@ -236,6 +236,7 @@ static void bus1_queue_add(struct bus1_queue *queue,
  * Return: The timestamp used.
  */
 u64 bus1_queue_stage(struct bus1_queue *queue,
+		     wait_queue_head_t *waitq,
 		     struct bus1_queue_node *node,
 		     u64 timestamp)
 {
@@ -243,7 +244,7 @@ u64 bus1_queue_stage(struct bus1_queue *queue,
 	WARN_ON(timestamp & 1);
 
 	timestamp = bus1_queue_sync(queue, timestamp);
-	bus1_queue_add(queue, node, timestamp + 1);
+	bus1_queue_add(queue, waitq, node, timestamp + 1);
 
 	return timestamp;
 }
@@ -251,6 +252,7 @@ u64 bus1_queue_stage(struct bus1_queue *queue,
 /**
  * bus1_queue_commit_staged() - commit staged queue entry with new timestamp
  * @queue:		queue to operate on
+ * @waitq:		wait queue to use for wake-ups, or NULL
  * @node:		queue entry to commit
  * @timestamp:		new timestamp for @node
  *
@@ -273,6 +275,7 @@ u64 bus1_queue_stage(struct bus1_queue *queue,
  * Returns: True if the entry was committed, false otherwise.
  */
 bool bus1_queue_commit_staged(struct bus1_queue *queue,
+			      wait_queue_head_t *waitq,
 			      struct bus1_queue_node *node,
 			      u64 timestamp)
 {
@@ -282,7 +285,7 @@ bool bus1_queue_commit_staged(struct bus1_queue *queue,
 
 	committed = bus1_queue_node_is_queued(node);
 	if (committed)
-		bus1_queue_add(queue, node, timestamp);
+		bus1_queue_add(queue, waitq, node, timestamp);
 
 	return committed;
 }
@@ -290,6 +293,7 @@ bool bus1_queue_commit_staged(struct bus1_queue *queue,
 /**
  * bus1_queue_commit_unstaged() - commit unstaged queue entry with new timestamp
  * @queue:		queue to operate on
+ * @waitq:		wait queue to use for wake-ups, or NULL
  * @node:		queue entry to commit
  *
  * Directly commit an unstaged queue entry to the destination queue. If the
@@ -304,15 +308,17 @@ bool bus1_queue_commit_staged(struct bus1_queue *queue,
  * The caller must lock the queue.
  */
 void bus1_queue_commit_unstaged(struct bus1_queue *queue,
+				wait_queue_head_t *waitq,
 				struct bus1_queue_node *node)
 {
 	if (!bus1_queue_node_is_queued(node))
-		bus1_queue_add(queue, node, bus1_queue_tick(queue));
+		bus1_queue_add(queue, waitq, node, bus1_queue_tick(queue));
 }
 
 /**
  * bus1_queue_remove() - remove entry from queue
  * @queue:		queue to operate on
+ * @waitq:		wait queue to use for wake-ups, or NULL
  * @node:		queue entry to remove
  *
  * This unlinks @node and fully removes it from the queue @queue. You must
@@ -331,7 +337,9 @@ void bus1_queue_commit_unstaged(struct bus1_queue *queue,
  *
  * Returns: True if removed by this call, false if already removed.
  */
-bool bus1_queue_remove(struct bus1_queue *queue, struct bus1_queue_node *node)
+bool bus1_queue_remove(struct bus1_queue *queue,
+		       wait_queue_head_t *waitq,
+		       struct bus1_queue_node *node)
 {
 	struct bus1_queue_node *iter;
 	struct rb_node *front, *n;
@@ -367,8 +375,8 @@ bool bus1_queue_remove(struct bus1_queue *queue, struct bus1_queue_node *node)
 	RB_CLEAR_NODE(&node->rb);
 	kref_put(&node->ref, bus1_queue_node_no_free);
 
-	if (!readable && bus1_queue_is_readable(queue))
-		wake_up_interruptible(queue->waitq);
+	if (waitq && !readable && bus1_queue_is_readable(queue))
+		wake_up_interruptible(waitq);
 
 	return true;
 }

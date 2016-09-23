@@ -121,7 +121,8 @@ static void bus1_transaction_destroy(struct bus1_transaction *transaction)
 		peer = bus1_peer_list_bind(&link);
 
 		mutex_lock(&peer->data.lock);
-		bus1_queue_remove(&peer->data.queue, &message->qnode);
+		bus1_queue_remove(&peer->data.queue, &peer->waitq,
+				  &message->qnode);
 		mutex_unlock(&peer->data.lock);
 
 		bus1_message_unpin(message, peer);
@@ -479,7 +480,8 @@ static void bus1_transaction_commit_one(struct bus1_transaction *transaction,
 		 * flag was set. Drop the message.
 		 */
 		mutex_lock(&peer->data.lock);
-		bus1_queue_remove(&peer->data.queue, &message->qnode);
+		bus1_queue_remove(&peer->data.queue, &peer->waitq,
+				  &message->qnode);
 		mutex_unlock(&peer->data.lock);
 
 		bus1_message_unpin(message, peer);
@@ -490,7 +492,9 @@ static void bus1_transaction_commit_one(struct bus1_transaction *transaction,
 
 		mutex_lock(&peer->data.lock);
 		committed = bus1_queue_commit_staged(&peer->data.queue,
-						&message->qnode, timestamp);
+						     &peer->waitq,
+						     &message->qnode,
+						     timestamp);
 		mutex_unlock(&peer->data.lock);
 
 		if (!committed) {
@@ -555,7 +559,9 @@ int bus1_transaction_commit(struct bus1_transaction *transaction)
 	for (message = list; message; message = message->transaction.link.next) {
 		peer = bus1_peer_list_bind(&message->transaction.link);
 		mutex_lock(&peer->data.lock);
-		timestamp = bus1_queue_stage(&peer->data.queue, &message->qnode,
+		timestamp = bus1_queue_stage(&peer->data.queue,
+					     &peer->waitq,
+					     &message->qnode,
 					     timestamp);
 		mutex_unlock(&peer->data.lock);
 		bus1_peer_list_unbind(&message->transaction.link);

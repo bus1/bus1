@@ -73,7 +73,7 @@ struct bus1_peer *bus1_peer_new(void)
 
 	mutex_init(&peer->data.lock);
 	peer->data.pool = BUS1_POOL_NULL;
-	bus1_queue_init(&peer->data.queue, &peer->waitq);
+	bus1_queue_init(&peer->data.queue);
 	peer->data.map_handles_by_node = RB_ROOT;
 
 	mutex_init(&peer->local.lock);
@@ -583,7 +583,8 @@ static int bus1_peer_ioctl_recv(struct bus1_peer *peer, unsigned long arg)
 			bool removed;
 
 			mutex_lock(&peer->data.lock);
-			removed = bus1_queue_remove(&peer->data.queue, node);
+			removed = bus1_queue_remove(&peer->data.queue,
+						    &peer->waitq, node);
 			mutex_unlock(&peer->data.lock);
 
 			if (removed)

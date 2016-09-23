@@ -404,7 +404,8 @@ static void bus1_handle_attach_internal(struct bus1_handle *handle,
 
 	/* flush any release-notification whenever a new handle is attached */
 	mutex_lock(&owner->data.lock);
-	bus1_queue_remove(&owner->data.queue, &handle->node->qnode);
+	bus1_queue_remove(&owner->data.queue, &owner->waitq,
+			  &handle->node->qnode);
 	mutex_unlock(&owner->data.lock);
 }
 
@@ -560,7 +561,7 @@ static void bus1_handle_uninstall_holder(struct bus1_handle *handle,
 	 * state *after* a handle is uninstalled.
 	 */
 	mutex_lock(&peer->data.lock);
-	bus1_queue_remove(&peer->data.queue, &handle->qnode);
+	bus1_queue_remove(&peer->data.queue, &peer->waitq, &handle->qnode);
 	mutex_unlock(&peer->data.lock);
 }
 
@@ -587,8 +588,8 @@ static void bus1_node_commit_notifications(struct bus1_handle *list)
 		INIT_LIST_HEAD(&h->link_node);
 
 		mutex_lock(&peer->data.lock);
-		bus1_queue_commit_staged(&peer->data.queue, &h->qnode,
-					 h->node->timestamp);
+		bus1_queue_commit_staged(&peer->data.queue, &peer->waitq,
+					 &h->qnode, h->node->timestamp);
 		mutex_unlock(&peer->data.lock);
 
 		bus1_peer_release(peer);
@@ -620,6 +621,7 @@ static void bus1_node_destroy(struct bus1_node *node,
 		if (holder) {
 			mutex_lock(&holder->data.lock);
 			timestamp = bus1_queue_stage(&holder->data.queue,
+						     &holder->waitq,
 						     &h->qnode, timestamp);
 			mutex_unlock(&holder->data.lock);
 			h->link.peer = holder;
@@ -687,6 +689,7 @@ static void bus1_handle_detach_internal(struct bus1_handle *handle,
 		else if (!bus1_node_is_destroyed(handle->node)) {
 			mutex_lock(&owner->data.lock);
 			bus1_queue_commit_unstaged(&owner->data.queue,
+						   &owner->waitq,
 						   &handle->node->qnode);
 			mutex_unlock(&owner->data.lock);
 		}
@@ -748,6 +751,7 @@ bus1_handle_acquire(struct bus1_handle *handle,
 			/* flush any release-notification */
 			mutex_lock(&peer->data.lock);
 			bus1_queue_remove(&peer->data.queue,
+					  &peer->waitq,
 					  &handle->node->qnode);
 			mutex_unlock(&peer->data.lock);
 		}
