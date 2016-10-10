@@ -74,6 +74,19 @@ tests:
 .PHONY: tests
 
 #
+# Check
+# This runs sparse as part of the build process to try to detect any common
+# errors in the kernel code.
+#
+check:
+	$(MAKE) -C $(KERNELDIR) M=$(PWD) C=2 CF="-D__CHECK_ENDIAN" \
+		BUS1_EXT=$(BUS1_EXT) \
+		HOST_EXTRACFLAGS="$(HOST_EXTRACFLAGS)" \
+		EXTRA_CFLAGS="$(EXTRA_CFLAGS) -DCONFIG_BUS1_TESTS=1" \
+		CONFIG_BUS1=m CONFIG_BUS1_TESTS=y
+.PHONY: check
+
+#
 # Bus1 Build Target
 # Run 'make b' to build the bus1 out-of-tree module as part of the bus1 build
 # system. See the bus1/build.git repository for details. You must have all of
