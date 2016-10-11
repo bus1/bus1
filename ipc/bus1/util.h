@@ -30,7 +30,7 @@ struct iovec;
 #if defined(CONFIG_DEBUG)
   #define BUS1_WARN_ON(cond)		WARN_ON(cond)
 #else
-  #define BUS1_WARN_ON(cond)		({false;})
+  #define BUS1_WARN_ON(cond)		({ false; })
 #endif
 
 int bus1_import_vecs(struct iovec *out_vecs,
