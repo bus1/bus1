@@ -25,32 +25,38 @@
 #include <linux/uio.h>
 #include "pool.h"
 
-static struct bus1_pool_slice *bus1_pool_slice_new(size_t offset, size_t size)
+struct bus1_pool_slice *bus1_pool_slice_new(void)
 {
 	struct bus1_pool_slice *slice;
-
-	if (offset > U32_MAX || size == 0 || size > BUS1_POOL_SLICE_SIZE_MAX)
-		return ERR_PTR(-EMSGSIZE);
 
 	slice = kmalloc(sizeof(*slice), GFP_KERNEL);
 	if (!slice)
 		return ERR_PTR(-ENOMEM);
 
-	slice->offset = offset;
-	slice->size = size;
-
 	return slice;
 }
 
-static struct bus1_pool_slice *
-bus1_pool_slice_free(struct bus1_pool_slice *slice)
+static int bus1_pool_slice_init(struct bus1_pool_slice *slice,
+				 size_t offset, size_t size)
+{
+	if (offset > U32_MAX || size == 0 || size > BUS1_POOL_SLICE_SIZE_MAX)
+		return -EMSGSIZE;
+
+	slice->offset = offset;
+	slice->size = size;
+	slice->free = true;
+	slice->ref_kernel = false;
+	slice->ref_user = false;
+
+	return 0;
+}
+
+void bus1_pool_slice_free(struct bus1_pool_slice *slice)
 {
 	if (!slice)
-		return NULL;
+		return;
 
 	kfree(slice);
-
-	return NULL;
 }
 
 /* insert slice into the free tree */
@@ -179,15 +185,15 @@ int bus1_pool_create(struct bus1_pool *pool)
 	pool->slices_free = RB_ROOT;
 	pool->slices_busy = RB_ROOT;
 
-	slice = bus1_pool_slice_new(0, BUS1_POOL_SLICE_SIZE_MAX);
+	slice = bus1_pool_slice_new();
 	if (IS_ERR(slice)) {
 		bus1_pool_destroy(pool);
 		return PTR_ERR(slice);
 	}
 
-	slice->free = true;
-	slice->ref_kernel = false;
-	slice->ref_user = false;
+	r = bus1_pool_slice_init(slice, 0, BUS1_POOL_SLICE_SIZE_MAX);
+	if (r < 0)
+		return r;
 
 	list_add(&slice->entry, &pool->slices);
 	bus1_pool_slice_link_free(slice, pool);
@@ -239,6 +245,7 @@ void bus1_pool_destroy(struct bus1_pool *pool)
 /**
  * bus1_pool_alloc() - allocate memory
  * @pool:	pool to allocate memory from
+ * @ps:		a preallocated slice object
  * @size:	number of bytes to allocate
  *
  * This allocates a new slice of @size bytes from the memory pool at @pool. The
@@ -259,10 +266,13 @@ void bus1_pool_destroy(struct bus1_pool *pool)
  *
  * Return: Pointer to new slice, or ERR_PTR on failure.
  */
-struct bus1_pool_slice *bus1_pool_alloc(struct bus1_pool *pool, size_t size)
+struct bus1_pool_slice *bus1_pool_alloc(struct bus1_pool *pool,
+					struct bus1_pool_slice *ps,
+					size_t size)
 {
-	struct bus1_pool_slice *slice, *ps;
+	struct bus1_pool_slice *slice;
 	size_t slice_size;
+	int r;
 
 	slice_size = ALIGN(size, 8);
 	if (slice_size == 0 || slice_size > BUS1_POOL_SLICE_SIZE_MAX)
@@ -275,19 +285,17 @@ struct bus1_pool_slice *bus1_pool_alloc(struct bus1_pool *pool, size_t size)
 
 	/* split slice if it doesn't match exactly */
 	if (slice_size < slice->size) {
-		ps = bus1_pool_slice_new(slice->offset + slice_size,
-					 slice->size - slice_size);
-		if (IS_ERR(ps))
-			return ERR_CAST(ps);
-
-		ps->free = true;
-		ps->ref_kernel = false;
-		ps->ref_user = false;
+		r = bus1_pool_slice_init(ps, slice->offset + slice_size,
+				     slice->size - slice_size);
+		if (r < 0)
+			return ERR_PTR(r);
 
 		list_add(&ps->entry, &slice->entry); /* add after @slice */
 		bus1_pool_slice_link_free(ps, pool);
 
 		slice->size = slice_size;
+	} else {
+		bus1_pool_slice_free(ps);
 	}
 
 	/* move from free-tree to busy-tree */
