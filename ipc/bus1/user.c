@@ -29,19 +29,19 @@ static DEFINE_MUTEX(bus1_user_lock);
 static DEFINE_IDR(bus1_user_idr);
 static DEFINE_IDA(bus1_user_ida);
 
-static unsigned short bus1_user_slices_max = BUS1_DEFAULT_SLICES_MAX;
-static unsigned short bus1_user_handles_max = BUS1_DEFAULT_HANDLES_MAX;
-static unsigned int bus1_user_bytes_max = BUS1_DEFAULT_BYTES_MAX;
-static unsigned short bus1_user_fds_max = BUS1_DEFAULT_FDS_MAX;
+static unsigned short bus1_user_max_slices = 16383;
+static unsigned short bus1_user_max_handles = 65535;
+static unsigned int bus1_user_max_bytes = 16 * 1024 * 1024;
+static unsigned short bus1_user_max_fds = 4096;
 
-module_param_named(user_slices_max, bus1_user_slices_max, ushort, 0600);
-module_param_named(user_handles_max, bus1_user_handles_max, ushort, 0600);
-module_param_named(user_bytes_max, bus1_user_bytes_max, uint, 0600);
-module_param_named(user_fds_max, bus1_user_fds_max, ushort, 0600);
-MODULE_PARM_DESC(user_slices_max, "Max number of slices for each user.");
-MODULE_PARM_DESC(user_handles_max, "Max number of handles for each user.");
-MODULE_PARM_DESC(user_bytes_max, "Max number of bytes for each user.");
-MODULE_PARM_DESC(user_fds_max, "Max number of fds for each user.");
+module_param_named(user_max_slices, bus1_user_max_slices, ushort, 0644);
+module_param_named(user_max_handles, bus1_user_max_handles, ushort, 0644);
+module_param_named(user_max_bytes, bus1_user_max_bytes, uint, 0644);
+module_param_named(user_max_fds, bus1_user_max_fds, ushort, 0644);
+MODULE_PARM_DESC(user_max_slices, "Max number of slices for each user.");
+MODULE_PARM_DESC(user_max_handles, "Max number of handles for each user.");
+MODULE_PARM_DESC(user_max_bytes, "Max number of bytes for each user.");
+MODULE_PARM_DESC(user_max_fds, "Max number of fds for each user.");
 
 /**
  * bus1_user_exit() - clean up global resources of user accounting
@@ -75,10 +75,10 @@ static struct bus1_user *bus1_user_new(void)
 	kref_init(&u->ref);
 	u->id = BUS1_INTERNAL_UID_INVALID;
 	u->uid = INVALID_UID;
-	atomic_set(&u->max_slices, bus1_user_slices_max);
-	atomic_set(&u->max_handles, bus1_user_handles_max);
-	atomic_set(&u->max_bytes, bus1_user_bytes_max);
-	atomic_set(&u->max_fds, bus1_user_fds_max);
+	atomic_set(&u->max_slices, bus1_user_max_slices);
+	atomic_set(&u->max_handles, bus1_user_max_handles);
+	atomic_set(&u->max_bytes, bus1_user_max_bytes);
+	atomic_set(&u->max_fds, bus1_user_max_fds);
 	atomic_set(&u->n_slices, atomic_read(&u->max_slices));
 	atomic_set(&u->n_handles, atomic_read(&u->max_handles));
 	atomic_set(&u->n_inflight_bytes, atomic_read(&u->max_bytes));
@@ -368,10 +368,10 @@ int bus1_user_quota_charge(struct bus1_peer *peer,
 	 * not used by any other user.
 	 */
 
-	BUILD_BUG_ON((typeof(bus1_user_slices_max))-1 > U16_MAX);
-	BUILD_BUG_ON((typeof(bus1_user_handles_max))-1 > U16_MAX);
-	BUILD_BUG_ON((typeof(bus1_user_bytes_max))-1 > U32_MAX);
-	BUILD_BUG_ON((typeof(bus1_user_fds_max))-1 > U16_MAX);
+	BUILD_BUG_ON((typeof(bus1_user_max_slices))-1 > U16_MAX);
+	BUILD_BUG_ON((typeof(bus1_user_max_handles))-1 > U16_MAX);
+	BUILD_BUG_ON((typeof(bus1_user_max_bytes))-1 > U32_MAX);
+	BUILD_BUG_ON((typeof(bus1_user_max_fds))-1 > U16_MAX);
 
 	r = bus1_user_quota_charge_one(&peer->user->n_slices,
 				       stats->n_slices, 1);
