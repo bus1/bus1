@@ -149,7 +149,7 @@ static struct miscdevice bus1_misc = {
 
 struct dentry *bus1_debugdir;
 
-static int __init bus1_init(void)
+static int __init bus1_modinit(void)
 {
 	int r;
 
@@ -170,18 +170,18 @@ static int __init bus1_init(void)
 
 error:
 	debugfs_remove(bus1_debugdir);
-	bus1_user_exit();
+	bus1_user_modexit();
 	return r;
 }
 
-static void __exit bus1_exit(void)
+static void __exit bus1_modexit(void)
 {
 	misc_deregister(&bus1_misc);
 	debugfs_remove(bus1_debugdir);
-	bus1_user_exit();
+	bus1_user_modexit();
 }
 
-module_init(bus1_init);
-module_exit(bus1_exit);
+module_init(bus1_modinit);
+module_exit(bus1_modexit);
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("Bus based interprocess communication");

@@ -44,7 +44,7 @@ MODULE_PARM_DESC(user_max_bytes, "Max number of bytes for each user.");
 MODULE_PARM_DESC(user_max_fds, "Max number of fds for each user.");
 
 /**
- * bus1_user_exit() - clean up global resources of user accounting
+ * bus1_user_modexit() - clean up global resources of user accounting
  *
  * This function cleans up any remaining global resources that were allocated
  * by the user accounting helpers. The caller must make sure that no user
@@ -53,7 +53,7 @@ MODULE_PARM_DESC(user_max_fds, "Max number of fds for each user.");
  *
  * This is meant to be called on module-exit.
  */
-void bus1_user_exit(void)
+void bus1_user_modexit(void)
 {
 	BUS1_WARN_ON(!idr_is_empty(&bus1_user_ida.idr));
 	BUS1_WARN_ON(!idr_is_empty(&bus1_user_idr));

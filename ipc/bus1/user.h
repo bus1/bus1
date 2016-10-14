@@ -109,7 +109,7 @@ struct bus1_user_quota {
 };
 
 /* users */
-void bus1_user_exit(void);
+void bus1_user_modexit(void);
 struct bus1_user *bus1_user_ref_by_uid(kuid_t uid);
 struct bus1_user *bus1_user_ref(struct bus1_user *user);
 struct bus1_user *bus1_user_unref(struct bus1_user *user);
