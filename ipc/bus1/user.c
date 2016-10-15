@@ -132,13 +132,10 @@ static void bus1_user_free(struct kref *ref)
 {
 	struct bus1_user *user = container_of(ref, struct bus1_user, ref);
 
-	/* if already dropped, it's set to invalid */
-	if (uid_valid(user->uid)) {
-		mutex_lock(&bus1_user_lock);
-		if (uid_valid(user->uid)) /* check again underneath lock */
-			idr_remove(&bus1_user_idr, __kuid_val(user->uid));
-		mutex_unlock(&bus1_user_lock);
-	}
+	lockdep_assert_held(&bus1_user_lock);
+
+	if (likely(uid_valid(user->uid)))
+		idr_remove(&bus1_user_idr, __kuid_val(user->uid));
 
 	/* drop the id from the ida if it was initialized */
 	if (user->id != BUS1_INTERNAL_UID_INVALID)
@@ -160,13 +157,13 @@ static void bus1_user_free(struct kref *ref)
  */
 struct bus1_user *bus1_user_ref_by_uid(kuid_t uid)
 {
-	struct bus1_user *user, *old_user;
+	struct bus1_user *user;
 	int r;
 
 	if (BUS1_WARN_ON(!uid_valid(uid)))
 		return ERR_PTR(-ENOTRECOVERABLE);
 
-	/* try to get the user without taking a lock */
+	/* fast-path: acquire reference via rcu */
 	rcu_read_lock();
 	user = idr_find(&bus1_user_idr, __kuid_val(uid));
 	if (user && !kref_get_unless_zero(&user->ref))
@@ -175,62 +172,36 @@ struct bus1_user *bus1_user_ref_by_uid(kuid_t uid)
 	if (user)
 		return user;
 
-	/* didn't exist, allocate a new one */
-	user = bus1_user_new();
-	if (IS_ERR(user))
-		return ERR_CAST(user);
-
-	/*
-	 * Allocate the smallest possible internal id for this user; used in
-	 * arrays for accounting user quota in receiver pools.
-	 */
-	r = ida_simple_get(&bus1_user_ida, 0, 0, GFP_KERNEL);
-	if (r < 0)
-		goto error;
-	user->id = r;
-
-	/*
-	 * Now insert the new user object into the lookup tree. Note that
-	 * someone might have raced us, in which case we need to switch over
-	 * and drop our object. However, if the racing entry itself is already
-	 * about to be destroyed again (ref-count is 0, cleanup handler is
-	 * blocking on the user-lock to drop the object), we rather replace
-	 * the entry in the IDR with our own and mark the old one as removed.
-	 *
-	 * Note that we must set user->uid *before* the idr insertion, to make
-	 * sure any rcu-lookup can properly read it, even before we drop the
-	 * lock.
-	 */
+	/* slow-path: try again with IDR locked */
 	mutex_lock(&bus1_user_lock);
-	user->uid = uid;
-	old_user = idr_find(&bus1_user_idr, __kuid_val(uid));
-	if (likely(!old_user)) {
-		r = idr_alloc(&bus1_user_idr, user, __kuid_val(uid),
-			      __kuid_val(uid) + 1, GFP_KERNEL);
+	user = idr_find(&bus1_user_idr, __kuid_val(uid));
+	if (likely(!bus1_user_ref(user))) {
+		user = bus1_user_new();
+		if (IS_ERR(user))
+			goto exit;
+
+		r = ida_simple_get(&bus1_user_ida, 0, 0, GFP_KERNEL);
 		if (r < 0) {
-			mutex_unlock(&bus1_user_lock);
-			user->uid = INVALID_UID; /* couldn't insert */
-			goto error;
+			kref_put(&user->ref, bus1_user_free);
+			user = ERR_PTR(r);
+			goto exit;
 		}
-	} else if (unlikely(!kref_get_unless_zero(&old_user->ref))) {
-		idr_replace(&bus1_user_idr, user, __kuid_val(uid));
-		old_user->uid = INVALID_UID; /* mark old as removed */
-		old_user = NULL;
-	} else {
-		user->uid = INVALID_UID; /* didn't insert, drop the marker */
+		user->id = r;
+
+		user->uid = uid;
+		r = idr_alloc(&bus1_user_idr, user, __kuid_val(uid),
+			       __kuid_val(uid) + 1, GFP_KERNEL);
+		if (r < 0) {
+			user->uid = INVALID_UID; /* couldn't insert */
+			kref_put(&user->ref, bus1_user_free);
+			user = ERR_PTR(r);
+		}
 	}
+
+exit:
 	mutex_unlock(&bus1_user_lock);
 
-	if (old_user) {
-		bus1_user_unref(user);
-		user = old_user;
-	}
-
 	return user;
-
-error:
-	bus1_user_unref(user);
-	return ERR_PTR(r);
 }
 
 /**
@@ -255,8 +226,7 @@ struct bus1_user *bus1_user_ref(struct bus1_user *user)
  * bus1_user_unref() - release reference
  * @user:	user to release, or NULL
  *
- * Release a reference to a user-object. This function may take the
- * bus1_user_lock.
+ * Release a reference to a user-object.
  *
  * If NULL is passed, this is a no-op.
  *
@@ -264,8 +234,11 @@ struct bus1_user *bus1_user_ref(struct bus1_user *user)
  */
 struct bus1_user *bus1_user_unref(struct bus1_user *user)
 {
-	if (user)
-		kref_put(&user->ref, bus1_user_free);
+	if (user) {
+		if (kref_put_mutex(&user->ref, bus1_user_free, &bus1_user_lock))
+			mutex_unlock(&bus1_user_lock);
+	}
+
 	return NULL;
 }
 
