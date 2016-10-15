@@ -30,16 +30,9 @@
  *
  * Since bus1 allows communication across UID boundaries, any such transmission
  * of resources must be properly accounted. Bus1 employs dynamic quotas to
- * fairly distribute available resources. That is, each transmission is seen by
- * bus1 as a transmission of resources from a UID to a peer. Any transmitted
- * resources are thus limited by a quota object that represents the combination
- * of the sending UID and the receiving peer. This means, regardless how many
- * different peers a possibly malicious user creates, they are accounted to the
- * same limits. So whenever a UID transmits resources to a peer, it gets access
- * to a dynamically calculated subset of the receiver's resource limits. But it
- * never gets access to the entire resource space, so it cannot exhaust the
- * resource limits of the receiver, but only its own quota on those resource
- * limits.
+ * fairly distribute available resources. Those quotas make sure that available
+ * resources of a peer cannot be exhausted by remote UIDs, but are fairly
+ * divided among all communicating peers.
  */
 
 #include <linux/atomic.h>
@@ -50,38 +43,45 @@
 struct bus1_peer;
 
 /**
- * struct bus1_user - resource accounting for users
- * @rcu:		rcu
- * @lock:		data lock
- * @ref:		reference counter
- * @id:			internal index of this user
- * @uid:		UID of the user
- * @n_slices:		number of remaining quota for owned slices
- * @n_handles:		number of remaining quota for owned handles
- * @n_inflight_bytes:	number of remaining quota for inflight bytes
- * @n_inflight_fds:	number of remaining quota for inflight FDs
- * @max_slices:		maximum number of owned slices
- * @max_handles:	maximum number of owned handles
- * @max_bytes:		maximum number of inflight bytes
- * @max_fds:		maximum number of inflight FDs
+ * struct bus1_user_limits - resource limit counters
+ * @n_slices:			number of remaining quota for owned slices
+ * @n_handles:			number of remaining quota for owned handles
+ * @n_inflight_bytes:		number of remaining quota for inflight bytes
+ * @n_inflight_fds:		number of remaining quota for inflight FDs
+ * @max_slices:			maximum number of owned slices
+ * @max_handles:		maximum number of owned handles
+ * @max_inflight_bytes:		maximum number of inflight bytes
+ * @max_inflight_fds:		maximum number of inflight FDs
  */
-struct bus1_user {
-	union {
-		struct rcu_head rcu;
-		struct mutex lock;
-	};
-	struct kref ref;
-	unsigned int id;
-	kuid_t uid;
-
+struct bus1_user_limits {
 	atomic_t n_slices;
 	atomic_t n_handles;
 	atomic_t n_inflight_bytes;
 	atomic_t n_inflight_fds;
-	atomic_t max_slices;
-	atomic_t max_handles;
-	atomic_t max_bytes;
-	atomic_t max_fds;
+	unsigned int max_slices;
+	unsigned int max_handles;
+	unsigned int max_inflight_bytes;
+	unsigned int max_inflight_fds;
+};
+
+/**
+ * struct bus1_user - resource accounting for users
+ * @ref:		reference counter
+ * @lock:		data lock
+ * @id:			internal index of this user
+ * @uid:		UID of the user
+ * @rcu:		rcu
+ * @limits:		resource limit counters
+ */
+struct bus1_user {
+	struct kref ref;
+	struct mutex lock;
+	unsigned int id;
+	kuid_t uid;
+	union {
+		struct rcu_head rcu;
+		struct bus1_user_limits limits;
+	};
 };
 
 /**
@@ -108,8 +108,15 @@ struct bus1_user_quota {
 	struct bus1_user_stats *stats;
 };
 
-/* users */
+/* module cleanup */
 void bus1_user_modexit(void);
+
+/* limits */
+void bus1_user_limits_init(struct bus1_user_limits *limits,
+			   struct bus1_user *source);
+void bus1_user_limits_deinit(struct bus1_user_limits *limits);
+
+/* users */
 struct bus1_user *bus1_user_ref_by_uid(kuid_t uid);
 struct bus1_user *bus1_user_ref(struct bus1_user *user);
 struct bus1_user *bus1_user_unref(struct bus1_user *user);

@@ -132,8 +132,8 @@ static void bus1_peer_reset(struct bus1_peer *peer, bool final)
 	}
 	mutex_unlock(&peer->local.lock);
 
-	atomic_add(n_slices, &peer->user->n_slices);
-	atomic_add(n_handles, &peer->user->n_handles);
+	atomic_add(n_slices, &peer->user->limits.n_slices);
+	atomic_add(n_handles, &peer->user->limits.n_handles);
 
 	while ((node = list_first_entry_or_null(&list, struct bus1_queue_node,
 						link))) {
@@ -321,7 +321,7 @@ static int bus1_peer_ioctl_handle_release(struct bus1_peer *peer,
 		return -EFAULT;
 
 	r = bus1_handle_release_by_id(peer, id, &n_handles);
-	atomic_add(n_handles, &peer->user->n_handles);
+	atomic_add(n_handles, &peer->user->limits.n_handles);
 
 	return r;
 }
@@ -414,7 +414,7 @@ static int bus1_peer_ioctl_node_destroy(struct bus1_peer *peer,
 			res = r;
 	}
 
-	atomic_add(n_handles, &peer->user->n_handles);
+	atomic_add(n_handles, &peer->user->limits.n_handles);
 
 	return res;
 }
@@ -435,7 +435,7 @@ static int bus1_peer_ioctl_slice_release(struct bus1_peer *peer,
 	r = bus1_pool_release_user(&peer->data.pool, offset, &n_slices);
 	mutex_unlock(&peer->data.lock);
 
-	atomic_add(n_slices, &peer->user->n_slices);
+	atomic_add(n_slices, &peer->user->limits.n_slices);
 	return r;
 }
 
@@ -494,7 +494,7 @@ static int bus1_peer_ioctl_send(struct bus1_peer *peer, unsigned long arg)
 			goto exit;
 	} else {
 		if (unlikely(param.n_destinations >
-			     atomic_read(&peer->user->max_handles))) {
+			     peer->user->limits.max_handles)) {
 			r = -EMSGSIZE;
 			goto exit;
 		}

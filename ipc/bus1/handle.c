@@ -1073,7 +1073,7 @@ int bus1_handle_pair(struct bus1_peer *src,
 
 	if (*src_idp & BUS1_NODE_FLAG_ALLOCATE) {
 		/* account new node on @src */
-		if (atomic_dec_if_positive(&src->user->n_handles) < 0)
+		if (atomic_dec_if_positive(&src->user->limits.n_handles) < 0)
 			return -EDQUOT;
 
 		accounted_node = true;
@@ -1133,7 +1133,7 @@ int bus1_handle_pair(struct bus1_peer *src,
 	}
 
 	/* account new handle on @dst */
-	if (atomic_dec_if_positive(&dst->user->n_handles) < 0) {
+	if (atomic_dec_if_positive(&dst->user->limits.n_handles) < 0) {
 		r = -EDQUOT;
 		goto exit;
 	}
@@ -1189,7 +1189,7 @@ int bus1_handle_pair(struct bus1_peer *src,
 	if (dst_handle != t) {
 		bus1_handle_release(t, dst);
 		bus1_handle_unref(t);
-		atomic_inc(&dst->user->n_handles);
+		atomic_inc(&dst->user->limits.n_handles);
 	}
 
 	r = 0;
@@ -1198,9 +1198,9 @@ int bus1_handle_pair(struct bus1_peer *src,
 
 exit:
 	if (accounted_node)
-		atomic_inc(&src->user->n_handles);
+		atomic_inc(&src->user->limits.n_handles);
 	if (accounted_handle)
-		atomic_inc(&dst->user->n_handles);
+		atomic_inc(&dst->user->limits.n_handles);
 	bus1_handle_unref(dst_handle);
 	bus1_handle_unref(src_handle);
 	bus1_peer_release(owner);
@@ -1292,7 +1292,7 @@ int bus1_node_destroy_by_id(struct bus1_peer *peer,
 	if (*idp & BUS1_NODE_FLAG_ALLOCATE) {
 		handle = bus1_handle_new_owner(*idp);
 		if (IS_ERR(handle)) {
-			atomic_inc(&peer->user->n_handles);
+			atomic_inc(&peer->user->limits.n_handles);
 			return PTR_ERR(handle);
 		}
 
@@ -1473,7 +1473,7 @@ int bus1_handle_dest_import(struct bus1_handle_dest *dest,
 			return -ESHUTDOWN;
 
 		/* account node+userref */
-		if (bus1_atomic_sub_if_ge(&peer->user->n_handles,
+		if (bus1_atomic_sub_if_ge(&peer->user->limits.n_handles,
 					  2, 2) < 0) {
 			bus1_peer_release(peer);
 			return -EDQUOT;
@@ -1481,7 +1481,7 @@ int bus1_handle_dest_import(struct bus1_handle_dest *dest,
 
 		handle = bus1_handle_new_owner(id);
 		if (IS_ERR(handle)) {
-			atomic_inc(&peer->user->n_handles);
+			atomic_inc(&peer->user->limits.n_handles);
 			bus1_peer_release(peer);
 			return PTR_ERR(handle);
 		}
@@ -1974,7 +1974,7 @@ int bus1_handle_transfer_export(struct bus1_handle_transfer *transfer,
 	}
 
 	/* account for new nodes */
-	if (!bus1_atomic_sub_if_ge(&peer->user->n_handles, n_new, n_new))
+	if (!bus1_atomic_sub_if_ge(&peer->user->limits.n_handles, n_new, n_new))
 		return -EDQUOT;
 
 	BUS1_HANDLE_BATCH_FOREACH_HANDLE(entry, pos, &transfer->batch) {

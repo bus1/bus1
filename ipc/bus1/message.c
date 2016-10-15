@@ -205,10 +205,10 @@ static void bus1_message_deallocate(struct bus1_message *message,
 				       message->handles.batch.n_entries,
 				       message->n_files);
 		if (!bus1_pool_slice_is_public(message->slice))
-			atomic_inc(&peer->user->n_slices);
+			atomic_inc(&peer->user->limits.n_slices);
 		if (message->n_accounted_handles > 0)
 			atomic_add(message->n_accounted_handles,
-				   &peer->user->n_handles);
+				   &peer->user->limits.n_handles);
 		mutex_lock(&peer->data.lock);
 		message->slice = bus1_pool_release_kernel(&peer->data.pool,
 							  message->slice);
@@ -362,10 +362,10 @@ int bus1_message_install(struct bus1_message *message,
 		if (!peek) {
 			BUS1_WARN_ON(n_handles > message->n_accounted_handles);
 			atomic_add(message->n_accounted_handles - n_handles,
-				   &peer->user->n_handles);
+				   &peer->user->limits.n_handles);
 			message->n_accounted_handles = 0;
 			n_handles = 0;
-		} else if (!bus1_atomic_sub_if_ge(&peer->user->n_handles,
+		} else if (!bus1_atomic_sub_if_ge(&peer->user->limits.n_handles,
 						  n_handles, n_handles)) {
 			r = -EDQUOT;
 			goto exit;

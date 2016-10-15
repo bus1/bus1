@@ -31,13 +31,13 @@ static DEFINE_IDA(bus1_user_ida);
 
 static unsigned short bus1_user_max_slices = 16383;
 static unsigned short bus1_user_max_handles = 65535;
-static unsigned int bus1_user_max_bytes = 16 * 1024 * 1024;
-static unsigned short bus1_user_max_fds = 4096;
+static unsigned int bus1_user_max_inflight_bytes = 16 * 1024 * 1024;
+static unsigned short bus1_user_max_inflight_fds = 4096;
 
 module_param_named(user_max_slices, bus1_user_max_slices, ushort, 0644);
 module_param_named(user_max_handles, bus1_user_max_handles, ushort, 0644);
-module_param_named(user_max_bytes, bus1_user_max_bytes, uint, 0644);
-module_param_named(user_max_fds, bus1_user_max_fds, ushort, 0644);
+module_param_named(user_max_bytes, bus1_user_max_inflight_bytes, uint, 0644);
+module_param_named(user_max_fds, bus1_user_max_inflight_fds, ushort, 0644);
 MODULE_PARM_DESC(user_max_slices, "Max number of slices for each user.");
 MODULE_PARM_DESC(user_max_handles, "Max number of handles for each user.");
 MODULE_PARM_DESC(user_max_bytes, "Max number of bytes for each user.");
@@ -63,42 +63,74 @@ void bus1_user_modexit(void)
 	ida_init(&bus1_user_ida);
 }
 
+/**
+ * bus1_user_limits_init() - initialize resource limit counter
+ * @limits:		object to initialize
+ * @source:		source to initialize from, or NULL
+ *
+ * This initializes the resource-limit counter @limit. The initial limits are
+ * taken from @source, if given. If NULL, the global default limits are taken.
+ */
+void bus1_user_limits_init(struct bus1_user_limits *limits,
+			   struct bus1_user *source)
+{
+	if (source) {
+		limits->max_slices = source->limits.max_slices;
+		limits->max_handles = source->limits.max_handles;
+		limits->max_inflight_bytes = source->limits.max_inflight_bytes;
+		limits->max_inflight_fds = source->limits.max_inflight_fds;
+	} else {
+		limits->max_slices = bus1_user_max_slices;
+		limits->max_handles = bus1_user_max_handles;
+		limits->max_inflight_bytes = bus1_user_max_inflight_bytes;
+		limits->max_inflight_fds = bus1_user_max_inflight_fds;
+	}
+
+	atomic_set(&limits->n_slices, limits->max_slices);
+	atomic_set(&limits->n_handles, limits->max_handles);
+	atomic_set(&limits->n_inflight_bytes, limits->max_inflight_bytes);
+	atomic_set(&limits->n_inflight_fds, limits->max_inflight_fds);
+}
+
+/**
+ * bus1_user_limits_deinit() - deinitialize source limit counter
+ * @limits:		object to deinitialize
+ *
+ * This should be called on destruction of @limits. It verifies the correctness
+ * of the limits and emits warnings if something went wrong.
+ */
+void bus1_user_limits_deinit(struct bus1_user_limits *limits)
+{
+	WARN_ON(atomic_read(&limits->n_slices) !=
+		limits->max_slices);
+	WARN_ON(atomic_read(&limits->n_handles) !=
+		limits->max_handles);
+	WARN_ON(atomic_read(&limits->n_inflight_bytes) !=
+		limits->max_inflight_bytes);
+	WARN_ON(atomic_read(&limits->n_inflight_fds) !=
+		limits->max_inflight_fds);
+}
+
 static struct bus1_user *bus1_user_new(void)
 {
-	struct bus1_user *u;
+	struct bus1_user *user;
 
-	u = kmalloc(sizeof(*u), GFP_KERNEL);
-	if (!u)
+	user = kmalloc(sizeof(*user), GFP_KERNEL);
+	if (!user)
 		return ERR_PTR(-ENOMEM);
 
-	mutex_init(&u->lock);
-	kref_init(&u->ref);
-	u->id = BUS1_INTERNAL_UID_INVALID;
-	u->uid = INVALID_UID;
-	atomic_set(&u->max_slices, bus1_user_max_slices);
-	atomic_set(&u->max_handles, bus1_user_max_handles);
-	atomic_set(&u->max_bytes, bus1_user_max_bytes);
-	atomic_set(&u->max_fds, bus1_user_max_fds);
-	atomic_set(&u->n_slices, atomic_read(&u->max_slices));
-	atomic_set(&u->n_handles, atomic_read(&u->max_handles));
-	atomic_set(&u->n_inflight_bytes, atomic_read(&u->max_bytes));
-	atomic_set(&u->n_inflight_fds, atomic_read(&u->max_fds));
+	kref_init(&user->ref);
+	mutex_init(&user->lock);
+	user->id = BUS1_INTERNAL_UID_INVALID;
+	user->uid = INVALID_UID;
+	bus1_user_limits_init(&user->limits, NULL);
 
-	return u;
+	return user;
 }
 
 static void bus1_user_free(struct kref *ref)
 {
 	struct bus1_user *user = container_of(ref, struct bus1_user, ref);
-
-	BUS1_WARN_ON(atomic_read(&user->n_inflight_fds) !=
-					atomic_read(&user->max_fds));
-	BUS1_WARN_ON(atomic_read(&user->n_inflight_bytes) !=
-					atomic_read(&user->max_bytes));
-	BUS1_WARN_ON(atomic_read(&user->n_handles) !=
-					atomic_read(&user->max_handles));
-	BUS1_WARN_ON(atomic_read(&user->n_slices) !=
-					atomic_read(&user->max_slices));
 
 	/* if already dropped, it's set to invalid */
 	if (uid_valid(user->uid)) {
@@ -112,6 +144,7 @@ static void bus1_user_free(struct kref *ref)
 	if (user->id != BUS1_INTERNAL_UID_INVALID)
 		ida_simple_remove(&bus1_user_ida, user->id);
 
+	bus1_user_limits_deinit(&user->limits);
 	mutex_destroy(&user->lock);
 	kfree_rcu(user, rcu);
 }
@@ -370,25 +403,25 @@ int bus1_user_quota_charge(struct bus1_peer *peer,
 
 	BUILD_BUG_ON((typeof(bus1_user_max_slices))-1 > U16_MAX);
 	BUILD_BUG_ON((typeof(bus1_user_max_handles))-1 > U16_MAX);
-	BUILD_BUG_ON((typeof(bus1_user_max_bytes))-1 > U32_MAX);
-	BUILD_BUG_ON((typeof(bus1_user_max_fds))-1 > U16_MAX);
+	BUILD_BUG_ON((typeof(bus1_user_max_inflight_bytes))-1 > U32_MAX);
+	BUILD_BUG_ON((typeof(bus1_user_max_inflight_fds))-1 > U16_MAX);
 
-	r = bus1_user_quota_charge_one(&peer->user->n_slices,
+	r = bus1_user_quota_charge_one(&peer->user->limits.n_slices,
 				       stats->n_slices, 1);
 	if (r < 0)
 		return r;
 
-	r = bus1_user_quota_charge_one(&peer->user->n_handles,
+	r = bus1_user_quota_charge_one(&peer->user->limits.n_handles,
 				       stats->n_handles, n_handles);
 	if (r < 0)
 		goto error_slices;
 
-	r = bus1_user_quota_charge_one(&peer->user->n_inflight_bytes,
+	r = bus1_user_quota_charge_one(&peer->user->limits.n_inflight_bytes,
 				       stats->n_bytes, n_bytes);
 	if (r < 0)
 		goto error_handles;
 
-	r = bus1_user_quota_charge_one(&peer->user->n_inflight_fds,
+	r = bus1_user_quota_charge_one(&peer->user->limits.n_inflight_fds,
 				       stats->n_fds, n_fds);
 	if (r < 0)
 		goto error_bytes;
@@ -402,11 +435,11 @@ int bus1_user_quota_charge(struct bus1_peer *peer,
 	return 0;
 
 error_bytes:
-	atomic_add(n_bytes, &peer->user->n_inflight_bytes);
+	atomic_add(n_bytes, &peer->user->limits.n_inflight_bytes);
 error_handles:
-	atomic_add(n_handles, &peer->user->n_handles);
+	atomic_add(n_handles, &peer->user->limits.n_handles);
 error_slices:
-	atomic_inc(&peer->user->n_slices);
+	atomic_inc(&peer->user->limits.n_slices);
 	return r;
 }
 
@@ -445,10 +478,10 @@ void bus1_user_quota_discharge(struct bus1_peer *peer,
 	stats->n_handles -= n_handles;
 	stats->n_bytes -= n_bytes;
 	stats->n_fds -= n_fds;
-	atomic_inc(&peer->user->n_slices);
-	atomic_add(n_handles, &peer->user->n_handles);
-	atomic_add(n_bytes, &peer->user->n_inflight_bytes);
-	atomic_add(n_fds, &peer->user->n_inflight_fds);
+	atomic_inc(&peer->user->limits.n_slices);
+	atomic_add(n_handles, &peer->user->limits.n_handles);
+	atomic_add(n_bytes, &peer->user->limits.n_inflight_bytes);
+	atomic_add(n_fds, &peer->user->limits.n_inflight_fds);
 }
 
 /**
@@ -488,6 +521,6 @@ void bus1_user_quota_commit(struct bus1_peer *peer,
 	stats->n_fds -= n_fds;
 
 	/* discharge any inflight-only resources */
-	atomic_add(n_bytes, &peer->user->n_inflight_bytes);
-	atomic_add(n_fds, &peer->user->n_inflight_fds);
+	atomic_add(n_bytes, &peer->user->limits.n_inflight_bytes);
+	atomic_add(n_fds, &peer->user->limits.n_inflight_fds);
 }
