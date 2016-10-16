@@ -1193,6 +1193,8 @@ int bus1_handle_pair(struct bus1_peer *src,
 	}
 
 	r = 0;
+	accounted_node = false;
+	accounted_handle = false;
 
 exit:
 	if (accounted_node)

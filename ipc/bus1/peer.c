@@ -400,10 +400,14 @@ static int bus1_peer_ioctl_node_destroy(struct bus1_peer *peer,
 		if (get_user(id, ptr_nodes + i)) {
 			r = -EFAULT;
 		} else {
+			size_t n_handles_once = 0;
+
 			/* >= 0 on success, >0 in case @id was modified */
-			r = bus1_node_destroy_by_id(peer, &id, &n_handles);
+			r = bus1_node_destroy_by_id(peer, &id, &n_handles_once);
 			if (r > 0 && put_user(id, ptr_nodes + i))
 				r = -EFAULT;
+
+			n_handles += n_handles_once;
 		}
 
 		if (unlikely(r < 0 && res >= 0))
