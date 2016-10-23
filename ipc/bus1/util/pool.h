@@ -117,8 +117,8 @@ struct bus1_pool {
 
 #define BUS1_POOL_NULL ((struct bus1_pool){})
 
-int bus1_pool_create(struct bus1_pool *pool);
-void bus1_pool_destroy(struct bus1_pool *pool);
+int bus1_pool_init(struct bus1_pool *pool, const char *filename);
+void bus1_pool_deinit(struct bus1_pool *pool);
 
 struct bus1_pool_slice *bus1_pool_alloc(struct bus1_pool *pool, size_t size);
 struct bus1_pool_slice *bus1_pool_release_kernel(struct bus1_pool *pool,
@@ -152,7 +152,7 @@ ssize_t bus1_pool_write_kvec(struct bus1_pool *pool,
  *
  * Note that if you need reliable results, you better make sure this cannot
  * race calls to bus1_pool_publish() (or bus1_pool_release_user(),
- * respectively). IOW, keep the owning peer locked.
+ * respectively).
  *
  * Return: True if public, false if not.
  */

@@ -92,8 +92,8 @@ static void bus1_test_pool(void)
 	};
 	size_t n_slices;
 
-	bus1_pool_destroy(&pool);
-	WARN_ON(bus1_pool_create(&pool) < 0);
+	bus1_pool_deinit(&pool);
+	WARN_ON(bus1_pool_init(&pool, "test") < 0);
 
 	slice = bus1_pool_alloc(&pool, 0);
 	WARN_ON(PTR_ERR(slice) != -EMSGSIZE);
@@ -125,7 +125,7 @@ static void bus1_test_pool(void)
 	WARN_ON(bus1_pool_release_user(&pool, slice->offset, &n_slices) < 0);
 	WARN_ON(n_slices != 1);
 
-	bus1_pool_destroy(&pool);
+	bus1_pool_deinit(&pool);
 }
 
 static void bus1_test_queue(void)
@@ -286,7 +286,7 @@ static void bus1_test_quota(void)
 	mutex_init(&peer.lock);
 	peer.user = owner;
 	mutex_lock(&peer.lock);
-	bus1_pool_create(&peer.data.pool);
+	bus1_pool_init(&peer.data.pool, "test");
 
 	/* charge nothing: allocates the user stats, charge one message */
 	r = bus1_user_quota_charge(&peer, user1, 0, 0, 0);
@@ -494,7 +494,7 @@ static void bus1_test_quota(void)
 	WARN_ON(peer.quota.stats[1].n_bytes != 0);
 	WARN_ON(peer.quota.stats[1].n_fds != 0);
 
-	bus1_pool_destroy(&peer.data.pool);
+	bus1_pool_deinit(&peer.data.pool);
 	mutex_unlock(&peer.lock);
 	bus1_user_quota_destroy(&peer.quota);
 	WARN_ON(bus1_user_unref(user1));

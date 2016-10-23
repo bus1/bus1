@@ -81,7 +81,7 @@ struct bus1_peer *bus1_peer_new(void)
 	peer->local.map_handles_by_id = RB_ROOT;
 	peer->local.handle_ids = 0;
 
-	r = bus1_pool_create(&peer->data.pool);
+	r = bus1_pool_init(&peer->data.pool, KBUILD_MODNAME "-peer");
 	if (r < 0)
 		goto error;
 
@@ -217,7 +217,7 @@ struct bus1_peer *bus1_peer_free(struct bus1_peer *peer)
 	/* deinitialize data section */
 	WARN_ON(!RB_EMPTY_ROOT(&peer->data.map_handles_by_node));
 	bus1_queue_destroy(&peer->data.queue);
-	bus1_pool_destroy(&peer->data.pool);
+	bus1_pool_deinit(&peer->data.pool);
 	mutex_destroy(&peer->data.lock);
 
 	/* deinitialize constant fields */

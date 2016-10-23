@@ -144,14 +144,15 @@ bus1_pool_slice_find_by_offset(struct bus1_pool *pool, size_t offset)
 }
 
 /**
- * bus1_pool_create() - create memory pool
+ * bus1_pool_init() - create memory pool
  * @pool:	pool to operate on
+ * @filename:	name to use for the shmem-file (only visible via /proc)
  *
  * Initialize a new pool object.
  *
  * Return: 0 on success, negative error code on failure.
  */
-int bus1_pool_create(struct bus1_pool *pool)
+int bus1_pool_init(struct bus1_pool *pool, const char *filename)
 {
 	struct bus1_pool_slice *slice;
 	struct page *p;
@@ -162,8 +163,8 @@ int bus1_pool_create(struct bus1_pool *pool)
 	BUILD_BUG_ON(BUS1_POOL_SLICE_SIZE_BITS + 4 > 32);
 	BUILD_BUG_ON(BUS1_POOL_SLICE_SIZE_MAX > U32_MAX);
 
-	f = shmem_file_setup(KBUILD_MODNAME "-peer",
-			     ALIGN(BUS1_POOL_SLICE_SIZE_MAX, 8), VM_NORESERVE);
+	f = shmem_file_setup(filename, ALIGN(BUS1_POOL_SLICE_SIZE_MAX, 8),
+			     VM_NORESERVE);
 	if (IS_ERR(f))
 		return PTR_ERR(f);
 
@@ -181,7 +182,7 @@ int bus1_pool_create(struct bus1_pool *pool)
 
 	slice = bus1_pool_slice_new(0, BUS1_POOL_SLICE_SIZE_MAX);
 	if (IS_ERR(slice)) {
-		bus1_pool_destroy(pool);
+		bus1_pool_deinit(pool);
 		return PTR_ERR(slice);
 	}
 
@@ -206,17 +207,17 @@ int bus1_pool_create(struct bus1_pool *pool)
 }
 
 /**
- * bus1_pool_destroy() - pool to destroy
+ * bus1_pool_deinit() - destroy pool
  * @pool:	pool to destroy, or NULL
  *
- * This destroys a pool that was previously create via bus1_pool_create(). If
+ * This destroys a pool that was previously create via bus1_pool_init(). If
  * NULL is passed, or if @pool->f is NULL (i.e., the pool was initialized to 0
- * but not created via bus1_pool_create(), yet), then this is a no-op.
+ * but not created via bus1_pool_init(), yet), then this is a no-op.
  *
  * The caller must make sure that no kernel reference to any slice exists. Any
  * pending user-space reference to any slice is dropped by this function.
  */
-void bus1_pool_destroy(struct bus1_pool *pool)
+void bus1_pool_deinit(struct bus1_pool *pool)
 {
 	struct bus1_pool_slice *slice;
 
