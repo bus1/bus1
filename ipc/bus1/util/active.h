@@ -44,6 +44,7 @@
 
 #include <linux/atomic.h>
 #include <linux/lockdep.h>
+#include <linux/sched.h>
 #include <linux/wait.h>
 
 /* base value for counter-bias, see BUS1_ACTIVE_* constants for details */
