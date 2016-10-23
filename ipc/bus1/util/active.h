@@ -59,7 +59,7 @@
  * lockdep-enabled compilations, it will contain more fields.
  *
  * Users must embed this object into their parent structures and create/destroy
- * it via bus1_active_init() and bus1_active_destroy().
+ * it via bus1_active_init() and bus1_active_deinit().
  */
 struct bus1_active {
 	atomic_t count;
@@ -70,7 +70,7 @@ struct bus1_active {
 };
 
 void bus1_active_init_private(struct bus1_active *active);
-void bus1_active_destroy(struct bus1_active *active);
+void bus1_active_deinit(struct bus1_active *active);
 bool bus1_active_is_new(struct bus1_active *active);
 bool bus1_active_is_active(struct bus1_active *active);
 bool bus1_active_is_deactivated(struct bus1_active *active);

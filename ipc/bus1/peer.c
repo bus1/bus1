@@ -223,7 +223,7 @@ struct bus1_peer *bus1_peer_free(struct bus1_peer *peer)
 	/* deinitialize constant fields */
 	mutex_destroy(&peer->lock);
 	debugfs_remove_recursive(peer->debugdir);
-	bus1_active_destroy(&peer->active);
+	bus1_active_deinit(&peer->active);
 	bus1_user_quota_destroy(&peer->quota);
 	peer->user = bus1_user_unref(peer->user);
 	put_pid_ns(peer->pid_ns);

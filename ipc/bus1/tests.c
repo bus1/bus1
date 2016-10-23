@@ -74,7 +74,7 @@ static void bus1_test_active(void)
 	WARN_ON(bus1_active_cleanup(&active, NULL, active_cleanup, &clean));
 	WARN_ON(!clean);
 
-	bus1_active_destroy(&active);
+	bus1_active_deinit(&active);
 }
 
 static void bus1_test_pool(void)

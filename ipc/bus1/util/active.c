@@ -58,7 +58,7 @@ void bus1_active_init_private(struct bus1_active *active)
 }
 
 /**
- * bus1_active_destroy() - destroy object
+ * bus1_active_deinit() - destroy object
  * @active:	object to destroy
  *
  * Destroy an active-object. The object must have been initialized via
@@ -69,7 +69,7 @@ void bus1_active_init_private(struct bus1_active *active)
  * This function only does sanity checks, it does not modify the object itself.
  * There is no allocated memory, so there is nothing to do.
  */
-void bus1_active_destroy(struct bus1_active *active)
+void bus1_active_deinit(struct bus1_active *active)
 {
 	int v;
 
