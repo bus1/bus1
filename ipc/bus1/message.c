@@ -143,7 +143,7 @@ struct bus1_message *bus1_message_unref(struct bus1_message *message)
 int bus1_message_allocate(struct bus1_message *message,
 			  struct bus1_peer *peer)
 {
-	struct bus1_pool_slice *slice, *ps;
+	struct bus1_pool_slice *slice;
 	size_t slice_size;
 	int r;
 
@@ -167,20 +167,13 @@ int bus1_message_allocate(struct bus1_message *message,
 	if (r < 0)
 		goto exit;
 
-	ps = bus1_pool_slice_new();
-	if (IS_ERR(ps)) {
-		r = PTR_ERR(ps);
-		goto exit;
-	}
-
 	mutex_lock(&peer->data.lock);
-	slice = bus1_pool_alloc(&peer->data.pool, ps, slice_size);
+	slice = bus1_pool_alloc(&peer->data.pool, slice_size);
 	mutex_unlock(&peer->data.lock);
 	if (IS_ERR(slice)) {
 		bus1_user_quota_discharge(peer, message->user, slice_size,
 					  message->handles.batch.n_entries,
 					  message->n_files);
-		bus1_pool_slice_free(ps);
 		r = PTR_ERR(slice);
 		goto exit;
 	}

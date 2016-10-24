@@ -80,7 +80,7 @@ static void bus1_test_active(void)
 static void bus1_test_pool(void)
 {
 	struct bus1_pool pool = BUS1_POOL_NULL;
-	struct bus1_pool_slice *slice, *ps;
+	struct bus1_pool_slice *slice;
 	char *payload = "PAYLOAD";
 	struct iovec vec = {
 		.iov_base = payload,
@@ -95,18 +95,14 @@ static void bus1_test_pool(void)
 	bus1_pool_destroy(&pool);
 	WARN_ON(bus1_pool_create(&pool) < 0);
 
-	ps = bus1_pool_slice_new();
-	WARN_ON(IS_ERR_OR_NULL(ps));
-	slice = bus1_pool_alloc(&pool, ps, 0);
+	slice = bus1_pool_alloc(&pool, 0);
 	WARN_ON(PTR_ERR(slice) != -EMSGSIZE);
-	slice = bus1_pool_alloc(&pool, ps, -1);
+	slice = bus1_pool_alloc(&pool, -1);
 	WARN_ON(PTR_ERR(slice) != -EMSGSIZE);
-	slice = bus1_pool_alloc(&pool, ps, 1024);
+	slice = bus1_pool_alloc(&pool, 1024);
 	WARN_ON(IS_ERR_OR_NULL(slice));
 	bus1_pool_release_kernel(&pool, slice);
-	ps = bus1_pool_slice_new();
-	WARN_ON(IS_ERR_OR_NULL(ps));
-	slice = bus1_pool_alloc(&pool, ps, 1024);
+	slice = bus1_pool_alloc(&pool, 1024);
 	WARN_ON(IS_ERR_OR_NULL(slice));
 	WARN_ON(bus1_pool_release_user(&pool, slice->offset, &n_slices)
 		>= 0);
@@ -117,9 +113,7 @@ static void bus1_test_pool(void)
 	WARN_ON(n_slices != 0);
 	bus1_pool_release_kernel(&pool, slice);
 
-	ps = bus1_pool_slice_new();
-	WARN_ON(IS_ERR_OR_NULL(ps));
-	slice = bus1_pool_alloc(&pool, ps, 1024);
+	slice = bus1_pool_alloc(&pool, 1024);
 	WARN_ON(IS_ERR_OR_NULL(slice));
 
 	WARN_ON(bus1_pool_write_iovec(&pool, slice, 0, &vec, 1, vec.iov_len)

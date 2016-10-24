@@ -120,11 +120,7 @@ struct bus1_pool {
 int bus1_pool_create(struct bus1_pool *pool);
 void bus1_pool_destroy(struct bus1_pool *pool);
 
-struct bus1_pool_slice *bus1_pool_slice_new(void);
-void bus1_pool_slice_free(struct bus1_pool_slice *slice);
-struct bus1_pool_slice *bus1_pool_alloc(struct bus1_pool *pool,
-					struct bus1_pool_slice *ps,
-					size_t size);
+struct bus1_pool_slice *bus1_pool_alloc(struct bus1_pool *pool, size_t size);
 struct bus1_pool_slice *bus1_pool_release_kernel(struct bus1_pool *pool,
 						 struct bus1_pool_slice *slice);
 void bus1_pool_publish(struct bus1_pool *pool, struct bus1_pool_slice *slice);
