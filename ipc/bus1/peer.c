@@ -216,7 +216,7 @@ struct bus1_peer *bus1_peer_free(struct bus1_peer *peer)
 
 	/* deinitialize data section */
 	WARN_ON(!RB_EMPTY_ROOT(&peer->data.map_handles_by_node));
-	bus1_queue_destroy(&peer->data.queue);
+	bus1_queue_deinit(&peer->data.queue);
 	bus1_pool_deinit(&peer->data.pool);
 	mutex_destroy(&peer->data.lock);
 

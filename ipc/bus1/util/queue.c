@@ -38,7 +38,7 @@ static int bus1_queue_node_compare(struct bus1_queue_node *node,
 
 /**
  * bus1_queue_init() - initialize queue
- * @queue:	queue to initialize
+ * @queue:			queue to initialize
  *
  * This initializes a new queue. The queue memory is considered uninitialized,
  * any previous content is unrecoverable.
@@ -51,8 +51,8 @@ void bus1_queue_init(struct bus1_queue *queue)
 }
 
 /**
- * bus1_queue_destroy() - destroy queue
- * @queue:	queue to destroy
+ * bus1_queue_deinit() - destroy queue
+ * @queue:			queue to destroy
  *
  * This destroys a queue that was previously initialized via bus1_queue_init().
  * The caller must make sure the queue is empty before calling this.
@@ -63,7 +63,7 @@ void bus1_queue_init(struct bus1_queue *queue)
  * The caller must guarantee that the backing memory of @queue is freed in an
  * rcu-delayed manner.
  */
-void bus1_queue_destroy(struct bus1_queue *queue)
+void bus1_queue_deinit(struct bus1_queue *queue)
 {
 	if (!queue)
 		return;
@@ -215,10 +215,9 @@ static void bus1_queue_add(struct bus1_queue *queue,
 
 /**
  * bus1_queue_stage() - stage queue entry with fresh timestamp
- * @queue:		queue to operate on
- * @waitq:		wait queue to use for wake-ups, or NULL
- * @node:		queue entry to stage
- * @timestamp:		minimum timestamp for @node
+ * @queue:			queue to operate on
+ * @node:			queue entry to stage
+ * @timestamp:			minimum timestamp for @node
  *
  * Link a queue entry with a new timestamp. The staging entry blocks all
  * messages with timestamps synced on this queue in the future, as well as any
@@ -236,7 +235,6 @@ static void bus1_queue_add(struct bus1_queue *queue,
  * Return: The timestamp used.
  */
 u64 bus1_queue_stage(struct bus1_queue *queue,
-		     wait_queue_head_t *waitq,
 		     struct bus1_queue_node *node,
 		     u64 timestamp)
 {
@@ -244,7 +242,7 @@ u64 bus1_queue_stage(struct bus1_queue *queue,
 	WARN_ON(timestamp & 1);
 
 	timestamp = bus1_queue_sync(queue, timestamp);
-	bus1_queue_add(queue, waitq, node, timestamp + 1);
+	bus1_queue_add(queue, NULL, node, timestamp + 1);
 
 	return timestamp;
 }

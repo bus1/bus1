@@ -168,7 +168,7 @@ static void bus1_node_free(struct kref *ref)
 	BUS1_WARN_ON(!list_empty(&node->list_handles));
 	BUS1_WARN_ON(test_bit(BUS1_NODE_BIT_ATTACHED, &node->flags) !=
 		test_bit(BUS1_NODE_BIT_DESTROYED, &node->flags));
-	bus1_queue_node_destroy(&node->qnode);
+	bus1_queue_node_deinit(&node->qnode);
 	kfree_rcu(node, qnode.rcu);
 }
 
@@ -237,7 +237,7 @@ static void bus1_handle_finish(struct bus1_handle *handle)
 	BUS1_WARN_ON(atomic_read(&handle->n_inflight) > 0);
 	BUS1_WARN_ON(handle->holder);
 
-	bus1_queue_node_destroy(&handle->qnode);
+	bus1_queue_node_deinit(&handle->qnode);
 
 	/*
 	 * CAUTION: The handle might be embedded into the node. Make sure not
@@ -621,7 +621,6 @@ static void bus1_node_destroy(struct bus1_node *node,
 		if (holder) {
 			mutex_lock(&holder->data.lock);
 			timestamp = bus1_queue_stage(&holder->data.queue,
-						     &holder->waitq,
 						     &h->qnode, timestamp);
 			mutex_unlock(&holder->data.lock);
 			h->link.peer = holder;

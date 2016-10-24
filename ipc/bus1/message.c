@@ -105,7 +105,7 @@ static void bus1_message_free(struct kref *ref)
 		bus1_fput(message->files[i]);
 
 	bus1_handle_inflight_destroy(&message->handles);
-	bus1_queue_node_destroy(&message->qnode);
+	bus1_queue_node_deinit(&message->qnode);
 	message->user = bus1_user_unref(message->user);
 	kfree_rcu(message, qnode.rcu);
 }

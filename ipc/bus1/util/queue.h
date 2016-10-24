@@ -33,7 +33,7 @@
  *
  *   2) If a message B was queued *after* a message A was dequeued, then: A < B
  *
- *   3) If a message B was dequeued *after* it a message A on the same queue,
+ *   3) If a message B was dequeued *after* a message A on the same queue,
  *      then: A < B
  *
  *      (Note: Causality is honored. `after' and `before' do not refer to the
@@ -132,10 +132,9 @@ struct bus1_queue {
 };
 
 void bus1_queue_init(struct bus1_queue *queue);
-void bus1_queue_destroy(struct bus1_queue *queue);
+void bus1_queue_deinit(struct bus1_queue *queue);
 void bus1_queue_flush(struct bus1_queue *queue, struct list_head *list);
 u64 bus1_queue_stage(struct bus1_queue *queue,
-		     wait_queue_head_t *waitq,
 		     struct bus1_queue_node *node,
 		     u64 timestamp);
 bool bus1_queue_commit_staged(struct bus1_queue *queue,
@@ -175,15 +174,15 @@ static inline void bus1_queue_node_init(struct bus1_queue_node *node,
 }
 
 /**
- * bus1_queue_node_destroy() - destroy queue node
- * @node:		node to destroy, or NULL
+ * bus1_queue_node_deinit() - destroy queue node
+ * @node:			node to destroy
  *
  * This destroys a previously initialized queue node. This is a no-op and only
  * serves as debugger, testing whether the node was properly unqueued before.
  * This must not be called if there are still references left to the node. That
  * is, this function should rather be called from your kref_put() callback.
  */
-static inline void bus1_queue_node_destroy(struct bus1_queue_node *node)
+static inline void bus1_queue_node_deinit(struct bus1_queue_node *node)
 {
 	if (node) {
 		WARN_ON(!RB_EMPTY_NODE(&node->rb));
@@ -193,7 +192,7 @@ static inline void bus1_queue_node_destroy(struct bus1_queue_node *node)
 
 /**
  * bus1_queue_node_get_type() - query node type
- * @node:		node to query
+ * @node:			node to query
  *
  * This queries the node type that was provided via the node constructor. A
  * node never changes its type during its entire lifetime.
@@ -211,7 +210,7 @@ bus1_queue_node_get_type(struct bus1_queue_node *node)
 
 /**
  * bus1_queue_node_get_timestamp() - query node timestamp
- * @node:		node to query
+ * @node:			node to query
  *
  * This queries the node timestamp that is currently set on this node.
  *
@@ -226,22 +225,21 @@ static inline u64 bus1_queue_node_get_timestamp(struct bus1_queue_node *node)
 
 /**
  * bus1_queue_node_is_queued() - check whether a node is queued
- * @node:		node to query, or NULL
+ * @node:			node to query
  *
  * This checks whether a node is currently queued in a message queue. That is,
- * the node was linked via bus1_queue_stage() and as not been dequeued, yet
- * (both via bus1_queue_remove() or bus1_queue_flush()).
+ * the node was linked and has not been dequeued, yet.
  *
  * Return: True if @node is currently queued.
  */
 static inline bool bus1_queue_node_is_queued(struct bus1_queue_node *node)
 {
-	return node && !RB_EMPTY_NODE(&node->rb);
+	return !RB_EMPTY_NODE(&node->rb);
 }
 
 /**
  * bus1_queue_node_is_staging() - check whether a node is marked staging
- * @node:		node to query, or NULL
+ * @node:			node to query
  *
  * This checks whether a given node is queued, but still marked staging. That
  * means, the node has been put on the queue but there is still a transaction
@@ -251,16 +249,16 @@ static inline bool bus1_queue_node_is_queued(struct bus1_queue_node *node)
  */
 static inline bool bus1_queue_node_is_staging(struct bus1_queue_node *node)
 {
-	return node ? (bus1_queue_node_get_timestamp(node) & 1) : false;
+	return bus1_queue_node_get_timestamp(node) & 1;
 }
 
 /**
  * bus1_queue_tick() - increment queue clock
- * @queue:		queue to operate on
+ * @queue:			queue to operate on
  *
  * This performs a clock-tick on @queue. The clock is incremented by a full
  * interval (+2). The caller is free to use both, the new value (even numbered)
- * and its predecessor (odd numbered). Both are uniquely allocated to the
+ * and its successor (odd numbered). Both are uniquely allocated to the
  * caller.
  *
  * The caller must lock the queue.
@@ -275,8 +273,8 @@ static inline u64 bus1_queue_tick(struct bus1_queue *queue)
 
 /**
  * bus1_queue_sync() - sync queue clock
- * @queue:		queue to operate on
- * @timestamp:		timestamp to sync on
+ * @queue:			queue to operate on
+ * @timestamp:			timestamp to sync on
  *
  * This synchronizes the clock of @queue with the externally provided timestamp
  * @timestamp. That is, the queue clock is fast-forwarded to @timestamp, in

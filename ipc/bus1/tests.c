@@ -153,10 +153,10 @@ static void bus1_test_queue(void)
 	WARN_ON(bus1_queue_sync(&qb, 8) != 8);
 
 	/* 'racing' staging of nodes */
-	ts2 = bus1_queue_stage(&qa, NULL, &n2a, ts2);
-	ts1 = bus1_queue_stage(&qa, NULL, &n1a, ts1);
-	ts2 = bus1_queue_stage(&qb, NULL, &n2b, ts2);
-	ts1 = bus1_queue_stage(&qb, NULL, &n1b, ts1);
+	ts2 = bus1_queue_stage(&qa, &n2a, ts2);
+	ts1 = bus1_queue_stage(&qa, &n1a, ts1);
+	ts2 = bus1_queue_stage(&qb, &n2b, ts2);
+	ts1 = bus1_queue_stage(&qb, &n1b, ts1);
 
 	/* obtain final timestamps from source queues */
 	ts1 = bus1_queue_sync(&q1, ts1);
@@ -192,10 +192,10 @@ static void bus1_test_queue(void)
 	WARN_ON(has_continue);
 	WARN_ON(!bus1_queue_remove(&qb, NULL, &n2b));
 
-	bus1_queue_destroy(&q1);
-	bus1_queue_destroy(&q2);
-	bus1_queue_destroy(&qa);
-	bus1_queue_destroy(&qb);
+	bus1_queue_deinit(&q1);
+	bus1_queue_deinit(&q2);
+	bus1_queue_deinit(&qa);
+	bus1_queue_deinit(&qb);
 }
 
 static void bus1_test_user(void)

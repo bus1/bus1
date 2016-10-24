@@ -560,7 +560,6 @@ int bus1_transaction_commit(struct bus1_transaction *transaction)
 		peer = bus1_peer_list_bind(&message->transaction.link);
 		mutex_lock(&peer->data.lock);
 		timestamp = bus1_queue_stage(&peer->data.queue,
-					     &peer->waitq,
 					     &message->qnode,
 					     timestamp);
 		mutex_unlock(&peer->data.lock);
