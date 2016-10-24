@@ -25,7 +25,7 @@ obj-$(CONFIG_BUS1) += ipc/bus1/
 # tools if the kernel makefile cannot be used.
 #
 
-BUS1_EXT		?= 1
+BUS1EXT		?= 1
 KERNELVER		?= $(shell uname -r)
 KERNELDIR 		?= /lib/modules/$(KERNELVER)/build
 SHELL			:= /bin/bash
@@ -49,7 +49,7 @@ all: module
 # from the kernel makefiles.
 #
 module:
-	$(MAKE) -C $(KERNELDIR) M=$(PWD) BUS1_EXT=$(BUS1_EXT) \
+	$(MAKE) -C $(KERNELDIR) M=$(PWD) BUS1EXT=$(BUS1EXT) \
 		HOST_EXTRACFLAGS="$(HOST_EXTRACFLAGS)" \
 		EXTRA_CFLAGS="$(EXTRA_CFLAGS) -DCONFIG_BUS1_TESTS=1" \
 		CONFIG_BUS1=m CONFIG_BUS1_TESTS=y
@@ -80,7 +80,7 @@ tests:
 #
 check:
 	$(MAKE) -C $(KERNELDIR) M=$(PWD) C=2 CF="-D__CHECK_ENDIAN" \
-		BUS1_EXT=$(BUS1_EXT) \
+		BUS1EXT=$(BUS1EXT) \
 		HOST_EXTRACFLAGS="$(HOST_EXTRACFLAGS)" \
 		EXTRA_CFLAGS="$(EXTRA_CFLAGS) -DCONFIG_BUS1_TESTS=1" \
 		CONFIG_BUS1=m CONFIG_BUS1_TESTS=y
@@ -94,7 +94,7 @@ check:
 #
 b: ../build/linux
 	$(MAKE) -C ../build/linux M=$(PWD) EXTRA_CFLAGS="$(EXTRA_CFLAGS)" \
-		HOST_EXTRACFLAGS="$(HOST_EXTRACFLAGS)" BUS1_EXT=$(BUS1_EXT) \
+		HOST_EXTRACFLAGS="$(HOST_EXTRACFLAGS)" BUS1EXT=$(BUS1EXT) \
 		CONFIG_BUS1=m
 .PHONY: b
 
@@ -122,25 +122,25 @@ clean:
 
 install: module
 	mkdir -p /lib/modules/$(KERNELVER)/kernel/ipc/bus1/
-	cp -f ipc/bus1/bus$(BUS1_EXT).ko /lib/modules/$(KERNELVER)/kernel/ipc/bus1/
+	cp -f ipc/bus1/bus$(BUS1EXT).ko /lib/modules/$(KERNELVER)/kernel/ipc/bus1/
 	depmod $(KERNELVER)
 .PHONY: install
 
 uninstall:
-	rm -f /lib/modules/$(KERNELVER)/kernel/ipc/bus1/bus$(BUS1_EXT).ko
+	rm -f /lib/modules/$(KERNELVER)/kernel/ipc/bus1/bus$(BUS1EXT).ko
 .PHONY: uninstall
 
 tt-prepare: module
 	-sudo sh -c 'dmesg -c > /dev/null'
-	-sudo sh -c 'rmmod bus$(BUS1_EXT)'
-	sudo sh -c 'insmod ipc/bus1/bus$(BUS1_EXT).ko'
+	-sudo sh -c 'rmmod bus$(BUS1EXT)'
+	sudo sh -c 'insmod ipc/bus1/bus$(BUS1EXT).ko'
 .PHONY: tt-prepare
 
 tt: tests tt-prepare
-	tools/testing/selftests/bus1/bus1-test --module bus$(BUS1_EXT) ; (R=$$? ; dmesg ; exit $$R)
+	tools/testing/selftests/bus1/bus1-test --module bus$(BUS1EXT) ; (R=$$? ; dmesg ; exit $$R)
 .PHONY: tt
 
 stt: tests tt-prepare
-	sudo tools/testing/selftests/bus1/bus1-test --module bus$(BUS1_EXT) ; (R=$$? ; dmesg ; exit $$R)
+	sudo tools/testing/selftests/bus1/bus1-test --module bus$(BUS1EXT) ; (R=$$? ; dmesg ; exit $$R)
 .PHONY: stt
 
