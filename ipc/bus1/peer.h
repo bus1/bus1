@@ -99,10 +99,7 @@ struct bus1_peer_list {
 
 struct bus1_peer *bus1_peer_new(void);
 struct bus1_peer *bus1_peer_free(struct bus1_peer *peer);
-int bus1_peer_disconnect(struct bus1_peer *peer);
-int bus1_peer_ioctl(struct bus1_peer *peer,
-		    unsigned int cmd,
-		    unsigned long arg);
+long bus1_peer_ioctl(struct file *file, unsigned int cmd, unsigned long arg);
 
 /**
  * bus1_peer_acquire() - acquire active reference to peer

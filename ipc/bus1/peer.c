@@ -164,21 +164,7 @@ static void bus1_peer_cleanup(struct bus1_active *active, void *userdata)
 	bus1_peer_reset(peer, true);
 }
 
-/**
- * bus1_peer_disconnect() - disconnect peer
- * @peer:		peer to operate on
- *
- * This tears down a peer synchronously. It first marks the peer as deactivated,
- * waits for all outstanding operations to finish, before resetting and
- * deactivating the peer.
- *
- * It is perfectly safe to call this function multiple times, even in parallel.
- * It is guaranteed to block *until* the peer is fully torn down, regardless
- * whether this was the call to tear it down, or not.
- *
- * Return: 0 on success, negative error code if already torn down.
- */
-int bus1_peer_disconnect(struct bus1_peer *peer)
+static int bus1_peer_disconnect(struct bus1_peer *peer)
 {
 	bus1_active_deactivate(&peer->active);
 	bus1_active_drain(&peer->active, &peer->waitq);
@@ -194,8 +180,10 @@ int bus1_peer_disconnect(struct bus1_peer *peer)
  * bus1_peer_free() - destroy peer
  * @peer:	peer to destroy, or NULL
  *
- * Disconnects and destroy a peer object that was previously allocated via
- * bus1_peer_new().
+ * Destroy a peer object that was previously allocated via bus1_peer_new().
+ * This synchronously waits for any outstanding operations on this peer to
+ * finish then, then releases all linked resources and deallocates the peer in
+ * an rcu-delayed manner.
  *
  * If NULL is passed, this is a no-op.
  *
@@ -651,45 +639,71 @@ static int bus1_peer_ioctl_recv(struct bus1_peer *peer, unsigned long arg)
 }
 
 /**
- * bus1_peer_ioctl() - handle peer runtime ioctls
- * @peer:		peer to work on
+ * bus1_peer_ioctl() - handle peer ioctls
+ * @file:		file the ioctl is called on
  * @cmd:		ioctl command
  * @arg:		ioctl argument
  *
- * This handles the given ioctl (cmd+arg) on the passed peer. The caller must
- * hold an active reference to @peer.
- *
- * This only handles the runtime ioctls. Setup and teardown must be called
- * directly.
+ * This handles the given ioctl (cmd+arg) on a peer. This expects the peer to be
+ * stored in the private_data field of @file.
  *
  * Multiple ioctls can be called in parallel just fine. No locking is needed.
  *
  * Return: 0 on success, negative error code on failure.
  */
-int bus1_peer_ioctl(struct bus1_peer *peer,
-		    unsigned int cmd,
-		    unsigned long arg)
+long bus1_peer_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
-	lockdep_assert_held(&peer->active);
+	struct bus1_peer *peer = file->private_data;
+	int r;
 
+	/*
+	 * First handle ioctls that do not require an active-reference, then
+	 * all the remaining ones wrapped in an active reference.
+	 */
 	switch (cmd) {
-	case BUS1_CMD_PEER_QUERY:
-		return bus1_peer_ioctl_query(peer, arg);
-	case BUS1_CMD_PEER_RESET:
-		return bus1_peer_ioctl_reset(peer, arg);
-	case BUS1_CMD_HANDLE_RELEASE:
-		return bus1_peer_ioctl_handle_release(peer, arg);
-	case BUS1_CMD_HANDLE_TRANSFER:
-		return bus1_peer_ioctl_handle_transfer(peer, arg);
-	case BUS1_CMD_NODE_DESTROY:
-		return bus1_peer_ioctl_node_destroy(peer, arg);
-	case BUS1_CMD_SLICE_RELEASE:
-		return bus1_peer_ioctl_slice_release(peer, arg);
-	case BUS1_CMD_SEND:
-		return bus1_peer_ioctl_send(peer, arg);
-	case BUS1_CMD_RECV:
-		return bus1_peer_ioctl_recv(peer, arg);
+	case BUS1_CMD_PEER_DISCONNECT:
+		if (unlikely(arg))
+			return -EINVAL;
+
+		r = bus1_peer_disconnect(peer);
+		break;
+	default:
+		if (!bus1_peer_acquire(peer))
+			return -ESHUTDOWN;
+
+		switch (cmd) {
+		case BUS1_CMD_PEER_QUERY:
+			r = bus1_peer_ioctl_query(peer, arg);
+			break;
+		case BUS1_CMD_PEER_RESET:
+			r = bus1_peer_ioctl_reset(peer, arg);
+			break;
+		case BUS1_CMD_HANDLE_RELEASE:
+			r = bus1_peer_ioctl_handle_release(peer, arg);
+			break;
+		case BUS1_CMD_HANDLE_TRANSFER:
+			r = bus1_peer_ioctl_handle_transfer(peer, arg);
+			break;
+		case BUS1_CMD_NODE_DESTROY:
+			r = bus1_peer_ioctl_node_destroy(peer, arg);
+			break;
+		case BUS1_CMD_SLICE_RELEASE:
+			r = bus1_peer_ioctl_slice_release(peer, arg);
+			break;
+		case BUS1_CMD_SEND:
+			r = bus1_peer_ioctl_send(peer, arg);
+			break;
+		case BUS1_CMD_RECV:
+			r = bus1_peer_ioctl_recv(peer, arg);
+			break;
+		default:
+			r = -ENOTTY;
+			break;
+		}
+
+		bus1_peer_release(peer);
+		break;
 	}
 
-	return -ENOTTY;
+	return r;
 }

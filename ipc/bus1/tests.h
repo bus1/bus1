@@ -21,10 +21,11 @@
 #include <linux/kernel.h>
 
 #if IS_ENABLED(CONFIG_BUS1_TESTS)
-void bus1_tests_run(void);
+int bus1_tests_run(void);
 #else
-static inline void bus1_tests_run(void)
+static inline int bus1_tests_run(void)
 {
+	return 0;
 }
 #endif
 

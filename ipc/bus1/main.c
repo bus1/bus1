@@ -47,11 +47,8 @@ static int bus1_fop_open(struct inode *inode, struct file *file)
 
 static int bus1_fop_release(struct inode *inode, struct file *file)
 {
-	struct bus1_peer *peer = file->private_data;
 
-	bus1_peer_disconnect(peer);
-	bus1_peer_free(peer);
-
+	bus1_peer_free(file->private_data);
 	return 0;
 }
 
@@ -63,18 +60,13 @@ static unsigned int bus1_fop_poll(struct file *file,
 
 	poll_wait(file, &peer->waitq, wait);
 
-	/*
-	 * We now dereference the peer object (which is rcu-protected). It
-	 * might be NULL during a racing DISCONNECT. If it is non-NULL and the
-	 * peer has not been deactivated, then the peer is live and thus
-	 * writable. If data is queued, it is readable as well.
-	 */
+	/* access queue->front unlocked */
 	rcu_read_lock();
 	if (bus1_active_is_deactivated(&peer->active)) {
 		mask = POLLHUP;
 	} else {
 		mask = POLLOUT | POLLWRNORM;
-		if (bus1_queue_is_readable(&peer->data.queue))
+		if (bus1_queue_is_readable_rcu(&peer->data.queue))
 			mask |= POLLIN | POLLRDNORM;
 	}
 	rcu_read_unlock();
@@ -95,32 +87,6 @@ static int bus1_fop_mmap(struct file *file, struct vm_area_struct *vma)
 	return r;
 }
 
-static long bus1_fop_ioctl(struct file *file,
-			   unsigned int cmd,
-			   unsigned long arg)
-{
-	struct bus1_peer *peer = file->private_data;
-	int r;
-
-	switch (cmd) {
-	case BUS1_CMD_PEER_DISCONNECT:
-		if (unlikely(arg))
-			return -EINVAL;
-
-		r = bus1_peer_disconnect(peer);
-		break;
-	default:
-		if (!bus1_peer_acquire(peer))
-			return -ESHUTDOWN;
-
-		r = bus1_peer_ioctl(peer, cmd, arg);
-		bus1_peer_release(peer);
-		break;
-	}
-
-	return r;
-}
-
 static void bus1_fop_show_fdinfo(struct seq_file *m, struct file *file)
 {
 	struct bus1_peer *peer = file->private_data;
@@ -129,22 +95,22 @@ static void bus1_fop_show_fdinfo(struct seq_file *m, struct file *file)
 }
 
 const struct file_operations bus1_fops = {
-	.owner =		THIS_MODULE,
-	.open =			bus1_fop_open,
-	.release =		bus1_fop_release,
-	.poll =			bus1_fop_poll,
-	.llseek =		noop_llseek,
-	.mmap =			bus1_fop_mmap,
-	.unlocked_ioctl =	bus1_fop_ioctl,
-	.compat_ioctl =		bus1_fop_ioctl,
-	.show_fdinfo =		bus1_fop_show_fdinfo,
+	.owner			= THIS_MODULE,
+	.open			= bus1_fop_open,
+	.release		= bus1_fop_release,
+	.poll			= bus1_fop_poll,
+	.llseek			= noop_llseek,
+	.mmap			= bus1_fop_mmap,
+	.unlocked_ioctl		= bus1_peer_ioctl,
+	.compat_ioctl		= bus1_peer_ioctl,
+	.show_fdinfo		= bus1_fop_show_fdinfo,
 };
 
 static struct miscdevice bus1_misc = {
-	.fops		= &bus1_fops,
-	.minor		= MISC_DYNAMIC_MINOR,
-	.name		= KBUILD_MODNAME,
-	.mode		= S_IRUGO | S_IWUGO,
+	.fops			= &bus1_fops,
+	.minor			= MISC_DYNAMIC_MINOR,
+	.name			= KBUILD_MODNAME,
+	.mode			= S_IRUGO | S_IWUGO,
 };
 
 struct dentry *bus1_debugdir;
@@ -153,9 +119,9 @@ static int __init bus1_modinit(void)
 {
 	int r;
 
-	BUILD_BUG_ON(BUS1_VEC_MAX != UIO_MAXIOV);
-
-	bus1_tests_run();
+	r = bus1_tests_run();
+	if (r < 0)
+		return r;
 
 	bus1_debugdir = debugfs_create_dir(KBUILD_MODNAME, NULL);
 	if (!bus1_debugdir)
@@ -165,7 +131,7 @@ static int __init bus1_modinit(void)
 	if (r < 0)
 		goto error;
 
-	pr_info("initialized\n");
+	pr_info("loaded\n");
 	return 0;
 
 error:
@@ -179,6 +145,7 @@ static void __exit bus1_modexit(void)
 	misc_deregister(&bus1_misc);
 	debugfs_remove(bus1_debugdir);
 	bus1_user_modexit();
+	pr_info("unloaded\n");
 }
 
 module_init(bus1_modinit);

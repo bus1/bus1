@@ -294,22 +294,17 @@ static inline u64 bus1_queue_sync(struct bus1_queue *queue, u64 timestamp)
 }
 
 /**
- * bus1_queue_is_readable() - check whether a queue is readable
- * @queue:	queue to operate on
+ * bus1_queue_is_readable_rcu() - check whether a queue is readable
+ * @queue:			queue to operate on
  *
  * This checks whether the given queue is readable.
  *
- * Note that messages can have 3 different states:
- *   - staging: the message is part of an active transaction
- *   - committed: the message is fully committed, but might still be blocked by
- *                a staging message
- *   - ready: the message is committed and ready to be dequeued
- *
- * This function checks that there is at least one ready entry.
+ * This does not require any locking, except for an rcu-read-side critical
+ * section.
  *
  * Return: True if the queue is readable, false if not.
  */
-static inline bool bus1_queue_is_readable(struct bus1_queue *queue)
+static inline bool bus1_queue_is_readable_rcu(struct bus1_queue *queue)
 {
 	return rcu_access_pointer(queue->front);
 }

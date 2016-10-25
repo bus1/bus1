@@ -129,7 +129,7 @@ static void bus1_queue_add(struct bus1_queue *queue,
 	/* must be called locked */
 
 	ts = bus1_queue_node_get_timestamp(node);
-	readable = bus1_queue_is_readable(queue);
+	readable = bus1_queue_is_readable_rcu(queue);
 
 	/* provided timestamp must be valid */
 	if (WARN_ON(timestamp == 0 || timestamp > queue->clock + 1))
@@ -209,7 +209,7 @@ static void bus1_queue_add(struct bus1_queue *queue,
 	if (!(timestamp & 1) && is_leftmost)
 		rcu_assign_pointer(queue->front, &node->rb);
 
-	if (waitq && !readable && bus1_queue_is_readable(queue))
+	if (waitq && !readable && bus1_queue_is_readable_rcu(queue))
 		wake_up_interruptible(waitq);
 }
 
@@ -349,7 +349,7 @@ bool bus1_queue_remove(struct bus1_queue *queue,
 	if (RB_EMPTY_NODE(&node->rb))
 		return false;
 
-	readable = bus1_queue_is_readable(queue);
+	readable = bus1_queue_is_readable_rcu(queue);
 	front = rcu_dereference_raw(queue->front);
 
 	if (!rb_prev(&node->rb)) {
@@ -373,7 +373,7 @@ bool bus1_queue_remove(struct bus1_queue *queue,
 	RB_CLEAR_NODE(&node->rb);
 	kref_put(&node->ref, bus1_queue_node_no_free);
 
-	if (waitq && !readable && bus1_queue_is_readable(queue))
+	if (waitq && !readable && bus1_queue_is_readable_rcu(queue))
 		wake_up_interruptible(waitq);
 
 	return true;

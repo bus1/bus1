@@ -63,14 +63,14 @@
  *         bus1_peer.data.lock
  */
 
-#include <linux/fs.h>
-#include <linux/kernel.h>
+struct dentry;
+struct file_operations;
 
 /**
  * bus1_fops - file-operations of bus1 character devices
  *
  * All bus1 peers are backed by a character device with @bus1_fops used as
- * file-operations. That is, a file is a bus1 peer if, and only if, its f_ops
+ * file-operations. That is, a file is a bus1 peer if, and only if, its f_op
  * pointer contains @bus1_fops.
  */
 extern const struct file_operations bus1_fops;

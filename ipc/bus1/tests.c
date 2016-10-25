@@ -502,7 +502,7 @@ static void bus1_test_quota(void)
 	WARN_ON(bus1_user_unref(owner));
 }
 
-void bus1_tests_run(void)
+int bus1_tests_run(void)
 {
 	pr_info("run selftests..\n");
 	bus1_test_active();
@@ -510,4 +510,5 @@ void bus1_tests_run(void)
 	bus1_test_queue();
 	bus1_test_user();
 	bus1_test_quota();
+	return 0;
 }
