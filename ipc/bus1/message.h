@@ -16,101 +16,156 @@
  * XXX
  */
 
-#include <linux/atomic.h>
-#include <linux/fs.h>
 #include <linux/kernel.h>
-#include <uapi/linux/bus1.h>
-#include "handle.h"
-#include "peer.h"
-#include "util.h"
+#include <linux/kref.h>
+#include "util/flist.h"
 #include "util/queue.h"
 
-struct bus1_message;
+struct bus1_cmd_send;
+struct bus1_handle;
 struct bus1_peer;
 struct bus1_pool_slice;
+struct bus1_tx;
 struct bus1_user;
+struct cred;
+struct file;
+struct iovec;
+struct pid;
 
 /**
- * struct bus1_message - message
+ * struct bus1_factory - message factory
+ * @peer:			sending peer
+ * @param:			factory parameters
+ * @cred:			sender credentials
+ * @pid:			sender PID
+ * @tid:			sender TID
+ * @on_stack:			whether object lives on stack
+ * @has_secctx:			whether secctx has been set
+ * @length_vecs:		total length of data in vectors
+ * @n_vecs:			number of vectors
+ * @n_handles:			number of handles
+ * @n_handles_charge:		number of handles to charge on commit
+ * @n_files:			number of files
+ * @n_secctx:			length of secctx
+ * @vecs:			vector array
+ * @files:			file array
+ * @secctx:			allocated secctx
+ * @handles:			handle array
+ */
+struct bus1_factory {
+	struct bus1_peer *peer;
+	struct bus1_cmd_send *param;
+	const struct cred *cred;
+	struct pid *pid;
+	struct pid *tid;
+
+	bool on_stack : 1;
+	bool has_secctx : 1;
+
+	size_t length_vecs;
+	size_t n_vecs;
+	size_t n_handles;
+	size_t n_handles_charge;
+	size_t n_files;
+	u32 n_secctx;
+	struct iovec *vecs;
+	struct file **files;
+	char *secctx;
+
+	struct bus1_flist handles[];
+};
+
+/**
+ * struct bus1_message - data messages
+ * @ref:			reference counter
+ * @qnode:			embedded queue node
+ * @dst:			destination handle
+ * @user:			sending user
  * @flags:			message flags
- * @destination:		destination ID
  * @uid:			sender UID
  * @gid:			sender GID
  * @pid:			sender PID
  * @tid:			sender TID
- * @qnode:			embedded queue node
- * @transaction.index:		index into multicast destination array
- * @transaction.link:		message list (during transactions)
- * @transaction.dest:		pinned destination (during transactions)
- * @user:			sending user
- * @slice:			actual message data
- * @files:			passed file descriptors
  * @n_bytes:			number of user-bytes transmitted
+ * @n_handles:			number of handles transmitted
+ * @n_handles_charge:		number of handle charges
  * @n_files:			number of files transmitted
  * @n_secctx:			number of bytes of security context transmitted
- * @n_accounted_handles:	number of accounted handles
+ * @slice:			actual message data
+ * @files:			passed file descriptors
  * @handles:			passed handles
  */
 struct bus1_message {
+	struct kref ref;
+	struct bus1_queue_node qnode;
+	struct bus1_handle *dst;
+	struct bus1_user *user;
+
 	u64 flags;
-	u64 destination;
 	uid_t uid;
 	gid_t gid;
 	pid_t pid;
 	pid_t tid;
-	struct bus1_queue_node qnode;
-	atomic_t n_pins;
 
-	struct {
-		size_t index;
-		struct bus1_peer_list link;
-		struct bus1_handle_dest dest;
-	} transaction;
-
-	struct bus1_user *user;
-	struct bus1_pool_slice *slice;
-	struct file **files;
 	size_t n_bytes;
+	size_t n_handles;
+	size_t n_handles_charge;
 	size_t n_files;
 	size_t n_secctx;
-	size_t n_accounted_handles;
-	struct bus1_handle_inflight handles;
-	/* handles must be last */
+	struct bus1_pool_slice *slice;
+	struct file **files;
+
+	struct bus1_flist handles[];
 };
 
-struct bus1_message *bus1_message_new(size_t n_bytes,
-				      size_t n_files,
-				      size_t n_handles,
-				      size_t n_secctx,
-				      struct bus1_peer *peer);
-struct bus1_message *bus1_message_ref(struct bus1_message *message);
-struct bus1_message *bus1_message_unref(struct bus1_message *message);
-int bus1_message_allocate(struct bus1_message *message,
-			  struct bus1_peer *peer);
-int bus1_message_install(struct bus1_message *message,
-			 struct bus1_peer *peer,
-			 struct bus1_cmd_recv *param);
-struct bus1_message *bus1_message_pin(struct bus1_message *message);
-struct bus1_message *bus1_message_unpin(struct bus1_message *message,
-					struct bus1_peer *peer);
+struct bus1_factory *bus1_factory_new(struct bus1_peer *peer,
+				      struct bus1_cmd_send *param,
+				      void *stack,
+				      size_t n_stack);
+struct bus1_factory *bus1_factory_free(struct bus1_factory *f);
+int bus1_factory_seal(struct bus1_factory *f);
+struct bus1_message *bus1_factory_instantiate(struct bus1_factory *f,
+					      struct bus1_handle *handle,
+					      struct bus1_peer *peer);
+
+void bus1_message_free(struct kref *k);
+void bus1_message_stage(struct bus1_message *m, struct bus1_tx *tx);
+int bus1_message_install(struct bus1_message *m, struct bus1_cmd_recv *param);
 
 /**
- * bus1_message_from_node - get parent message of a queue node
- * @node:		node to get parent of
+ * bus1_message_ref() - acquire object reference
+ * @m:			message to operate on, or NULL
  *
- * This turns a queue node into a message. The caller must verify that the
- * passed node is actually a message.
+ * This acquires a single reference to @m. The caller must already hold a
+ * reference when calling this.
  *
- * Return: Pointer to message is returned.
+ * If @m is NULL, this is a no-op.
+ *
+ * Return: @m is returned.
  */
-static inline struct bus1_message *
-bus1_message_from_node(struct bus1_queue_node *node)
+static inline struct bus1_message *bus1_message_ref(struct bus1_message *m)
 {
-	if (BUS1_WARN_ON(bus1_queue_node_get_type(node) !=
-			 BUS1_QUEUE_NODE_MESSAGE))
-		return NULL;
+	if (m)
+		kref_get(&m->ref);
+	return m;
+}
 
-	return container_of(node, struct bus1_message, qnode);
+/**
+ * bus1_message_unref() - release object reference
+ * @m:			message to operate on, or NULL
+ *
+ * This releases a single object reference to @m. If the reference counter
+ * drops to 0, the message is destroyed.
+ *
+ * If @m is NULL, this is a no-op.
+ *
+ * Return: NULL is returned.
+ */
+static inline struct bus1_message *bus1_message_unref(struct bus1_message *m)
+{
+	if (m)
+		kref_put(&m->ref, bus1_message_free);
+	return NULL;
 }
 
 #endif /* __BUS1_MESSAGE_H */

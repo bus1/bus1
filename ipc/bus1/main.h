@@ -57,10 +57,10 @@
  * orthogonal hierarchies), but this list gives a rough overview:
  *
  *   bus1_peer.active
- *     bus1_user_lock
  *     bus1_peer.local.lock
- *       bus1_peer.lock
- *         bus1_peer.data.lock
+ *       bus1_peer.data.lock
+ *         bus1_user.lock
+ *         bus1_user_lock
  */
 
 struct dentry;

@@ -22,16 +22,21 @@
 #include <linux/atomic.h>
 #include <linux/err.h>
 #include <linux/file.h>
+#include <linux/mutex.h>
 #include <linux/types.h>
 
 struct dentry;
 struct iovec;
 
-#if defined(CONFIG_DEBUG)
-  #define BUS1_WARN_ON(cond)		WARN_ON(cond)
-#else
-  #define BUS1_WARN_ON(cond)		({false;})
-#endif
+/**
+ * BUS1_TAIL - tail pointer in singly-linked lists
+ *
+ * Several places of bus1 use singly-linked lists. Usually, the tail pointer is
+ * simply set to NULL. However, sometimes we need to be able to detect whether
+ * a node is linked in O(1). For that we set the tail pointer to BUS1_TAIL
+ * rather than NULL.
+ */
+#define BUS1_TAIL ERR_PTR(-1)
 
 int bus1_import_vecs(struct iovec *out_vecs,
 		     size_t *out_length,
@@ -61,46 +66,76 @@ bus1_debugfs_create_atomic_x(const char *name,
 #endif
 
 /**
- * bus1_fput() - drop file reference
- * @file:	file to operate on, or NULL
- *
- * This is a wrapper around fput(), but is a no-op if NULL is passed. It thus
- * follows our convention of unref-functions, by ignoring NULL and always
- * returning NULL (like most driver-core and VFS functions do as well).
- *
- * Return: NULL is returned.
- */
-static inline struct file *bus1_fput(struct file *file)
-{
-	if (file)
-		fput(file);
-	return NULL;
-}
-
-/**
- * bus1_atomic_sub_if_ge() - subtract, if above threshold
+ * bus1_atomic_add_if_ge() - add, if above threshold
  * @a:		atomic_t to operate on
- * @sub:	value to subtract
+ * @add:	value to add
  * @t:		threshold
  *
- * Atomically subtract @sub from @a, if @a is greater than, or equal to, @t.
+ * Atomically add @add to @a, if @a is greater than, or equal to, @t.
  *
- * If [t - sub] triggers an underflow, the operation is undefined. The caller
+ * If [a + add] triggers an overflow, the operation is undefined. The caller
  * must verify that this cannot happen.
  *
- * Return: 1 if operation was performed, 0 if not.
+ * Return: The old value of @a is returned.
  */
-static inline int bus1_atomic_sub_if_ge(atomic_t *a, unsigned int sub, int t)
+static inline int bus1_atomic_add_if_ge(atomic_t *a, int add, int t)
 {
 	int v, v1;
 
 	for (v = atomic_read(a); v >= t; v = v1) {
-		v1 = atomic_cmpxchg(a, v, v - sub);
+		v1 = atomic_cmpxchg(a, v, v + add);
 		if (likely(v1 == v))
-			return 1;
+			return v;
 	}
 
-	return 0;
+	return v;
+}
+
+/**
+ * bus1_mutex_lock2() - lock two mutices of the same class
+ * @a:		first mutex, or NULL
+ * @b:		second mutex, or NULL
+ *
+ * This locks both mutices @a and @b. The order in which they are taken is
+ * their memory location, thus allowing to lock 2 mutices of the same class at
+ * the same time.
+ *
+ * It is valid to pass the same mutex as @a and @b, in which case it is only
+ * locked once.
+ *
+ * Use bus1_mutex_unlock2() to exit the critical section.
+ */
+static inline void bus1_mutex_lock2(struct mutex *a, struct mutex *b)
+{
+	if (a < b) {
+		if (a)
+			mutex_lock(a);
+		if (b && b != a)
+			mutex_lock_nested(b, !!a);
+	} else {
+		if (b)
+			mutex_lock(b);
+		if (a && a != b)
+			mutex_lock_nested(a, !!b);
+	}
+}
+
+/**
+ * bus1_mutex_unlock2() - lock two mutices of the same class
+ * @a:		first mutex, or NULL
+ * @b:		second mutex, or NULL
+ *
+ * Unlock both mutices @a and @b. If they point to the same mutex, it is only
+ * unlocked once.
+ *
+ * Usually used in combination with bus1_mutex_lock2().
+ */
+static inline void bus1_mutex_unlock2(struct mutex *a, struct mutex *b)
+{
+	if (a)
+		mutex_unlock(a);
+	if (b && b != a)
+		mutex_unlock(b);
 }
 
 #endif /* __BUS1_UTIL_H */

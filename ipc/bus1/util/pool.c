@@ -160,7 +160,7 @@ int bus1_pool_init(struct bus1_pool *pool, const char *filename)
 	int r;
 
 	/* cannot calculate width of bitfields, so hardcode '4' as flag-size */
-	BUILD_BUG_ON(BUS1_POOL_SLICE_SIZE_BITS + 4 > 32);
+	BUILD_BUG_ON(BUS1_POOL_SLICE_SIZE_BITS + 3 > 32);
 	BUILD_BUG_ON(BUS1_POOL_SLICE_SIZE_MAX > U32_MAX);
 
 	f = shmem_file_setup(filename, ALIGN(BUS1_POOL_SLICE_SIZE_MAX, 8),
@@ -488,6 +488,7 @@ int bus1_pool_mmap(struct bus1_pool *pool, struct vm_area_struct *vma)
 	/* calls into shmem_mmap(), which simply sets vm_ops */
 	return pool->f->f_op->mmap(pool->f, vma);
 }
+
 /**
  * bus1_pool_write_iovec() - copy user memory to a slice
  * @pool:		pool to operate on

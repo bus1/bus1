@@ -10,27 +10,20 @@
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 #include <linux/debugfs.h>
 #include <linux/err.h>
-#include <linux/file.h>
 #include <linux/fs.h>
 #include <linux/init.h>
-#include <linux/idr.h>
 #include <linux/miscdevice.h>
 #include <linux/module.h>
-#include <linux/namei.h>
-#include <linux/pagemap.h>
 #include <linux/poll.h>
-#include <linux/rcupdate.h>
-#include <linux/sched.h>
 #include <linux/seq_file.h>
-#include <linux/slab.h>
 #include <linux/uio.h>
 #include <uapi/linux/bus1.h>
 #include "main.h"
 #include "peer.h"
 #include "tests.h"
 #include "user.h"
-#include "util.h"
 #include "util/active.h"
+#include "util/pool.h"
 #include "util/queue.h"
 
 static int bus1_fop_open(struct inode *inode, struct file *file)
@@ -47,7 +40,6 @@ static int bus1_fop_open(struct inode *inode, struct file *file)
 
 static int bus1_fop_release(struct inode *inode, struct file *file)
 {
-
 	bus1_peer_free(file->private_data);
 	return 0;
 }

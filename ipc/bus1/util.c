@@ -9,7 +9,6 @@
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 #include <linux/atomic.h>
-#include <linux/cdev.h>
 #include <linux/compat.h>
 #include <linux/debugfs.h>
 #include <linux/err.h>
@@ -173,7 +172,7 @@ struct file *bus1_import_fd(int fd)
 		ret = f; /* all others are allowed */
 
 	if (f != ret)
-		bus1_fput(f);
+		fput(f);
 
 	return ret;
 }

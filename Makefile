@@ -25,13 +25,12 @@ obj-$(CONFIG_BUS1) += ipc/bus1/
 # tools if the kernel makefile cannot be used.
 #
 
-BUS1EXT		?= 1
+BUS1EXT			?= 1
 KERNELVER		?= $(shell uname -r)
 KERNELDIR 		?= /lib/modules/$(KERNELVER)/build
 SHELL			:= /bin/bash
 PWD			:= $(shell pwd)
-EXTRA_CFLAGS		+= -I$(PWD)/include
-HOST_EXTRACFLAGS	+= -I$(PWD)/usr/include
+EXTRA_CFLAGS		+= -I$(PWD)/include -DCONFIG_BUS1_TESTS=1
 
 #
 # Default Target
@@ -49,10 +48,12 @@ all: module
 # from the kernel makefiles.
 #
 module:
-	$(MAKE) -C $(KERNELDIR) M=$(PWD) BUS1EXT=$(BUS1EXT) \
-		HOST_EXTRACFLAGS="$(HOST_EXTRACFLAGS)" \
-		EXTRA_CFLAGS="$(EXTRA_CFLAGS) -DCONFIG_BUS1_TESTS=1" \
-		CONFIG_BUS1=m CONFIG_BUS1_TESTS=y
+	@$(MAKE) -C $(KERNELDIR) \
+		M=$(PWD) \
+		BUS1EXT=$(BUS1EXT) \
+		EXTRA_CFLAGS="$(EXTRA_CFLAGS)" \
+		CONFIG_BUS1=m \
+		CONFIG_BUS1_TESTS=y
 .PHONY: module
 
 #
@@ -62,7 +63,7 @@ module:
 # documentation makefile works properly.
 #
 %docs:
-	$(MAKE) -f Makefile.docs $@
+	@$(MAKE) -f Makefile.docs $@
 
 #
 # Test
@@ -70,7 +71,11 @@ module:
 # integration..
 #
 tests:
-	CFLAGS="-g -O0" $(MAKE) -C tools/testing/selftests/bus1/
+	@$(MAKE) -C tools/testing/selftests/bus1/ \
+		BUS1EXT=$(BUS1EXT) \
+		EXTRA_CFLAGS="$(EXTRA_CFLAGS)" \
+		CONFIG_BUS1=m \
+		CONFIG_BUS1_TESTS=y
 .PHONY: tests
 
 #
@@ -79,37 +84,12 @@ tests:
 # errors in the kernel code.
 #
 check:
-	$(MAKE) -C $(KERNELDIR) M=$(PWD) C=2 CF="-D__CHECK_ENDIAN" \
+	@$(MAKE) -C $(KERNELDIR) M=$(PWD) C=2 CF="-D__CHECK_ENDIAN" \
 		BUS1EXT=$(BUS1EXT) \
-		HOST_EXTRACFLAGS="$(HOST_EXTRACFLAGS)" \
-		EXTRA_CFLAGS="$(EXTRA_CFLAGS) -DCONFIG_BUS1_TESTS=1" \
-		CONFIG_BUS1=m CONFIG_BUS1_TESTS=y
+		EXTRA_CFLAGS="$(EXTRA_CFLAGS)" \
+		CONFIG_BUS1=m \
+		CONFIG_BUS1_TESTS=y
 .PHONY: check
-
-#
-# Bus1 Build Target
-# Run 'make b' to build the bus1 out-of-tree module as part of the bus1 build
-# system. See the bus1/build.git repository for details. You must have all of
-# the core bus1 repositories checked out in a local bus1/ directory.
-#
-b: ../build/linux
-	$(MAKE) -C ../build/linux M=$(PWD) EXTRA_CFLAGS="$(EXTRA_CFLAGS)" \
-		HOST_EXTRACFLAGS="$(HOST_EXTRACFLAGS)" BUS1EXT=$(BUS1EXT) \
-		CONFIG_BUS1=m
-.PHONY: b
-
-#
-# Print Differences
-# This compares the out-of-tree source with an upstream source and prints any
-# differences. This should be used by maintainers to make sure we include all
-# changes that are present in the in-tree sources.
-#
-diff:
-	-@diff -q -u include/uapi/linux/bus1.h ./$(KERNELSRC)/include/uapi/linux/bus1.h
-	-@diff -q -u -r ipc/bus1/ ./$(KERNELSRC)/ipc/bus1
-	-@diff -q -u -r Documentation/bus1/ ./$(KERNELSRC)/Documentation/bus1
-	-@diff -q -u -r tools/testing/selftests/bus1/ ./$(KERNELSRC)/tools/testing/selftests/bus1
-.PHONY: diff
 
 clean:
 	rm -f *.o *~ core .depend .*.cmd *.ko *.mod.c
@@ -137,10 +117,10 @@ tt-prepare: module
 .PHONY: tt-prepare
 
 tt: tests tt-prepare
-	tools/testing/selftests/bus1/bus1-test --module bus$(BUS1EXT) ; (R=$$? ; dmesg ; exit $$R)
+	@$(MAKE) -C tools/testing/selftests/bus1/ \
+		BUS1EXT=$(BUS1EXT) \
+		EXTRA_CFLAGS="$(EXTRA_CFLAGS)" \
+		CONFIG_BUS1=m \
+		CONFIG_BUS1_TESTS=y \
+		run_tests ; (R=$$? ; dmesg ; exit $$R)
 .PHONY: tt
-
-stt: tests tt-prepare
-	sudo tools/testing/selftests/bus1/bus1-test --module bus$(BUS1EXT) ; (R=$$? ; dmesg ; exit $$R)
-.PHONY: stt
-

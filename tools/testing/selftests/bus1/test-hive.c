@@ -12,7 +12,7 @@
 #include <stdlib.h>
 #include "test.h"
 
-#define N_CHILDREN (500)
+#define N_CHILDREN (1000)
 #define N_SIBLINGS (100)
 
 struct bus1_child {

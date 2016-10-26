@@ -1,25 +1,19 @@
-TEST_PROGS := bus1-test
+# Makefile for bus1 selftests
 
-OBJS =				\
-	bus1-peer.o		\
-	test.o			\
-	test-api.o		\
-	test-hive.o		\
-	test-io.o		\
-	test-xfer.o
+CC = $(CROSS_COMPILE)gcc
+CFLAGS += -D_FILE_OFFSET_BITS=64 -Wall -g -O2
+CFLAGS += -I../../../../include/uapi/
+CFLAGS += -I../../../../include/
+CFLAGS += -I../../../../usr/include/
 
-CFLAGS += -Wall -I../../../../usr/include/
-LDLIBS += -lpthread
+TEST_PROGS := test-api test-io
 
 all: $(TEST_PROGS)
+
+%: %.c bus1-ioctl.h test.h ../../../../usr/include/linux/bus1.h
+	$(CC) $(CFLAGS) $< -o $@
 
 include ../lib.mk
 
 clean:
 	$(RM) $(TEST_PROGS)
-
-%.o: %.c bus1-peer.h test.h ../../../../usr/include/linux/bus1.h
-	$(CC) $(CFLAGS) -c $< -o $@
-
-bus1-test: $(OBJS)
-	$(CC) $(CFLAGS) $^ $(LDLIBS) -o $@

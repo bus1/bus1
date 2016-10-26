@@ -332,7 +332,7 @@ bool bus1_active_cleanup(struct bus1_active *active,
 		lock_contended(&active->dep_map, _RET_IP_);
 #endif
 
-		/* wait until object is DRAINED */
+		/* wait until object is DONE */
 		wait_event(*waitq,
 			   atomic_read(&active->count) == BUS1_ACTIVE_DONE);
 	}
@@ -366,7 +366,7 @@ bool bus1_active_cleanup(struct bus1_active *active,
  * bus1_active_lockdep_release(), and acquiring them later again via
  * bus1_active_lockdep_acquire().
  *
- * Example: If you need to pin a huge amount of objects, you would acquire each
+ * Example: If you need to pin a large number of objects, you would acquire each
  *          of them individually via bus1_active_acquire(). Then you would
  *          perform state tracking, etc. on that object. Before you continue
  *          with the next, you call bus1_active_lockdep_released(), to pretend
@@ -386,7 +386,7 @@ bool bus1_active_cleanup(struct bus1_active *active,
  *
  * Note that you can acquired multiple active references just fine. The only
  * reason those lockdep helpers are provided, is if you need to acquire a
- * *huge* amount at the same time. Lockdep is usually limited to a depths of 64
+ * *large* number at the same time. Lockdep is usually limited to a depths of 64
  * so you cannot hold more locks at the same time.
  */
 #ifdef CONFIG_DEBUG_LOCK_ALLOC

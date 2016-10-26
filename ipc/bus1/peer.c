@@ -21,29 +21,70 @@
 #include <linux/rcupdate.h>
 #include <linux/slab.h>
 #include <linux/uaccess.h>
+#include <linux/uio.h>
 #include <linux/wait.h>
 #include <uapi/linux/bus1.h>
+#include "handle.h"
 #include "main.h"
 #include "message.h"
 #include "peer.h"
-#include "transaction.h"
+#include "tx.h"
 #include "user.h"
 #include "util.h"
 #include "util/active.h"
 #include "util/pool.h"
 #include "util/queue.h"
 
+static struct bus1_queue_node *
+bus1_peer_free_qnode(struct bus1_queue_node *qnode)
+{
+	struct bus1_message *m;
+	struct bus1_handle *h;
+
+	/*
+	 * Queue-nodes are generic entities that can only be destroyed by who
+	 * created them. That is, they have no embedded release callback.
+	 * Instead, we must detect them by type. Since the queue logic is kept
+	 * generic, it cannot provide this helper. Instead, we have this small
+	 * destructor here, which simply dispatches to the correct handler.
+	 */
+
+	if (qnode) {
+		switch (bus1_queue_node_get_type(qnode)) {
+		case BUS1_MSG_DATA:
+			m = container_of(qnode, struct bus1_message, qnode);
+			bus1_message_unref(m);
+			break;
+		case BUS1_MSG_NODE_DESTROY:
+		case BUS1_MSG_NODE_RELEASE:
+			h = container_of(qnode, struct bus1_handle, qnode);
+			bus1_handle_unref(h);
+			break;
+		case BUS1_MSG_NONE:
+		default:
+			WARN(1, "Unknown message type\n");
+			break;
+		}
+	}
+
+	return NULL;
+}
+
 /**
  * bus1_peer_new() - allocate new peer
  *
- * Allocate a new peer. The peer is *not* activated, nor linked into any
- * context. The caller owns the only pointer to the new peer.
+ * Allocate a new peer. It is immediately activated and ready for use. It is
+ * not linked into any context. The caller will get exclusively access to the
+ * peer object on success.
+ *
+ * Note that the peer is opened on behalf of 'current'. That is, it pins its
+ * credentials and namespaces.
  *
  * Return: Pointer to peer, ERR_PTR on failure.
  */
 struct bus1_peer *bus1_peer_new(void)
 {
-	static atomic64_t bus1_peer_ids = ATOMIC64_INIT(0);
+	static atomic64_t peer_ids = ATOMIC64_INIT(0);
 	const struct cred *cred = current_cred();
 	struct bus1_peer *peer;
 	struct bus1_user *user;
@@ -59,33 +100,31 @@ struct bus1_peer *bus1_peer_new(void)
 		return ERR_PTR(-ENOMEM);
 	}
 
-	peer->id = 0;
+	/* initialize constant fields */
+	peer->id = atomic64_inc_return(&peer_ids);
 	peer->flags = 0;
 	peer->cred = get_cred(current_cred());
 	peer->pid_ns = get_pid_ns(task_active_pid_ns(current));
 	peer->user = user;
-	bus1_user_quota_init(&peer->quota);
+	peer->debugdir = NULL;
 	init_waitqueue_head(&peer->waitq);
 	bus1_active_init(&peer->active);
-	peer->debugdir = NULL;
 
-	mutex_init(&peer->lock);
-
+	/* initialize data section */
 	mutex_init(&peer->data.lock);
 	peer->data.pool = BUS1_POOL_NULL;
 	bus1_queue_init(&peer->data.queue);
-	peer->data.map_handles_by_node = RB_ROOT;
+	bus1_user_limits_init(&peer->data.limits, peer->user);
 
+	/* initialize peer-private section */
 	mutex_init(&peer->local.lock);
 	peer->local.seed = NULL;
-	peer->local.map_handles_by_id = RB_ROOT;
+	peer->local.map_handles = RB_ROOT;
 	peer->local.handle_ids = 0;
 
 	r = bus1_pool_init(&peer->data.pool, KBUILD_MODNAME "-peer");
 	if (r < 0)
 		goto error;
-
-	peer->id = atomic64_inc_return(&bus1_peer_ids);
 
 	if (!IS_ERR_OR_NULL(bus1_debugdir)) {
 		char idstr[22];
@@ -104,64 +143,109 @@ struct bus1_peer *bus1_peer_new(void)
 	}
 
 	bus1_active_activate(&peer->active);
-
 	return peer;
+
 error:
 	bus1_peer_free(peer);
 	return ERR_PTR(r);
 }
 
-static void bus1_peer_reset(struct bus1_peer *peer, bool final)
+static void bus1_peer_flush(struct bus1_peer *peer, u64 flags)
 {
-	struct bus1_queue_node *node;
-	struct bus1_message *message;
-	size_t n_slices, n_handles;
-	LIST_HEAD(list);
+	struct bus1_queue_node *qlist, *qnode;
+	struct bus1_handle *h, *safe;
+	struct bus1_tx tx;
+	size_t n_slices;
+	u64 ts;
+	int n;
 
-	bus1_handle_flush_all(peer, &n_handles, final);
+	lockdep_assert_held(&peer->local.lock);
 
-	mutex_lock(&peer->data.lock);
-	bus1_queue_flush(&peer->data.queue, &list);
-	bus1_pool_flush(&peer->data.pool, &n_slices);
-	mutex_unlock(&peer->data.lock);
+	bus1_tx_init(&tx, peer);
 
-	mutex_lock(&peer->local.lock);
-	if (peer->local.seed && final) {
-		list_add(&peer->local.seed->qnode.link, &list);
-		peer->local.seed = NULL;
-	}
-	mutex_unlock(&peer->local.lock);
+	if (flags & BUS1_PEER_RESET_FLAG_FLUSH) {
+		/* protect handles on the seed */
+		if (!(flags & BUS1_PEER_RESET_FLAG_FLUSH_SEED) &&
+		    peer->local.seed) {
+			/*
+			 * XXX: When the flush operation does not ask for a
+			 *      RESET of the seed, we want to protect the nodes
+			 *      that were instantiated with this seed.
+			 *      Right now, we do not support this, but rather
+			 *      treat all nodes as local nodes. If node
+			 *      injection will be supported one day, we should
+			 *      make sure to drop n_user of all seed-handles to
+			 *      0 here, to make sure they're skipped in the
+			 *      mass-destruction below.
+			 */
+		}
 
-	atomic_add(n_slices, &peer->user->limits.n_slices);
-	atomic_add(n_handles, &peer->user->limits.n_handles);
+		/* first destroy all live anchors */
+		mutex_lock(&peer->data.lock);
+		rbtree_postorder_for_each_entry_safe(h, safe,
+						     &peer->local.map_handles,
+						     rb_to_peer) {
+			if (!bus1_handle_is_anchor(h) ||
+			    !bus1_handle_is_live(h))
+				continue;
 
-	while ((node = list_first_entry_or_null(&list, struct bus1_queue_node,
-						link))) {
-		list_del(&node->link);
-		RB_CLEAR_NODE(&node->rb); /* reset the link/rb union */
+			bus1_handle_destroy_locked(h, &tx);
+		}
+		mutex_unlock(&peer->data.lock);
 
-		switch (bus1_queue_node_get_type(node)) {
-		case BUS1_QUEUE_NODE_MESSAGE:
-			message = bus1_message_from_node(node);
-			bus1_message_unpin(message, peer);
-			bus1_message_unref(message);
-			break;
-		case BUS1_QUEUE_NODE_HANDLE_DESTRUCTION:
-		case BUS1_QUEUE_NODE_HANDLE_RELEASE:
-			bus1_handle_unref_queued(node);
-			break;
-		default:
-			WARN(1, "Invalid queue-node type");
-			break;
+		/* atomically commit the destruction transaction */
+		ts = bus1_tx_commit(&tx);
+
+		/* now release all user handles */
+		rbtree_postorder_for_each_entry_safe(h, safe,
+						     &peer->local.map_handles,
+						     rb_to_peer) {
+			n = atomic_xchg(&h->n_user, 0);
+			bus1_handle_forget_keep(h);
+			bus1_user_discharge(&peer->user->limits.n_handles,
+					    &peer->data.limits.n_handles, n);
+
+			if (bus1_handle_is_anchor(h)) {
+				if (n > 1)
+					bus1_handle_release_n(h, n - 1, true);
+				bus1_handle_release(h, false);
+			} else {
+				bus1_handle_release_n(h, n, true);
+			}
+		}
+		peer->local.map_handles = RB_ROOT;
+
+		/* finally flush the queue and pool */
+		mutex_lock(&peer->data.lock);
+		qlist = bus1_queue_flush(&peer->data.queue, ts);
+		bus1_pool_flush(&peer->data.pool, &n_slices);
+		mutex_unlock(&peer->data.lock);
+
+		bus1_user_discharge(&peer->user->limits.n_slices,
+				    &peer->data.limits.n_slices, n_slices);
+
+		while ((qnode = qlist)) {
+			qlist = qnode->next;
+			qnode->next = NULL;
+			bus1_peer_free_qnode(qnode);
 		}
 	}
+
+	/* drop seed if requested */
+	if (flags & BUS1_PEER_RESET_FLAG_FLUSH_SEED)
+		peer->local.seed = bus1_message_unref(peer->local.seed);
+
+	bus1_tx_deinit(&tx);
 }
 
-static void bus1_peer_cleanup(struct bus1_active *active, void *userdata)
+static void bus1_peer_cleanup(struct bus1_active *a, void *userdata)
 {
-	struct bus1_peer *peer = container_of(active, struct bus1_peer, active);
+	struct bus1_peer *peer = container_of(a, struct bus1_peer, active);
 
-	bus1_peer_reset(peer, true);
+	mutex_lock(&peer->local.lock);
+	bus1_peer_flush(peer, BUS1_PEER_RESET_FLAG_FLUSH |
+			      BUS1_PEER_RESET_FLAG_FLUSH_SEED);
+	mutex_unlock(&peer->local.lock);
 }
 
 static int bus1_peer_disconnect(struct bus1_peer *peer)
@@ -182,8 +266,8 @@ static int bus1_peer_disconnect(struct bus1_peer *peer)
  *
  * Destroy a peer object that was previously allocated via bus1_peer_new().
  * This synchronously waits for any outstanding operations on this peer to
- * finish then, then releases all linked resources and deallocates the peer in
- * an rcu-delayed manner.
+ * finish, then releases all linked resources and deallocates the peer in an
+ * rcu-delayed manner.
  *
  * If NULL is passed, this is a no-op.
  *
@@ -198,21 +282,19 @@ struct bus1_peer *bus1_peer_free(struct bus1_peer *peer)
 	bus1_peer_disconnect(peer);
 
 	/* deinitialize peer-private section */
-	WARN_ON(!RB_EMPTY_ROOT(&peer->local.map_handles_by_id));
+	WARN_ON(!RB_EMPTY_ROOT(&peer->local.map_handles));
 	WARN_ON(peer->local.seed);
 	mutex_destroy(&peer->local.lock);
 
 	/* deinitialize data section */
-	WARN_ON(!RB_EMPTY_ROOT(&peer->data.map_handles_by_node));
+	bus1_user_limits_deinit(&peer->data.limits);
 	bus1_queue_deinit(&peer->data.queue);
 	bus1_pool_deinit(&peer->data.pool);
 	mutex_destroy(&peer->data.lock);
 
 	/* deinitialize constant fields */
-	mutex_destroy(&peer->lock);
 	debugfs_remove_recursive(peer->debugdir);
 	bus1_active_deinit(&peer->active);
-	bus1_user_quota_destroy(&peer->quota);
 	peer->user = bus1_user_unref(peer->user);
 	put_pid_ns(peer->pid_ns);
 	put_cred(peer->cred);
@@ -221,32 +303,33 @@ struct bus1_peer *bus1_peer_free(struct bus1_peer *peer)
 	return NULL;
 }
 
-static int bus1_peer_ioctl_query(struct bus1_peer *peer, unsigned long arg)
+static int bus1_peer_ioctl_peer_query(struct bus1_peer *peer,
+				      unsigned long arg)
 {
 	struct bus1_cmd_peer_reset __user *uparam = (void __user *)arg;
 	struct bus1_cmd_peer_reset param;
 
-	BUILD_BUG_ON(_IOC_SIZE(BUS1_CMD_PEER_RESET) != sizeof(param));
+	BUILD_BUG_ON(_IOC_SIZE(BUS1_CMD_PEER_QUERY) != sizeof(param));
 
 	if (copy_from_user(&param, uparam, sizeof(param)))
 		return -EFAULT;
 	if (unlikely(param.flags))
 		return -EINVAL;
 
+	mutex_lock(&peer->local.lock);
 	param.peer_flags = peer->flags & BUS1_PEER_FLAG_WANT_SECCTX;
+	param.max_slices = peer->data.limits.max_slices;
+	param.max_handles = peer->data.limits.max_handles;
+	param.max_inflight_bytes = peer->data.limits.max_inflight_bytes;
+	param.max_inflight_fds = peer->data.limits.max_inflight_fds;
+	mutex_unlock(&peer->local.lock);
 
-	/* XXX: add support for peer limits */
-	param.max_slices = -1;
-	param.max_handles = -1;
-	param.max_inflight_bytes = -1;
-	param.max_inflight_fds = -1;
-
-	return put_user(param.peer_flags, &uparam->peer_flags) ? -EFAULT : 0;
+	return copy_to_user(uparam, &param, sizeof(param)) ? -EFAULT : 0;
 }
 
-static int bus1_peer_ioctl_reset(struct bus1_peer *peer, unsigned long arg)
+static int bus1_peer_ioctl_peer_reset(struct bus1_peer *peer,
+				      unsigned long arg)
 {
-	bool destroy_nodes, protect_persistent, release_handles;
 	struct bus1_cmd_peer_reset __user *uparam = (void __user *)arg;
 	struct bus1_cmd_peer_reset param;
 
@@ -254,44 +337,58 @@ static int bus1_peer_ioctl_reset(struct bus1_peer *peer, unsigned long arg)
 
 	if (copy_from_user(&param, uparam, sizeof(param)))
 		return -EFAULT;
-	if (unlikely(param.flags & ~(BUS1_PEER_RESET_FLAG_DESTROY_NODES |
-				     BUS1_PEER_RESET_FLAG_PROTECT_PERSISTENT |
-				     BUS1_PEER_RESET_FLAG_RELEASE_HANDLES)))
+	if (unlikely(param.flags & ~(BUS1_PEER_RESET_FLAG_FLUSH |
+				     BUS1_PEER_RESET_FLAG_FLUSH_SEED)))
 		return -EINVAL;
-
-	/* XXX: add support for peer limits */
-	if (unlikely(param.max_slices != -1 ||
-		     param.max_handles != -1 ||
-		     param.max_inflight_bytes != -1 ||
-		     param.max_inflight_fds != -1))
-		return -EINVAL;
-
-	destroy_nodes = param.flags & BUS1_PEER_RESET_FLAG_DESTROY_NODES;
-	protect_persistent = param.flags &
-			     BUS1_PEER_RESET_FLAG_PROTECT_PERSISTENT;
-	release_handles = param.flags & BUS1_PEER_RESET_FLAG_RELEASE_HANDLES;
-
-	/* PROTECT_PERSISTENT requires DESTROY_NODES */
-	if (unlikely(protect_persistent && !destroy_nodes))
-		return -EINVAL;
-	/* DESTROY_NODES and RELEASE_HANDLES must be combined so far */
-	if (unlikely(destroy_nodes != release_handles))
-		return -EINVAL;
-	/* refuse invalid flags, unless cleared to -1 */
 	if (unlikely(param.peer_flags != -1 &&
 		     (param.peer_flags & ~BUS1_PEER_FLAG_WANT_SECCTX)))
 		return -EINVAL;
+	if (unlikely((param.max_slices != -1 &&
+		      param.max_slices > INT_MAX) ||
+		     (param.max_handles != -1 &&
+		      param.max_handles > INT_MAX) ||
+		     (param.max_inflight_bytes != -1 &&
+		      param.max_inflight_bytes > INT_MAX) ||
+		     (param.max_inflight_fds != -1 &&
+		      param.max_inflight_fds > INT_MAX)))
+		return -EINVAL;
 
-	if (destroy_nodes || release_handles)
-		bus1_peer_reset(peer, !protect_persistent);
+	mutex_lock(&peer->local.lock);
 
-	if (param.peer_flags != -1) {
-		mutex_lock(&peer->lock);
-		peer->flags = param.peer_flags |
-				   (peer->flags &
-				    ~BUS1_PEER_FLAG_WANT_SECCTX);
-		mutex_unlock(&peer->lock);
+	if (param.peer_flags != -1)
+		peer->flags = param.peer_flags;
+
+	if (param.max_slices != -1) {
+		atomic_add((int)param.max_slices -
+			   (int)peer->data.limits.max_slices,
+			   &peer->data.limits.n_slices);
+		peer->data.limits.max_slices = param.max_slices;
 	}
+
+	if (param.max_handles != -1) {
+		atomic_add((int)param.max_handles -
+			   (int)peer->data.limits.max_handles,
+			   &peer->data.limits.n_handles);
+		peer->data.limits.max_handles = param.max_handles;
+	}
+
+	if (param.max_inflight_bytes != -1) {
+		atomic_add((int)param.max_inflight_bytes -
+			   (int)peer->data.limits.max_inflight_bytes,
+			   &peer->data.limits.n_inflight_bytes);
+		peer->data.limits.max_inflight_bytes = param.max_inflight_bytes;
+	}
+
+	if (param.max_inflight_fds != -1) {
+		atomic_add((int)param.max_inflight_fds -
+			   (int)peer->data.limits.max_inflight_fds,
+			   &peer->data.limits.n_inflight_fds);
+		peer->data.limits.max_inflight_fds = param.max_inflight_fds;
+	}
+
+	bus1_peer_flush(peer, param.flags);
+
+	mutex_unlock(&peer->local.lock);
 
 	return 0;
 }
@@ -299,7 +396,8 @@ static int bus1_peer_ioctl_reset(struct bus1_peer *peer, unsigned long arg)
 static int bus1_peer_ioctl_handle_release(struct bus1_peer *peer,
 					  unsigned long arg)
 {
-	size_t n_handles = 0;
+	struct bus1_handle *h = NULL;
+	bool is_new, strong = true;
 	u64 id;
 	int r;
 
@@ -308,20 +406,140 @@ static int bus1_peer_ioctl_handle_release(struct bus1_peer *peer,
 	if (get_user(id, (const u64 __user *)arg))
 		return -EFAULT;
 
-	r = bus1_handle_release_by_id(peer, id, &n_handles);
-	atomic_add(n_handles, &peer->user->limits.n_handles);
+	mutex_lock(&peer->local.lock);
 
+	h = bus1_handle_import(peer, id, &is_new);
+	if (IS_ERR(h)) {
+		r = PTR_ERR(h);
+		goto exit;
+	}
+
+	if (is_new) {
+		/*
+		 * A handle is non-public only if the import lazily created the
+		 * node. In that case the node is live and the last reference
+		 * cannot be dropped until the node is destroyed. Hence, we
+		 * return EBUSY.
+		 *
+		 * Since we did not modify the node, and the node was lazily
+		 * created, there is no point in keeping the node allocated. We
+		 * simply pretend we didn't allocate it so the next operation
+		 * will just do the lazy allocation again.
+		 */
+		bus1_handle_forget(h);
+		r = -EBUSY;
+		goto exit;
+	}
+
+	if (atomic_read(&h->n_user) == 1 && bus1_handle_is_anchor(h)) {
+		if (bus1_handle_is_live(h)) {
+			r = -EBUSY;
+			goto exit;
+		}
+
+		strong = false;
+	}
+
+	WARN_ON(atomic_dec_return(&h->n_user) < 0);
+	bus1_handle_forget(h);
+	bus1_user_discharge(&peer->user->limits.n_handles,
+			    &peer->data.limits.n_handles, 1);
+	bus1_handle_release(h, strong);
+
+	r = 0;
+
+exit:
+	mutex_unlock(&peer->local.lock);
+	bus1_handle_unref(h);
+	return r;
+}
+
+static int bus1_peer_transfer(struct bus1_peer *src,
+			      struct bus1_peer *dst,
+			      struct bus1_cmd_handle_transfer *param)
+{
+	struct bus1_handle *src_h = NULL, *dst_h = NULL;
+	bool is_new;
+	int r;
+
+	bus1_mutex_lock2(&src->local.lock, &dst->local.lock);
+
+	src_h = bus1_handle_import(src, param->src_handle, &is_new);
+	if (IS_ERR(src_h)) {
+		r = PTR_ERR(src_h);
+		src_h = NULL;
+		goto exit;
+	}
+
+	if (!bus1_handle_is_live(src_h)) {
+		/*
+		 * If @src_h has a destruction queued, we cannot guarantee that
+		 * we can join the transaction. Hence, we bail out and tell the
+		 * caller that the node is already destroyed.
+		 *
+		 * In case @src_h->anchor is on one of the peers involved, this
+		 * is properly synchronized. However, if it is a 3rd party node
+		 * then it might not be committed, yet.
+		 *
+		 * XXX: We really ought to settle on the destruction. This
+		 *      requires some waitq to settle on, though.
+		 */
+		param->dst_handle = BUS1_HANDLE_INVALID;
+		r = 0;
+		goto exit;
+	}
+
+	dst_h = bus1_handle_ref_by_other(dst, src_h);
+	if (!dst_h) {
+		dst_h = bus1_handle_new_remote(dst, src_h);
+		if (IS_ERR(dst_h)) {
+			r = PTR_ERR(dst_h);
+			dst_h = NULL;
+			goto exit;
+		}
+	}
+
+	r = bus1_user_charge(&dst->user->limits.n_handles,
+			     &dst->data.limits.n_handles, 1);
+	if (r < 0)
+		goto exit;
+
+	if (is_new) {
+		r = bus1_user_charge(&src->user->limits.n_handles,
+				     &src->data.limits.n_handles, 1);
+		if (r < 0) {
+			bus1_user_discharge(&dst->user->limits.n_handles,
+					    &dst->data.limits.n_handles, 1);
+			goto exit;
+		}
+
+		WARN_ON(src_h != bus1_handle_acquire(src_h, false));
+		WARN_ON(atomic_inc_return(&src_h->n_user) != 1);
+	}
+
+	dst_h = bus1_handle_acquire(dst_h, true);
+	param->dst_handle = bus1_handle_identify(dst_h);
+	bus1_handle_export(dst_h);
+	WARN_ON(atomic_inc_return(&dst_h->n_user) < 1);
+
+	r = 0;
+
+exit:
+	bus1_handle_forget(src_h);
+	bus1_mutex_unlock2(&src->local.lock, &dst->local.lock);
+	bus1_handle_unref(dst_h);
+	bus1_handle_unref(src_h);
 	return r;
 }
 
 static int bus1_peer_ioctl_handle_transfer(struct bus1_peer *src,
 					   unsigned long arg)
 {
-	struct bus1_cmd_handle_transfer __user *uparam = (void __user *) arg;
+	struct bus1_cmd_handle_transfer __user *uparam = (void __user *)arg;
 	struct bus1_cmd_handle_transfer param;
-	struct bus1_peer *dst;
+	struct bus1_peer *dst = NULL;
 	struct fd dst_f;
-	int r = 0;
+	int r;
 
 	BUILD_BUG_ON(_IOC_SIZE(BUS1_CMD_HANDLE_TRANSFER) != sizeof(param));
 
@@ -330,9 +548,7 @@ static int bus1_peer_ioctl_handle_transfer(struct bus1_peer *src,
 	if (unlikely(param.flags))
 		return -EINVAL;
 
-	if (param.dst_fd == -1) {
-		dst = bus1_peer_acquire(src);
-	} else {
+	if (param.dst_fd != -1) {
 		dst_f = fdget(param.dst_fd);
 		if (!dst_f.file)
 			return -EBADF;
@@ -343,68 +559,144 @@ static int bus1_peer_ioctl_handle_transfer(struct bus1_peer *src,
 
 		dst = bus1_peer_acquire(dst_f.file->private_data);
 		fdput(dst_f);
+		if (!dst)
+			return -ESHUTDOWN;
 	}
 
-	if (!dst)
-		return -ESHUTDOWN;
-
-	/* pass handle from src to dst, allocating node if necessary */
-	r = bus1_handle_pair(src, dst, &param.src_handle, &param.dst_handle);
-	if (r < 0)
-		goto out;
-
-	if (put_user(param.src_handle, &uparam->src_handle) ||
-	    put_user(param.dst_handle, &uparam->dst_handle))
-		r = -EFAULT; /* We don't care, keep what we did */
-
-out:
+	r = bus1_peer_transfer(src, dst ?: src, &param);
 	bus1_peer_release(dst);
-	return r;
+	if (r < 0)
+		return r;
+
+	return copy_to_user(uparam, &param, sizeof(param)) ? -EFAULT : 0;
 }
 
-static int bus1_peer_ioctl_node_destroy(struct bus1_peer *peer,
-					unsigned long arg)
+static int bus1_peer_ioctl_nodes_destroy(struct bus1_peer *peer,
+					 unsigned long arg)
 {
-	struct bus1_cmd_node_destroy param;
-	u64 __user *ptr_nodes;
-	size_t n_handles = 0;
-	unsigned int i;
-	int r, res = 0;
-	u64 id;
+	struct bus1_cmd_nodes_destroy param;
+	size_t n_charge = 0, n_discharge = 0;
+	struct bus1_handle *h, *list = BUS1_TAIL;
+	const u64 __user *ptr_nodes;
+	struct bus1_tx tx;
+	bool is_new;
+	u64 i, id;
+	int r;
 
-	BUILD_BUG_ON(_IOC_SIZE(BUS1_CMD_NODE_DESTROY) != sizeof(param));
+	BUILD_BUG_ON(_IOC_SIZE(BUS1_CMD_NODES_DESTROY) != sizeof(param));
 
 	if (copy_from_user(&param, (void __user *)arg, sizeof(param)))
 		return -EFAULT;
-	if (unlikely(param.flags))
+	if (unlikely(param.flags & ~BUS1_NODES_DESTROY_FLAG_RELEASE_HANDLES))
 		return -EINVAL;
 	if (unlikely(param.ptr_nodes != (u64)(unsigned long)param.ptr_nodes))
 		return -EFAULT;
 
-	ptr_nodes = (u64 __user *)(unsigned long)param.ptr_nodes;
+	mutex_lock(&peer->local.lock);
 
-	/* XXX: make atomic and disallow partial failures */
+	bus1_tx_init(&tx, peer);
+	ptr_nodes = (const u64 __user *)(unsigned long)param.ptr_nodes;
+
+	/*
+	 * We must limit the work that user-space can dispatch in one go. We
+	 * use the maximum number of handles as natural limit. You cannot hit
+	 * it, anyway, except if your call would fail without it as well.
+	 */
+	if (unlikely(param.n_nodes > peer->user->limits.max_handles)) {
+		r = -EINVAL;
+		goto exit;
+	}
+
 	for (i = 0; i < param.n_nodes; ++i) {
 		if (get_user(id, ptr_nodes + i)) {
 			r = -EFAULT;
-		} else {
-			size_t n_handles_once = 0;
-
-			/* >= 0 on success, >0 in case @id was modified */
-			r = bus1_node_destroy_by_id(peer, &id, &n_handles_once);
-			if (r > 0 && put_user(id, ptr_nodes + i))
-				r = -EFAULT;
-
-			n_handles += n_handles_once;
+			goto exit;
 		}
 
-		if (unlikely(r < 0 && res >= 0))
-			res = r;
+		h = bus1_handle_import(peer, id, &is_new);
+		if (IS_ERR(h)) {
+			r = PTR_ERR(h);
+			goto exit;
+		}
+
+		if (h->tlink) {
+			bus1_handle_unref(h);
+			r = -ENOTUNIQ;
+			goto exit;
+		}
+
+		h->tlink = list;
+		list = h;
+
+		if (!bus1_handle_is_anchor(h)) {
+			r = -EREMOTE;
+			goto exit;
+		}
+
+		if (!bus1_handle_is_live(h)) {
+			r = -ESTALE;
+			goto exit;
+		}
+
+		if (is_new)
+			++n_charge;
 	}
 
-	atomic_add(n_handles, &peer->user->limits.n_handles);
+	r = bus1_user_charge(&peer->user->limits.n_handles,
+			     &peer->data.limits.n_handles, n_charge);
+	if (r < 0)
+		goto exit;
 
-	return res;
+	/* nothing below this point can fail, anymore */
+
+	mutex_lock(&peer->data.lock);
+	for (h = list; h != BUS1_TAIL; h = h->tlink) {
+		if (!bus1_handle_is_public(h)) {
+			WARN_ON(h != bus1_handle_acquire_locked(h, false));
+			WARN_ON(atomic_inc_return(&h->n_user) != 1);
+		}
+
+		bus1_handle_destroy_locked(h, &tx);
+	}
+	mutex_unlock(&peer->data.lock);
+
+	bus1_tx_commit(&tx);
+
+	while (list != BUS1_TAIL) {
+		h = list;
+		list = h->tlink;
+		h->tlink = NULL;
+
+		if (param.flags & BUS1_NODES_DESTROY_FLAG_RELEASE_HANDLES) {
+			++n_discharge;
+			if (atomic_dec_return(&h->n_user) == 0) {
+				bus1_handle_forget(h);
+				bus1_handle_release(h, false);
+			} else {
+				bus1_handle_release(h, true);
+			}
+		}
+
+		bus1_handle_unref(h);
+	}
+
+	bus1_user_discharge(&peer->user->limits.n_handles,
+			    &peer->data.limits.n_handles, n_discharge);
+
+	r = 0;
+
+exit:
+	while (list != BUS1_TAIL) {
+		h = list;
+		list = h->tlink;
+		h->tlink = NULL;
+
+		bus1_handle_forget(h);
+		bus1_handle_unref(h);
+	}
+	bus1_tx_deinit(&tx);
+	mutex_unlock(&peer->local.lock);
+	return r;
 }
 
 static int bus1_peer_ioctl_slice_release(struct bus1_peer *peer,
@@ -422,18 +714,78 @@ static int bus1_peer_ioctl_slice_release(struct bus1_peer *peer,
 	mutex_lock(&peer->data.lock);
 	r = bus1_pool_release_user(&peer->data.pool, offset, &n_slices);
 	mutex_unlock(&peer->data.lock);
-
-	atomic_add(n_slices, &peer->user->limits.n_slices);
+	bus1_user_discharge(&peer->user->limits.n_slices,
+			    &peer->data.limits.n_slices, n_slices);
 	return r;
 }
 
-static int bus1_peer_ioctl_send(struct bus1_peer *peer, unsigned long arg)
+static struct bus1_message *bus1_peer_new_message(struct bus1_peer *peer,
+						  struct bus1_factory *f,
+						  u64 id)
 {
-	struct bus1_transaction *transaction = NULL;
-	/* Use a stack-allocated buffer for the transaction object if it fits */
-	u8 buf[512];
+	struct bus1_message *m = NULL;
+	struct bus1_handle *h = NULL;
+	struct bus1_peer *p = NULL;
+	bool is_new;
+	int r;
+
+	h = bus1_handle_import(peer, id, &is_new);
+	if (IS_ERR(h))
+		return ERR_CAST(h);
+
+	if (h->tlink) {
+		r = -ENOTUNIQ;
+		goto error;
+	}
+
+	if (bus1_handle_is_anchor(h))
+		p = bus1_peer_acquire(peer);
+	else
+		p = bus1_handle_acquire_owner(h);
+	if (!p) {
+		r = -ESHUTDOWN;
+		goto error;
+	}
+
+	m = bus1_factory_instantiate(f, h, p);
+	if (IS_ERR(m)) {
+		r = PTR_ERR(m);
+		goto error;
+	}
+
+	/* marker to detect duplicates */
+	h->tlink = BUS1_TAIL;
+
+	/* m->dst pins the handle for us */
+	bus1_handle_unref(h);
+
+	/* merge charge into factory (which shares the lookup with us) */
+	if (is_new)
+		++f->n_handles_charge;
+
+	return m;
+
+error:
+	bus1_peer_release(p);
+	if (is_new)
+		bus1_handle_forget(h);
+	bus1_handle_unref(h);
+	return ERR_PTR(r);
+}
+
+static int bus1_peer_ioctl_send(struct bus1_peer *peer,
+				unsigned long arg)
+{
+	struct bus1_queue_node *mlist = NULL;
+	struct bus1_factory *factory = NULL;
+	const u64 __user *ptr_destinations;
 	struct bus1_cmd_send param;
-	size_t i;
+	struct bus1_message *m;
+	struct bus1_peer *p;
+	size_t i, n_charge = 0;
+	struct bus1_tx tx;
+	u8 stack[512];
+	u64 id;
 	int r;
 
 	BUILD_BUG_ON(_IOC_SIZE(BUS1_CMD_SEND) != sizeof(param));
@@ -446,7 +798,7 @@ static int bus1_peer_ioctl_send(struct bus1_peer *peer, unsigned long arg)
 
 	/* check basic limits; avoids integer-overflows later on */
 	if (unlikely(param.n_destinations > INT_MAX) ||
-	    unlikely(param.n_vecs > BUS1_VEC_MAX) ||
+	    unlikely(param.n_vecs > UIO_MAXIOV) ||
 	    unlikely(param.n_fds > BUS1_FD_MAX))
 		return -EMSGSIZE;
 
@@ -463,10 +815,23 @@ static int bus1_peer_ioctl_send(struct bus1_peer *peer, unsigned long arg)
 		     (u64)(unsigned long)param.ptr_fds))
 		return -EFAULT;
 
-	transaction = bus1_transaction_new_from_user(buf, sizeof(buf), peer,
-						     &param);
-	if (IS_ERR(transaction))
-		return PTR_ERR(transaction);
+	mutex_lock(&peer->local.lock);
+
+	bus1_tx_init(&tx, peer);
+	ptr_destinations =
+		(const u64 __user *)(unsigned long)param.ptr_destinations;
+
+	if (unlikely(param.n_destinations > peer->user->limits.max_handles)) {
+		r = -EINVAL;
+		goto exit;
+	}
+
+	factory = bus1_factory_new(peer, &param, stack, sizeof(stack));
+	if (IS_ERR(factory)) {
+		r = PTR_ERR(factory);
+		factory = NULL;
+		goto exit;
+	}
 
 	if (param.flags & BUS1_SEND_FLAG_SEED) {
 		if (unlikely((param.flags & BUS1_SEND_FLAG_CONTINUE) ||
@@ -475,40 +840,158 @@ static int bus1_peer_ioctl_send(struct bus1_peer *peer, unsigned long arg)
 			goto exit;
 		}
 
-		mutex_lock(&peer->local.lock);
-		r = bus1_transaction_commit_seed(transaction);
-		mutex_unlock(&peer->local.lock);
-		if (r < 0)
-			goto exit;
+		/* XXX: set seed */
+		r = -ENOTSUPP;
+		goto exit;
 	} else {
-		if (unlikely(param.n_destinations >
-			     peer->user->limits.max_handles)) {
-			r = -EMSGSIZE;
-			goto exit;
+		for (i = 0; i < param.n_destinations; ++i) {
+			if (get_user(id, ptr_destinations + i)) {
+				r = -EFAULT;
+				goto exit;
+			}
+
+			m = bus1_peer_new_message(peer, factory, id);
+			if (IS_ERR(m)) {
+				r = PTR_ERR(m);
+				goto exit;
+			}
+
+			if (!bus1_handle_is_public(m->dst))
+				++n_charge;
+
+			m->qnode.next = mlist;
+			mlist = &m->qnode;
 		}
 
-		for (i = 0; i < param.n_destinations; ++i)
-			bus1_transaction_instantiate_for_id(transaction, i);
-
-		r = bus1_transaction_commit(transaction);
+		r = bus1_factory_seal(factory);
 		if (r < 0)
 			goto exit;
+
+		/*
+		 * Now everything is prepared, charged, and pinned. Iterate
+		 * each message, acquire references, and stage the message.
+		 * From here on, we must not error out, anymore.
+		 */
+
+		while (mlist) {
+			m = container_of(mlist, struct bus1_message, qnode);
+			mlist = m->qnode.next;
+			m->qnode.next = NULL;
+
+			if (!bus1_handle_is_public(m->dst)) {
+				--factory->n_handles_charge;
+				WARN_ON(m->dst != bus1_handle_acquire(m->dst,
+								      false));
+				WARN_ON(atomic_inc_return(&m->dst->n_user)
+									!= 1);
+			}
+
+			m->dst->tlink = NULL;
+
+			/* this consumes @m and @m->qnode.owner */
+			bus1_message_stage(m, &tx);
+		}
+
+		WARN_ON(factory->n_handles_charge != 0);
+		bus1_tx_commit(&tx);
 	}
 
 	r = 0;
 
 exit:
-	bus1_transaction_free(transaction, buf);
+	while (mlist) {
+		m = container_of(mlist, struct bus1_message, qnode);
+		mlist = m->qnode.next;
+		m->qnode.next = NULL;
+
+		p = m->qnode.owner;
+		m->dst->tlink = NULL;
+
+		bus1_handle_forget(m->dst);
+		bus1_message_unref(m);
+		bus1_peer_release(p);
+	}
+	bus1_factory_free(factory);
+	bus1_tx_deinit(&tx);
+	mutex_unlock(&peer->local.lock);
 	return r;
 }
 
-static int bus1_peer_ioctl_recv(struct bus1_peer *peer, unsigned long arg)
+static struct bus1_queue_node *bus1_peer_peek(struct bus1_peer *peer,
+					      struct bus1_cmd_recv *param,
+					      bool *morep)
 {
-	struct bus1_queue_node *node = NULL;
-	struct bus1_message *msg = NULL;
-	unsigned int type = _BUS1_QUEUE_NODE_N;
+	struct bus1_queue_node *qnode;
+	struct bus1_message *m;
+	struct bus1_handle *h;
+	u64 ts;
+
+	lockdep_assert_held(&peer->local.lock);
+
+	if (unlikely(param->flags & BUS1_RECV_FLAG_SEED)) {
+		if (!peer->local.seed)
+			return ERR_PTR(-EAGAIN);
+
+		*morep = false;
+		return &peer->local.seed->qnode;
+	}
+
+	mutex_lock(&peer->data.lock);
+	while ((qnode = bus1_queue_peek(&peer->data.queue, morep))) {
+		switch (bus1_queue_node_get_type(qnode)) {
+		case BUS1_MSG_DATA:
+			m = container_of(qnode, struct bus1_message, qnode);
+			h = m->dst;
+			break;
+		case BUS1_MSG_NODE_DESTROY:
+		case BUS1_MSG_NODE_RELEASE:
+			m = NULL;
+			h = container_of(qnode, struct bus1_handle, qnode);
+			break;
+		case BUS1_MSG_NONE:
+		default:
+			mutex_unlock(&peer->data.lock);
+			WARN(1, "Unknown message type\n");
+			return ERR_PTR(-ENOTRECOVERABLE);
+		}
+
+		ts = bus1_queue_node_get_timestamp(qnode);
+		if (ts <= peer->data.queue.flush ||
+		    !bus1_handle_is_public(h) ||
+		    !bus1_handle_is_live_at(h, ts)) {
+			bus1_queue_remove(&peer->data.queue, &peer->waitq,
+					  qnode);
+			if (m) {
+				mutex_unlock(&peer->data.lock);
+				bus1_message_unref(m);
+				mutex_lock(&peer->data.lock);
+			} else {
+				bus1_handle_unref(h);
+			}
+
+			continue;
+		}
+
+		if (!m && !(param->flags & BUS1_RECV_FLAG_PEEK))
+			bus1_queue_remove(&peer->data.queue, &peer->waitq,
+					  qnode);
+
+		break;
+	}
+	mutex_unlock(&peer->data.lock);
+
+	return qnode ?: ERR_PTR(-EAGAIN);
+}
+
+static int bus1_peer_ioctl_recv(struct bus1_peer *peer,
+				unsigned long arg)
+{
+	struct bus1_queue_node *qnode = NULL;
 	struct bus1_cmd_recv param;
-	bool has_continue = false;
+	struct bus1_message *m;
+	struct bus1_handle *h;
+	unsigned int type;
+	bool more = false;
 	int r;
 
 	BUILD_BUG_ON(_IOC_SIZE(BUS1_CMD_RECV) != sizeof(param));
@@ -520,104 +1003,62 @@ static int bus1_peer_ioctl_recv(struct bus1_peer *peer, unsigned long arg)
 				     BUS1_RECV_FLAG_INSTALL_FDS)))
 		return -EINVAL;
 
-	/*
-	 * Hold the peer lock over peek() -> remove() to make sure we never
-	 * dequeue a message twice. We need the peer locked for handle-install
-	 * anyway.
-	 * We ignore racing RESETs. It does not matter which call drops the
-	 * message, since the dequeue is the only visible effect.
-	 */
 	mutex_lock(&peer->local.lock);
-	mutex_lock(&peer->lock);
 
-	/*
-	 * We need to pin the message while it is still queued, otherwise a
-	 * racing RESET might deallocate the resources. In case of seeds the
-	 * lock is redundant, but it is no fast-path, anyway.
-	 */
-	if (param.flags & BUS1_RECV_FLAG_SEED) {
-		msg = bus1_message_pin(bus1_message_ref(peer->local.seed));
-		node = msg ? &msg->qnode : NULL;
-	} else {
-		mutex_lock(&peer->data.lock);
-		node = bus1_queue_peek(&peer->data.queue, &has_continue);
-		if (node) {
-			type = bus1_queue_node_get_type(node);
-			if (type == BUS1_QUEUE_NODE_MESSAGE)
-				msg = bus1_message_pin(
-						bus1_message_from_node(node));
-		}
-		mutex_unlock(&peer->data.lock);
+	qnode = bus1_peer_peek(peer, &param, &more);
+	if (IS_ERR(qnode)) {
+		r = PTR_ERR(qnode);
+		goto exit;
 	}
 
-	/*
-	 * Verify the message to return. In case of user messages we need to
-	 * install the payload before dequeueing the message. If that fails, we
-	 * must skip the dequeue and instead return an error to user-space.
-	 */
-	if (!node)
-		r = -EAGAIN;
-	else if (!msg)
-		r = 0;
-	else if (param.max_offset < msg->slice->offset + msg->slice->size)
-		r = -ERANGE;
-	else
-		r = bus1_message_install(msg, peer, &param);
+	type = bus1_queue_node_get_type(qnode);
+	switch (type) {
+	case BUS1_MSG_DATA:
+		m = container_of(qnode, struct bus1_message, qnode);
+		WARN_ON(m->dst->id == BUS1_HANDLE_INVALID);
 
-
-	if (r >= 0 && !(param.flags & BUS1_RECV_FLAG_PEEK)) {
-		/* unpin() cannot be the last, so safe under peer lock */
-		if (param.flags & BUS1_RECV_FLAG_SEED) {
-			peer->local.seed = bus1_message_unref(msg);
-
-			bus1_message_unpin(msg, peer);
-		} else {
-			bool removed;
-
-			mutex_lock(&peer->data.lock);
-			removed = bus1_queue_remove(&peer->data.queue,
-						    &peer->waitq, node);
-			mutex_unlock(&peer->data.lock);
-
-			if (removed)
-				bus1_message_unpin(msg, peer);
+		if (param.max_offset < m->slice->offset + m->slice->size) {
+			r = -ERANGE;
+			goto exit;
 		}
-	}
 
-	/*
-	 * The message was pinned, installed, and possibly dequeued. We can
-	 * unlock the peer now. In case of an error, simply bail out. In case
-	 * of success, we can copy the data to user-space. No further
-	 * operations required.
-	 */
-	mutex_unlock(&peer->lock);
-	mutex_unlock(&peer->local.lock);
+		r = bus1_message_install(m, &param);
+		if (r < 0)
+			goto exit;
 
-	if (r < 0)
-		return r;
-
-	if (msg) {
 		param.msg.type = BUS1_MSG_DATA;
-		param.msg.flags = msg->flags;
-		param.msg.uid = msg->uid;
-		param.msg.gid = msg->gid;
-		param.msg.pid = msg->pid;
-		param.msg.tid = msg->tid;
-		param.msg.offset = msg->slice->offset;
-		param.msg.n_bytes = msg->n_bytes;
-		param.msg.n_handles = msg->handles.batch.n_entries;
-		param.msg.n_fds = msg->n_files;
-		param.msg.n_secctx = msg->n_secctx;
+		param.msg.flags = m->flags;
+		param.msg.destination = m->dst->id;
+		param.msg.uid = m->uid;
+		param.msg.gid = m->gid;
+		param.msg.pid = m->pid;
+		param.msg.tid = m->tid;
+		param.msg.offset = m->slice->offset;
+		param.msg.n_bytes = m->n_bytes;
+		param.msg.n_handles = m->n_handles;
+		param.msg.n_fds = m->n_files;
+		param.msg.n_secctx = m->n_secctx;
 
-		param.msg.destination = msg->destination;
+		if (likely(!(param.flags & BUS1_RECV_FLAG_PEEK))) {
+			if (unlikely(param.flags & BUS1_RECV_FLAG_SEED)) {
+				peer->local.seed = NULL;
+			} else {
+				mutex_lock(&peer->data.lock);
+				bus1_queue_remove(&peer->data.queue,
+						  &peer->waitq, qnode);
+				mutex_unlock(&peer->data.lock);
+			}
+			bus1_message_unref(m);
+		}
+		break;
+	case BUS1_MSG_NODE_DESTROY:
+	case BUS1_MSG_NODE_RELEASE:
+		h = container_of(qnode, struct bus1_handle, qnode);
+		WARN_ON(h->id == BUS1_HANDLE_INVALID);
 
-		bus1_message_unpin(msg, peer);
-		bus1_message_unref(msg);
-	} else {
-		param.msg.type = (type == BUS1_QUEUE_NODE_HANDLE_DESTRUCTION)
-				 ? BUS1_MSG_NODE_DESTROY
-				 : BUS1_MSG_NODE_RELEASE;
+		param.msg.type = type;
 		param.msg.flags = 0;
+		param.msg.destination = h->id;
 		param.msg.uid = -1;
 		param.msg.gid = -1;
 		param.msg.pid = 0;
@@ -628,14 +1069,27 @@ static int bus1_peer_ioctl_recv(struct bus1_peer *peer, unsigned long arg)
 		param.msg.n_fds = 0;
 		param.msg.n_secctx = 0;
 
-		param.msg.destination = bus1_handle_unref_queued(node);
+		if (likely(!(param.flags & BUS1_RECV_FLAG_PEEK)))
+			bus1_handle_unref(h);
+		break;
+	case BUS1_MSG_NONE:
+	default:
+		WARN(1, "Unknown message type\n");
+		r = -ENOTRECOVERABLE;
+		goto exit;
 	}
 
-	if (has_continue)
+	if (more)
 		param.msg.flags |= BUS1_MSG_FLAG_CONTINUE;
 
-	return copy_to_user((void __user *)arg,
-			    &param, sizeof(param)) ? -EFAULT : 0;
+	if (copy_to_user((void __user *)arg, &param, sizeof(param)))
+		r = -EFAULT;
+	else
+		r = 0;
+
+exit:
+	mutex_unlock(&peer->local.lock);
+	return r;
 }
 
 /**
@@ -644,8 +1098,8 @@ static int bus1_peer_ioctl_recv(struct bus1_peer *peer, unsigned long arg)
  * @cmd:		ioctl command
  * @arg:		ioctl argument
  *
- * This handles the given ioctl (cmd+arg) on a peer. This expects the peer to be
- * stored in the private_data field of @file.
+ * This handles the given ioctl (cmd+arg) on a peer. This expects the peer to
+ * be stored in the private_data field of @file.
  *
  * Multiple ioctls can be called in parallel just fine. No locking is needed.
  *
@@ -673,10 +1127,10 @@ long bus1_peer_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 
 		switch (cmd) {
 		case BUS1_CMD_PEER_QUERY:
-			r = bus1_peer_ioctl_query(peer, arg);
+			r = bus1_peer_ioctl_peer_query(peer, arg);
 			break;
 		case BUS1_CMD_PEER_RESET:
-			r = bus1_peer_ioctl_reset(peer, arg);
+			r = bus1_peer_ioctl_peer_reset(peer, arg);
 			break;
 		case BUS1_CMD_HANDLE_RELEASE:
 			r = bus1_peer_ioctl_handle_release(peer, arg);
@@ -684,8 +1138,8 @@ long bus1_peer_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		case BUS1_CMD_HANDLE_TRANSFER:
 			r = bus1_peer_ioctl_handle_transfer(peer, arg);
 			break;
-		case BUS1_CMD_NODE_DESTROY:
-			r = bus1_peer_ioctl_node_destroy(peer, arg);
+		case BUS1_CMD_NODES_DESTROY:
+			r = bus1_peer_ioctl_nodes_destroy(peer, arg);
 			break;
 		case BUS1_CMD_SLICE_RELEASE:
 			r = bus1_peer_ioctl_slice_release(peer, arg);

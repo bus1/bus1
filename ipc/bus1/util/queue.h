@@ -24,10 +24,9 @@
  * delivery is consistent across queues.
  *
  * Messages can be destined for multiple queues, hence, we need to be careful
- * that all queues get a consistent partial order of incoming messages. We
- * define the concept of `global order' to provide a basic set of guarantees.
- * This global order is a partial order on the set of all messages. The order is
- * defined as:
+ * that all queues get a consistent order of incoming messages. We define the
+ * concept of `global order' to provide a basic set of guarantees. This global
+ * order is a partial order on the set of all messages. The order is defined as:
  *
  *   1) If a message B was queued *after* a message A, then: A < B
  *
@@ -55,11 +54,11 @@
  * and be guaranteed that all possible conflicts are blocked until we eventually
  * commit a transaction. To commit a transaction (after all staging entries are
  * queued), we choose the highest timestamp we have seen across all destinations
- * and re-queue all our entries on each peer. Here we use a commit timestamp
- * (even numbered).
+ * and re-queue all our entries on each peer using that timestamp. Here we use a
+ * commit timestamp (even numbered).
  *
  * With this in mind, we define that a client can only dequeue messages from
- * its queue, which have an even timestamp. Furthermore, if there is a message
+ * its queue that have an even timestamp. Furthermore, if there is a message
  * queued with an odd timestamp that is lower than the even timestamp of
  * another message, then neither message can be dequeued. They're considered to
  * be in-flight conflicts. This guarantees that two concurrent multicast
@@ -76,101 +75,96 @@
  *       conflicting tasks.
  *
  * The queue implementation uses an rb-tree (ordered by timestamps and sender),
- * with a cached pointer to the front of the queue. The front pointer is only
- * set if the first entry in the queue is ready to be dequeued (that is, it has
- * an even timestamp). If the first entry is not ready to be dequeued, or if the
- * queue is empty, the front pointer is NULL.
+ * with a cached pointer to the front of the queue.
  */
 
 #include <linux/kernel.h>
-#include <linux/kref.h>
-#include <linux/list.h>
 #include <linux/rbtree.h>
 #include <linux/rcupdate.h>
+#include <linux/wait.h>
 
 /* shift/mask for @timestamp_and_type field of queue nodes */
 #define BUS1_QUEUE_TYPE_SHIFT (62)
 #define BUS1_QUEUE_TYPE_MASK (((u64)3ULL) << BUS1_QUEUE_TYPE_SHIFT)
-
-enum {
-	BUS1_QUEUE_NODE_MESSAGE,
-	BUS1_QUEUE_NODE_HANDLE_DESTRUCTION,
-	BUS1_QUEUE_NODE_HANDLE_RELEASE,
-	_BUS1_QUEUE_NODE_N,
-};
+#define BUS1_QUEUE_TYPE_N (4)
 
 /**
  * struct bus1_queue_node - node into message queue
+ * @rcu:			rcu-delayed destruction
  * @rb:				link into sorted message queue
- * @link:			link for off-queue use
- * @rcu:			rcu
- * @ref:			reference counter
- * @sender:			sender tag
  * @timestamp_and_type:		message timestamp and type of parent object
+ * @next:			single-linked utility list
+ * @group:			group association
+ * @owner:			node owner
  */
 struct bus1_queue_node {
 	union {
-		struct rb_node rb;
-		struct list_head link;
 		struct rcu_head rcu;
+		struct rb_node rb;
 	};
-	struct kref ref;
-	unsigned long sender;
 	u64 timestamp_and_type;
+	struct bus1_queue_node *next;
+	void *group;
+	void *owner;
 };
 
 /**
  * struct bus1_queue - message queue
- * @clock:		local clock (used for Lamport Timestamps)
- * @front:		cached front entry
- * @messages:		queued messages
+ * @clock:			local clock (used for Lamport Timestamps)
+ * @flush:			last flush timestamp
+ * @leftmost:			cached left-most entry
+ * @front:			cached front entry
+ * @messages:			queued messages
  */
 struct bus1_queue {
 	u64 clock;
+	u64 flush;
+	struct rb_node *leftmost;
 	struct rb_node __rcu *front;
 	struct rb_root messages;
 };
 
 void bus1_queue_init(struct bus1_queue *queue);
 void bus1_queue_deinit(struct bus1_queue *queue);
-void bus1_queue_flush(struct bus1_queue *queue, struct list_head *list);
+struct bus1_queue_node *bus1_queue_flush(struct bus1_queue *queue, u64 ts);
 u64 bus1_queue_stage(struct bus1_queue *queue,
 		     struct bus1_queue_node *node,
 		     u64 timestamp);
-bool bus1_queue_commit_staged(struct bus1_queue *queue,
+void bus1_queue_commit_staged(struct bus1_queue *queue,
 			      wait_queue_head_t *waitq,
 			      struct bus1_queue_node *node,
 			      u64 timestamp);
 void bus1_queue_commit_unstaged(struct bus1_queue *queue,
 				wait_queue_head_t *waitq,
 				struct bus1_queue_node *node);
-bool bus1_queue_remove(struct bus1_queue *queue,
+bool bus1_queue_commit_synthetic(struct bus1_queue *queue,
+				 struct bus1_queue_node *node,
+				 u64 timestamp);
+void bus1_queue_remove(struct bus1_queue *queue,
 		       wait_queue_head_t *waitq,
 		       struct bus1_queue_node *node);
-struct bus1_queue_node *bus1_queue_peek(struct bus1_queue *queue,
-					bool *continuep);
+struct bus1_queue_node *bus1_queue_peek(struct bus1_queue *queue, bool *morep);
 
 /**
  * bus1_queue_node_init() - initialize queue node
- * @node:		node to initialize
- * @type:		message type
- * @sender:		sender tag
+ * @node:			node to initialize
+ * @type:			message type
  *
  * This initializes a previously unused node, and prepares it for use with a
- * message queue. The initial ref-count is set to 1.
+ * message queue.
  */
 static inline void bus1_queue_node_init(struct bus1_queue_node *node,
-					unsigned int type,
-					unsigned long sender)
+					unsigned int type)
 {
-	BUILD_BUG_ON((_BUS1_QUEUE_NODE_N - 1) > (BUS1_QUEUE_TYPE_MASK >>
-							BUS1_QUEUE_TYPE_SHIFT));
+	BUILD_BUG_ON((BUS1_QUEUE_TYPE_N - 1) > (BUS1_QUEUE_TYPE_MASK >>
+						BUS1_QUEUE_TYPE_SHIFT));
 	WARN_ON(type & ~(BUS1_QUEUE_TYPE_MASK >> BUS1_QUEUE_TYPE_SHIFT));
 
 	RB_CLEAR_NODE(&node->rb);
-	kref_init(&node->ref);
-	node->sender = sender;
 	node->timestamp_and_type = (u64)type << BUS1_QUEUE_TYPE_SHIFT;
+	node->next = NULL;
+	node->group = NULL;
+	node->owner = NULL;
 }
 
 /**
@@ -179,15 +173,11 @@ static inline void bus1_queue_node_init(struct bus1_queue_node *node,
  *
  * This destroys a previously initialized queue node. This is a no-op and only
  * serves as debugger, testing whether the node was properly unqueued before.
- * This must not be called if there are still references left to the node. That
- * is, this function should rather be called from your kref_put() callback.
  */
 static inline void bus1_queue_node_deinit(struct bus1_queue_node *node)
 {
-	if (node) {
-		WARN_ON(!RB_EMPTY_NODE(&node->rb));
-		WARN_ON(kref_get_unless_zero(&node->ref));
-	}
+	WARN_ON(!RB_EMPTY_NODE(&node->rb));
+	WARN_ON(node->next);
 }
 
 /**
@@ -196,8 +186,6 @@ static inline void bus1_queue_node_deinit(struct bus1_queue_node *node)
  *
  * This queries the node type that was provided via the node constructor. A
  * node never changes its type during its entire lifetime.
- *
- * The caller must lock the queue or own the queue-node.
  *
  * Return: Type of @node is returned.
  */
@@ -213,8 +201,6 @@ bus1_queue_node_get_type(struct bus1_queue_node *node)
  * @node:			node to query
  *
  * This queries the node timestamp that is currently set on this node.
- *
- * The caller must lock the queue or own the queue-node.
  *
  * Return: Timestamp of @node is returned.
  */
@@ -261,8 +247,6 @@ static inline bool bus1_queue_node_is_staging(struct bus1_queue_node *node)
  * and its successor (odd numbered). Both are uniquely allocated to the
  * caller.
  *
- * The caller must lock the queue.
- *
  * Return: New clock value is returned.
  */
 static inline u64 bus1_queue_tick(struct bus1_queue *queue)
@@ -281,8 +265,6 @@ static inline u64 bus1_queue_tick(struct bus1_queue *queue)
  * case it is newer than the queue clock. Otherwise, nothing is done.
  *
  * The passed in timestamp must be even.
- *
- * The caller must lock the queue.
  *
  * Return: New clock value is returned.
  */
@@ -311,29 +293,25 @@ static inline bool bus1_queue_is_readable_rcu(struct bus1_queue *queue)
 
 /**
  * bus1_queue_compare() - comparator for queue ordering
- * @a_ts:		timestamp of first node to compare
- * @a_sender:		sender tag of first node to compare
- * @b_ts:		timestamp of second node to compare against
- * @b_sender:		sender tag of second node to compare against
+ * @a_ts:			timestamp of first node to compare
+ * @a_g:			group of first node to compare
+ * @b_ts:			timestamp of second node to compare against
+ * @b_g:			group of second node to compare against
  *
  * Messages on a message queue are ordered. This function implements the
  * comparator used for all message ordering in queues. Two tags are used for
- * ordering, the timestamp and the sender-tag of a node. Both must be passed to
+ * ordering, the timestamp and the group-tag of a node. Both must be passed to
  * this function.
  *
- * This compares the tuples (@a_ts, @a_sender) and (@b_ts, @b_sender).
+ * This compares the tuples (@a_ts, @a_g) and (@b_ts, @b_g).
  *
- * Return: <0 if (@a_ts, @a_sender) is ordered before, 0 if the same, >0 if
- *         ordered after.
+ * Return: <0 if (@a_ts, @a_g) is ordered before, >0 if after, 0 if same.
  */
-static inline int bus1_queue_compare(u64 a_ts,
-				     unsigned long a_sender,
-				     u64 b_ts,
-				     unsigned long b_sender)
+static inline int bus1_queue_compare(u64 a_ts, void *a_g, u64 b_ts, void *b_g)
 {
 	/*
 	 * This orders two possible queue nodes. As first-level ordering we
-	 * use the timestamps, as second-level ordering we use the sender-tag.
+	 * use the timestamps, as second-level ordering we use the group-tag.
 	 *
 	 * Timestamp-based ordering should be obvious. We simply make sure that
 	 * any message with a lower timestamp is always considered to be first.
@@ -343,10 +321,9 @@ static inline int bus1_queue_compare(u64 a_ts,
 	 * the picked timestamp for a multicast might not be unique, if another
 	 * multicast with only partial destination overlap races it and happens
 	 * to get the same timestamp via a distinct destination clock. If that
-	 * happens, we guarantee a stable order by comparing the sender-tag of
-	 * the nodes. The sender-tag can never be equal, since we allocate
-	 * the unique final timestamp via the sender-clock (i.e., if the
-	 * sender-tag matches, the timestamp must be distinct).
+	 * happens, we guarantee a stable order by comparing the group-tag of
+	 * the nodes. The group-tag is only ever equal if both messages belong
+	 * to the same transaction.
 	 *
 	 * Note that we strictly rely on any multicast to be staged before its
 	 * final commit. This guarantees that if a node is queued with a commit
@@ -363,9 +340,9 @@ static inline int bus1_queue_compare(u64 a_ts,
 		return -1;
 	else if (a_ts > b_ts)
 		return 1;
-	else if (a_sender < b_sender)
+	else if (a_g < b_g)
 		return -1;
-	else if (a_sender > b_sender)
+	else if (a_g > b_g)
 		return 1;
 
 	return 0;

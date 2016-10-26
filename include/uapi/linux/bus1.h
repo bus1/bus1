@@ -13,36 +13,33 @@
 #include <linux/ioctl.h>
 #include <linux/types.h>
 
-#define BUS1_VEC_MAX		(1024) /* UIO_MAXIOV is 1024 */
-#define BUS1_FD_MAX		(256)
+#define BUS1_FD_MAX			(256)
 
 #define BUS1_IOCTL_MAGIC		0x96
 #define BUS1_HANDLE_INVALID		((__u64)-1)
 #define BUS1_OFFSET_INVALID		((__u64)-1)
 
 enum {
-	BUS1_NODE_FLAG_MANAGED		= 1ULL <<  0,
-	BUS1_NODE_FLAG_ALLOCATE		= 1ULL <<  1,
-	BUS1_NODE_FLAG_PERSISTENT	= 1ULL <<  2,
+	BUS1_HANDLE_FLAG_MANAGED				= 1ULL <<  0,
+	BUS1_HANDLE_FLAG_REMOTE					= 1ULL <<  1,
 };
 
 enum {
-	BUS1_PEER_FLAG_WANT_SECCTX	= 1ULL <<  0,
+	BUS1_PEER_FLAG_WANT_SECCTX				= 1ULL <<  0,
 };
 
 enum {
-	BUS1_PEER_RESET_FLAG_DESTROY_NODES	= 1ULL <<  0,
-	BUS1_PEER_RESET_FLAG_PROTECT_PERSISTENT	= 1ULL <<  1,
-	BUS1_PEER_RESET_FLAG_RELEASE_HANDLES	= 1ULL <<  2,
+	BUS1_PEER_RESET_FLAG_FLUSH				= 1ULL <<  0,
+	BUS1_PEER_RESET_FLAG_FLUSH_SEED				= 1ULL <<  1,
 };
 
 struct bus1_cmd_peer_reset {
 	__u64 flags;
 	__u64 peer_flags;
-	__u64 max_slices;
-	__u64 max_handles;
-	__u64 max_inflight_bytes;
-	__u64 max_inflight_fds;
+	__u32 max_slices;
+	__u32 max_handles;
+	__u32 max_inflight_bytes;
+	__u32 max_inflight_fds;
 } __attribute__((__aligned__(8)));
 
 struct bus1_cmd_handle_transfer {
@@ -52,15 +49,19 @@ struct bus1_cmd_handle_transfer {
 	__u64 dst_handle;
 } __attribute__((__aligned__(8)));
 
-struct bus1_cmd_node_destroy {
+enum {
+	BUS1_NODES_DESTROY_FLAG_RELEASE_HANDLES			= 1ULL <<  0,
+};
+
+struct bus1_cmd_nodes_destroy {
 	__u64 flags;
 	__u64 ptr_nodes;
 	__u64 n_nodes;
 } __attribute__((__aligned__(8)));
 
 enum {
-	BUS1_SEND_FLAG_CONTINUE		= 1ULL <<  0,
-	BUS1_SEND_FLAG_SEED		= 1ULL <<  1,
+	BUS1_SEND_FLAG_CONTINUE					= 1ULL <<  0,
+	BUS1_SEND_FLAG_SEED					= 1ULL <<  1,
 };
 
 struct bus1_cmd_send {
@@ -77,9 +78,9 @@ struct bus1_cmd_send {
 } __attribute__((__aligned__(8)));
 
 enum {
-	BUS1_RECV_FLAG_PEEK		= 1ULL <<  0,
-	BUS1_RECV_FLAG_SEED		= 1ULL <<  1,
-	BUS1_RECV_FLAG_INSTALL_FDS	= 1ULL <<  2,
+	BUS1_RECV_FLAG_PEEK					= 1ULL <<  0,
+	BUS1_RECV_FLAG_SEED					= 1ULL <<  1,
+	BUS1_RECV_FLAG_INSTALL_FDS				= 1ULL <<  2,
 };
 
 enum {
@@ -90,8 +91,8 @@ enum {
 };
 
 enum {
-	BUS1_MSG_FLAG_HAS_SECCTX	= 1ULL <<  0,
-	BUS1_MSG_FLAG_CONTINUE		= 1ULL <<  1,
+	BUS1_MSG_FLAG_HAS_SECCTX				= 1ULL <<  0,
+	BUS1_MSG_FLAG_CONTINUE					= 1ULL <<  1,
 };
 
 struct bus1_cmd_recv {
@@ -124,8 +125,8 @@ enum {
 					__u64),
 	BUS1_CMD_HANDLE_TRANSFER	= _IOWR(BUS1_IOCTL_MAGIC, 0x11,
 					struct bus1_cmd_handle_transfer),
-	BUS1_CMD_NODE_DESTROY		= _IOWR(BUS1_IOCTL_MAGIC, 0x20,
-					struct bus1_cmd_node_destroy),
+	BUS1_CMD_NODES_DESTROY		= _IOWR(BUS1_IOCTL_MAGIC, 0x20,
+					struct bus1_cmd_nodes_destroy),
 	BUS1_CMD_SLICE_RELEASE		= _IOWR(BUS1_IOCTL_MAGIC, 0x30,
 					__u64),
 	BUS1_CMD_SEND			= _IOWR(BUS1_IOCTL_MAGIC, 0x40,

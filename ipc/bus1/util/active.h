@@ -11,11 +11,11 @@
  */
 
 /**
- * Active References
+ * DOC: Active References
  *
  * The bus1_active object implements active references. They work similarly to
- * plain object reference counters, but allow to disable any new references
- * from being taken.
+ * plain object reference counters, but allow disabling any new references from
+ * being taken.
  *
  * Each bus1_active object goes through a set of states:
  *   NEW:       Initial state, no active references can be acquired
@@ -30,7 +30,7 @@
  * DRAINING. No new active references can be acquired, but some threads might
  * still own active references. Once all those are dropped, the object enters
  * state DRAINED. Now the object can be released a *single* time, before it
- * enters state RELEASED and is finished. It cannot be re-used, anymore.
+ * enters state RELEASED and is finished. It cannot be re-used anymore.
  *
  * Active-references are very useful to track threads that call methods on an
  * object. As long as a method is running, an active reference is held, and as
@@ -55,8 +55,8 @@
  * @count:	active reference counter
  * @dep_map:	lockdep annotations
  *
- * This object should be treated like a simple atomic_t. Only in the case of
- * lockdep-enabled compilations, it will contain more fields.
+ * This object should be treated like a simple atomic_t. It will only contain
+ * more fields in the case of lockdep-enabled compilations.
  *
  * Users must embed this object into their parent structures and create/destroy
  * it via bus1_active_init() and bus1_active_deinit().

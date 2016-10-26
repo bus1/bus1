@@ -18,7 +18,7 @@
  * hooks once this is no longer out-of-tree.
  */
 
-struct bus1_node;
+struct bus1_handle;
 struct bus1_peer;
 struct file;
 
@@ -30,7 +30,7 @@ static inline int security_bus1_transfer_message(struct bus1_peer *from,
 
 static inline int security_bus1_transfer_handle(struct bus1_peer *from,
 						struct bus1_peer *to,
-						struct bus1_node *node)
+						struct bus1_handle *node)
 {
 	return 0;
 }

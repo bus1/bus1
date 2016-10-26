@@ -16,175 +16,6 @@
 
 #define MAX_DESTINATIONS (256)
 
-static int client_send(struct bus1_peer *client, uint64_t *destinations,
-		       size_t n_destinations, void *data, size_t len)
-{
-	struct iovec vec = {
-		.iov_base = data,
-		.iov_len = len,
-	};
-	struct bus1_cmd_send send = {
-		.ptr_destinations = (uintptr_t)destinations,
-		.n_destinations = n_destinations,
-		.ptr_vecs = (uintptr_t)&vec,
-		.n_vecs = 1,
-	};
-
-	return bus1_peer_send(client, &send);
-}
-
-static int client_recv(struct bus1_peer *client,
-		       const void **datap,
-		       size_t *lenp)
-{
-	struct bus1_cmd_recv recv = {};
-	int r;
-
-	assert(datap);
-	assert(lenp);
-
-	r = bus1_peer_recv(client, &recv);
-	if (r < 0)
-		return r;
-
-	assert(recv.msg.type == BUS1_MSG_DATA);
-
-	*datap = bus1_peer_slice_from_offset(client, recv.msg.offset);
-	*lenp = recv.msg.n_bytes;
-
-	return 0;
-}
-
-static int client_slice_release(struct bus1_peer *client, void *slice)
-{
-	return bus1_peer_slice_release(client,
-				bus1_peer_slice_to_offset(client, slice));
-}
-
-static void test_basic(void)
-{
-	struct bus1_peer *parent, *child1, *child2;
-	uint64_t node, aux, parent_handle, child_handles[2];
-	struct bus1_cmd_send send;
-	struct bus1_cmd_recv recv;
-	char *payload = "WOOFWOOF";
-	char *reply_payload;
-	size_t reply_len;
-	int r;
-
-	/* create parent */
-	r = bus1_peer_new_from_path(&parent, test_path);
-	assert(r >= 0);
-
-	r = bus1_peer_mmap(parent);
-	assert(r >= 0);
-
-	/* create first child */
-	r = bus1_peer_new_from_path(&child1, test_path);
-	assert(r >= 0);
-
-	node = BUS1_NODE_FLAG_MANAGED | BUS1_NODE_FLAG_ALLOCATE;
-	parent_handle = BUS1_HANDLE_INVALID;
-	r = bus1_peer_handle_transfer(parent, child1, &node, &parent_handle);
-	assert(r >= 0);
-
-	r = bus1_peer_mmap(child1);
-	assert(r >= 0);
-
-	/* allocate and send node as auxiliary data to parent */
-	aux = BUS1_NODE_FLAG_MANAGED | BUS1_NODE_FLAG_ALLOCATE;
-	send = (struct bus1_cmd_send) {
-		.ptr_destinations = (unsigned long)&parent_handle,
-		.n_destinations = 1,
-		.ptr_handles = (unsigned long)&aux,
-		.n_handles = 1,
-	};
-	r = bus1_peer_send(child1, &send);
-	assert(r >= 0);
-	assert(!(aux & BUS1_NODE_FLAG_ALLOCATE));
-	assert(aux & BUS1_NODE_FLAG_MANAGED);
-
-	recv = (struct bus1_cmd_recv){};
-	r = bus1_peer_recv(parent, &recv);
-	assert(r >= 0);
-	assert(recv.msg.type == BUS1_MSG_DATA);
-	assert(recv.msg.n_bytes == 0);
-	assert(recv.msg.n_fds == 0);
-	assert(recv.msg.n_handles == 1);
-
-	child_handles[0] = *(uint64_t *) bus1_peer_slice_from_offset(parent,
-							recv.msg.offset);
-
-	r = bus1_peer_slice_release(parent, recv.msg.offset);
-	assert(r >= 0);
-
-	/* create second child */
-	r = bus1_peer_new_from_path(&child2, test_path);
-	assert(r >= 0);
-
-	node = BUS1_NODE_FLAG_MANAGED | BUS1_NODE_FLAG_ALLOCATE;
-	parent_handle = BUS1_HANDLE_INVALID;
-	r = bus1_peer_handle_transfer(parent, child2, &node, &parent_handle);
-	assert(r >= 0);
-
-	r = bus1_peer_mmap(child2);
-	assert(r >= 0);
-
-	/* allocate and send node as auxiliary data to parent */
-	aux = BUS1_NODE_FLAG_MANAGED | BUS1_NODE_FLAG_ALLOCATE;
-	send = (struct bus1_cmd_send) {
-		.ptr_destinations = (unsigned long)&parent_handle,
-		.n_destinations = 1,
-		.ptr_handles = (unsigned long)&aux,
-		.n_handles = 1,
-	};
-	r = bus1_peer_send(child2, &send);
-	assert(r >= 0);
-	assert(!(aux & BUS1_NODE_FLAG_ALLOCATE));
-	assert(aux & BUS1_NODE_FLAG_MANAGED);
-
-	recv = (struct bus1_cmd_recv){};
-	r = bus1_peer_recv(parent, &recv);
-	assert(r >= 0);
-	assert(recv.msg.type == BUS1_MSG_DATA);
-	assert(recv.msg.n_bytes == 0);
-	assert(recv.msg.n_fds == 0);
-	assert(recv.msg.n_handles == 1);
-
-	child_handles[1] = *(uint64_t *) bus1_peer_slice_from_offset(parent,
-							recv.msg.offset);
-
-	r = bus1_peer_slice_release(parent, recv.msg.offset);
-	assert(r >= 0);
-
-	/* multicast */
-	r = client_send(parent, child_handles, 2, payload, strlen(payload) + 1);
-	assert(r >= 0);
-
-	r = client_recv(child1, (const void **)&reply_payload, &reply_len);
-	assert(r >= 0);
-
-	assert(reply_len == strlen(payload) + 1);
-	assert(memcmp(payload, reply_payload, strlen(payload) + 1) == 0);
-
-	r = client_slice_release(child1, reply_payload);
-	assert(r >= 0);
-
-	r = client_recv(child2, (const void **)&reply_payload, &reply_len);
-	assert(r >= 0);
-
-	assert(reply_len == strlen(payload) + 1);
-	assert(memcmp(payload, reply_payload, strlen(payload) + 1) == 0);
-
-	r = client_slice_release(child2, reply_payload);
-	assert(r >= 0);
-
-	/* cleanup */
-	parent = bus1_peer_free(parent);
-	child1 = bus1_peer_free(child1);
-	child2 = bus1_peer_free(child2);
-}
-
 static inline uint64_t nsec_from_clock(clockid_t clock)
 {
 	struct timespec ts;
@@ -235,31 +66,46 @@ static uint64_t test_iterate_uds(unsigned int iterations, size_t n_bytes)
 	return (time_end - time_start) / iterations;
 }
 
-static void test_one(struct bus1_peer *parent,
-		     struct bus1_peer **children,
-		     uint64_t *child_handles,
+static void test_one(int fd1,
+		     int *fds,
+		     uint64_t *handles,
 		     unsigned int n_destinations,
 		     char *payload,
 		     size_t n_bytes)
 {
-	char *reply_payload;
-	size_t reply_len;
-	unsigned int i;
+	struct bus1_cmd_send cmd_send;
+	struct bus1_cmd_recv cmd_recv;
+	struct iovec vec = { payload, n_bytes };
+	size_t i;
 	int r;
 
-	/* send */
-	r = client_send(parent, child_handles, n_destinations, payload,
-			n_bytes);
+	cmd_send = (struct bus1_cmd_send){
+		.flags			= 0,
+		.ptr_destinations	= (unsigned long)handles,
+		.ptr_errors		= 0,
+		.n_destinations		= n_destinations,
+		.ptr_vecs		= (unsigned long)&vec,
+		.n_vecs			= 1,
+		.ptr_handles		= 0,
+		.n_handles		= 0,
+		.ptr_fds		= 0,
+		.n_fds			= 0,
+	};
+	r = bus1_ioctl_send(fd1, &cmd_send);
 	assert(r >= 0);
 
-	/* receive */
-	for (i = 0; i < n_destinations; i++) {
-		r = client_recv(children[i],
-				(const void **)&reply_payload,
-				&reply_len);
+	for (i = 0; i < n_destinations; ++i) {
+		cmd_recv = (struct bus1_cmd_recv){
+			.flags = 0,
+			.max_offset = -1,
+		};
+		r = bus1_ioctl_recv(fds[i], &cmd_recv);
 		assert(r >= 0);
+		assert(cmd_recv.msg.type == BUS1_MSG_DATA);
+		assert(cmd_recv.msg.n_bytes == n_bytes);
 
-		r = client_slice_release(children[i], reply_payload);
+		r = bus1_ioctl_slice_release(fds[i],
+					     (uint64_t *)&cmd_recv.msg.offset);
 		assert(r >= 0);
 	}
 }
@@ -268,93 +114,54 @@ static uint64_t test_iterate(unsigned int iterations,
 			     unsigned int n_destinations,
 			     size_t n_bytes)
 {
-	struct bus1_peer *parent, *children[MAX_DESTINATIONS];
-	uint64_t child_handles[MAX_DESTINATIONS];
+	struct bus1_cmd_handle_transfer cmd_transfer;
+	const uint8_t *maps[MAX_DESTINATIONS + 1];
+	size_t n_maps[MAX_DESTINATIONS + 1];
+	uint64_t handles[MAX_DESTINATIONS + 1];
+	int r, fds[MAX_DESTINATIONS + 1];
+	uint64_t time_start, time_end;
 	char payload[n_bytes];
-	unsigned int i;
-	uint64_t node, time_start, time_end;
-	int r;
+	size_t i;
 
 	assert(n_destinations <= MAX_DESTINATIONS);
 
-	/* create parent */
-	r = bus1_peer_new_from_path(&parent, test_path);
-	assert(r >= 0);
+	/* setup */
+	fds[0] = test_open(&maps[0], &n_maps[0]);
 
-	r = bus1_peer_mmap(parent);
-	assert(r >= 0);
+	for (i = 1; i < sizeof(fds) / sizeof(*fds); ++i) {
+		fds[i] = test_open(&maps[i], &n_maps[i]);
 
-	/* create children */
-	for (i = 0; i < MAX_DESTINATIONS; i++) {
-		uint64_t parent_handle, aux;
-		struct bus1_cmd_send send;
-		struct bus1_cmd_recv recv;
-
-		node = BUS1_NODE_FLAG_MANAGED | BUS1_NODE_FLAG_ALLOCATE;
-		parent_handle = BUS1_HANDLE_INVALID;
-		r = bus1_peer_new_from_path(children + i, test_path);
-		assert(r >= 0);
-
-		r = bus1_peer_handle_transfer(parent, children[i],
-					      &node, &parent_handle);
-		assert(r >= 0);
-
-		r = bus1_peer_mmap(children[i]);
-		assert(r >= 0);
-
-		/* allocate and send node as auxiliary data to parent */
-		aux = BUS1_NODE_FLAG_MANAGED | BUS1_NODE_FLAG_ALLOCATE;
-		send = (struct bus1_cmd_send) {
-			.ptr_destinations = (unsigned long)&parent_handle,
-			.n_destinations = 1,
-			.ptr_handles = (unsigned long)&aux,
-			.n_handles = 1,
+		cmd_transfer = (struct bus1_cmd_handle_transfer){
+			.flags			= 0,
+			.src_handle		= 0x100,
+			.dst_fd			= fds[0],
+			.dst_handle		= BUS1_HANDLE_INVALID,
 		};
-		r = bus1_peer_send(children[i], &send);
+		r = bus1_ioctl_handle_transfer(fds[i], &cmd_transfer);
 		assert(r >= 0);
-		assert(!(aux & BUS1_NODE_FLAG_ALLOCATE));
-		assert(aux & BUS1_NODE_FLAG_MANAGED);
-
-		recv = (struct bus1_cmd_recv){};
-		r = bus1_peer_recv(parent, &recv);
-		assert(r >= 0);
-		assert(recv.msg.type == BUS1_MSG_DATA);
-		assert(recv.msg.n_bytes == 0);
-		assert(recv.msg.n_fds == 0);
-		assert(recv.msg.n_handles == 1);
-
-		child_handles[i] = *(uint64_t *)
-			bus1_peer_slice_from_offset(parent, recv.msg.offset);
-
-		r = bus1_peer_slice_release(parent, recv.msg.offset);
-		assert(r >= 0);
+		handles[i] = cmd_transfer.dst_handle;
 	}
 
 	/* caches */
-	test_one(parent, children, child_handles, n_destinations, payload,
+	test_one(fds[0], fds + 1, handles + 1, n_destinations, payload,
 		 n_bytes);
 
 	time_start = nsec_from_clock(CLOCK_THREAD_CPUTIME_ID);
 	for (i = 0; i < iterations; i++)
-		test_one(parent, children, child_handles, n_destinations,
-			 payload, n_bytes);
+		test_one(fds[0], fds + 1, handles + 1, n_destinations, payload,
+			 n_bytes);
 	time_end = nsec_from_clock(CLOCK_THREAD_CPUTIME_ID);
 
-	/* cleanup */
-	parent = bus1_peer_free(parent);
-
-	for (i = 0; i < MAX_DESTINATIONS; i++)
-		children[i] = bus1_peer_free(children[i]);
+	for (i = 0; i < sizeof(fds) / sizeof(*fds); ++i)
+		test_close(fds[i], maps[i], n_maps[i]);
 
 	return (time_end - time_start) / iterations;
 }
 
-int test_io(void)
+static void test_io(void)
 {
 	unsigned long base;
 	unsigned int i;
-
-	test_basic();
 
 	fprintf(stderr, "UDS took %lu ns without payload\n",
 		test_iterate_uds(100000, 0));
@@ -376,8 +183,16 @@ int test_io(void)
 		fprintf(stderr, "it took %lu ns + %lu ns per destination for %u destinations\n",
 			base, (test_iterate(100000 >> i, dests, 1024) - base) / dests, dests);
 	}
+}
 
-	fprintf(stderr, "\n\n");
+int main(int argc, char **argv)
+{
+	int r;
 
-	return TEST_OK;
+	r = test_parse_argv(argc, argv);
+	if (r > 0) {
+		test_io();
+	}
+
+	return r < 0 ? EXIT_FAILURE : EXIT_SUCCESS;
 }

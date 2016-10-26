@@ -34,7 +34,7 @@ struct iovec;
 struct kvec;
 
 /* internal: number of bits available to slice size */
-#define BUS1_POOL_SLICE_SIZE_BITS (28)
+#define BUS1_POOL_SLICE_SIZE_BITS (29)
 #define BUS1_POOL_SLICE_SIZE_MAX ((1 << BUS1_POOL_SLICE_SIZE_BITS) - 1)
 
 /**
@@ -105,7 +105,7 @@ struct bus1_pool_slice {
  *
  * All pool operations must be serialized by the caller. No internal lock is
  * provided. Slices can be queried/modified unlocked. But any pool operation
- * (allocation, release, flush, ...) must be serialized!
+ * (allocation, release, flush, ...) must be serialized.
  */
 struct bus1_pool {
 	struct file *f;
@@ -151,8 +151,7 @@ ssize_t bus1_pool_write_kvec(struct bus1_pool *pool,
  * called and the user has not released their reference, yet.
  *
  * Note that if you need reliable results, you better make sure this cannot
- * race calls to bus1_pool_publish() (or bus1_pool_release_user(),
- * respectively).
+ * race calls to bus1_pool_publish() or bus1_pool_release_user().
  *
  * Return: True if public, false if not.
  */

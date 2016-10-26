@@ -7,2268 +7,816 @@
  * your option) any later version.
  */
 
-#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 #include <linux/atomic.h>
-#include <linux/bitops.h>
 #include <linux/err.h>
 #include <linux/kernel.h>
 #include <linux/kref.h>
-#include <linux/list.h>
-#include <linux/mutex.h>
 #include <linux/rbtree.h>
 #include <linux/rcupdate.h>
-#include <linux/sched.h>
-#include <linux/security.h>
-#include <linux/seqlock.h>
 #include <linux/slab.h>
-#include <linux/uaccess.h>
-#include <linux/wait.h>
-#include <uapi/linux/bus1.h>
 #include "handle.h"
 #include "peer.h"
-#include "security.h"
+#include "tx.h"
 #include "util.h"
-#include "util/active.h"
 #include "util/queue.h"
 
-/**
- * struct bus1_handle - handle objects
- * @qnode:		embedded queue node (used for destruction notification)
- * @n_inflight:		number of inflight references; initially -1 if
- *			unattached; >0 if live; 0 if about to be detached
- * @n_user:		number of user-visible references (shifted by -1)
- * @rb_id:		link into owning peer, based on ID
- * @rb_node:		link into owning peer, based on node pointer
- * @node:		node this handle is linked to
- * @id:			current ID of this handle
- * @holder:		holder of this node
- * @link_node:		link into the node
- * @link:		temporary single-linked list during destruction
- *
- * Handle objects represent an accessor to nodes. A handle is always held by a
- * specific peer, and by that peer only. The peer-lock (or data-lock,
- * respectively) protects access to this handle. Effectively, handles represent
- * a connection between two peers (between the holder of the handle and the
- * owner of its linked node). Such connections can exist both ways, hence, both
- * peers are treated as equals. You cannot lock both peers at the same time.
- *
- * @ref and @n_inflight must be accessed atomically, @node is set statically
- * and pinned for the entire lifetime of the object. @n_user, @rb_id, @rb_node,
- * @id, and @holder are protected by the peer-lock of the holding peer.
- * @link_node is protected by the peer-lock of the node-owner
- * (handle->node->owner.holder, which *might* be NULL if racing a node
- * destruction).
- *
- * Handles always pin the node they're linked to, and the node can be accessed
- * freely at all times. During handle setup, two independent steps are required:
- *
- *   1) Attach:
- *      The handle must be attached to the node so a node-owner can enumerate
- *      all linked handles. This required locking the peer-lock of the
- *      node-owner.
- *
- *   2) Install:
- *      The handle must be installed into the lookup-trees of the holding peer.
- *      This requires locking the peer-lock of the holder of the handle.
- *
- * Handles don't have any lock themselves, but are protected by the respective
- * peer locks of their holders. However, during teardown of a handle, the holder
- * must be cleared to NULL, which means racing accesses might be unable to
- * dereference the peer. Hence, if we detect this case, we treat the handle as
- * disconnected and rely on the context to clean the handle up properly. The
- * holder of a handle is set *before* ATTACH and cleared during UNINSTALL. That
- * is, we expect a handle to have the holder set before it is made visible to
- * any other context, but we immediately clear it at the first part of
- * destruction.
- *
- * The two connections of a handle (to its node, and to its holder) can be
- * dropped independently. The holder of a handle always has full control over
- * its lifetime. That means, only if the holder releases its last reference, or
- * if they disconnect, they will cause an uninstall of the handle. As long as a
- * holder has a reference, the handle will stay alive (but there's no guarantee
- * that its linked node is still live).
- * At the same time, the owner of a node is has full control over the node
- * lifetime. They can destroy the node at any time, causing a detach operation
- * of all linked handles (note that all handle->node pointers stay valid, but
- * the handle->link_node links are cleared).
- */
-struct bus1_handle {
-	struct bus1_queue_node qnode;
-	atomic_t n_inflight;
-	atomic_t n_user;
-	struct rb_node rb_id;
-	struct rb_node rb_node;
-	struct bus1_node *node;
-	u64 id;
-	struct bus1_peer __rcu *holder;
-	union {
-		struct list_head link_node;
-		struct bus1_peer_list link;
-	};
-};
-
-/**
- * enum bus1_node_bit - state flags of node objects
- * @BUS1_NODE_BIT_PERSISTENT:	Node was created as persistent node by its
- *				owner. This flag is set during node creation
- *				and must not be modified further.
- * @BUS1_NODE_BIT_ATTACHED:	Owner handle is attached to this node. This is
- *				a debug flag to verify that a node was properly
- *				initialized before it is used.
- * @BUS1_NODE_BIT_DESTROYED:	Node is about to be, or is already, destroyed.
- *				No further handles can be attached and the node
- *				destruction has a valid timestamp to order
- *				against other messages.
- */
-enum bus1_node_bit {
-	BUS1_NODE_BIT_PERSISTENT,
-	BUS1_NODE_BIT_ATTACHED,
-	BUS1_NODE_BIT_DESTROYED,
-};
-
-/**
- * struct bus1_node - node objects
- * @qnode:		embedded queue node (used for release notification)
- * @flags:		node flags, see enum bus1_node_bit
- * @timestamp:		destruction timestamp (0 if still live)
- * @list_handles:	linked list of registered handles
- * @owner:		embedded handle of node owner
- *
- * Every existing node is represented by a single bus1_node object. A node is
- * always connected to its owner, which is embedded with its own handle as
- * @owner. @ref and @flags must be accessed with atomic operations, everything
- * else is protected by the peer-lock (or data-lock respectively) of
- * node->owner.holder.
- *
- * A node represents the context shared by all handles connected to that node.
- * The node itself is not linked into any lookup trees, nor should anyone but
- * handles take references to the node. To pin a node, always pin the handle
- * you want to use to access the node through. A bus1_node object itself does
- * not give any guarantee about node->owner, hence, you might not be able to
- * lock the required mutices.
- */
-struct bus1_node {
-	struct bus1_queue_node qnode;
-	unsigned long flags;
-	u64 timestamp;
-	struct list_head list_handles;
-	struct bus1_handle owner;
-};
-
-static bool bus1_node_is_destroyed(struct bus1_node *node)
+static void bus1_handle_init(struct bus1_handle *h, struct bus1_peer *holder)
 {
-	return test_bit(BUS1_NODE_BIT_DESTROYED, &node->flags);
+	kref_init(&h->ref);
+	atomic_set(&h->n_weak, 0);
+	atomic_set(&h->n_user, 0);
+	h->holder = holder;
+	h->anchor = NULL;
+	h->tlink = NULL;
+	RB_CLEAR_NODE(&h->rb_to_peer);
+	h->id = BUS1_HANDLE_INVALID;
 }
 
-static void bus1_node_free(struct kref *ref)
+static void bus1_handle_deinit(struct bus1_handle *h)
 {
-	struct bus1_node *node = container_of(ref, struct bus1_node, qnode.ref);
-
-	BUS1_WARN_ON(rcu_access_pointer(node->owner.holder));
-	BUS1_WARN_ON(!list_empty(&node->list_handles));
-	BUS1_WARN_ON(test_bit(BUS1_NODE_BIT_ATTACHED, &node->flags) !=
-		test_bit(BUS1_NODE_BIT_DESTROYED, &node->flags));
-	bus1_queue_node_deinit(&node->qnode);
-	kfree_rcu(node, qnode.rcu);
-}
-
-static void bus1_node_no_free(struct kref *ref)
-{
-	/* no-op kref_put() callback that is used if we hold >1 reference */
-	WARN(1, "Node object freed unexpectedly");
-}
-
-static bool bus1_handle_is_owner(struct bus1_handle *handle)
-{
-	return handle && handle == &handle->node->owner;
-}
-
-static bool bus1_handle_was_attached(struct bus1_handle *handle)
-{
-	/*
-	 * Has this handle ever been, or still is, attached? Note that
-	 * n_inflight is -1 initially, and will never become -1 again, once
-	 * attached.
-	 */
-	return handle && atomic_read(&handle->n_inflight) >= 0;
-}
-
-__maybe_unused static bool bus1_handle_is_attached(struct bus1_handle *handle)
-{
-	/* Is this handle currently attached? */
-	return handle && atomic_read(&handle->n_inflight) > 0;
-}
-
-static bool bus1_handle_has_userref(struct bus1_handle *handle)
-{
-	/*
-	 * Is the user allowed to use this handle? Must be called on a handle
-	 * retrieved via ID lookup before using it. However, we do not need to
-	 * care about TOCTOU races: it is sufficient that the handle had a
-	 * userref at some point during the ioctl call to consider the handle
-	 * valid.
-	 */
-	return bus1_handle_is_owner(handle) ||
-	       atomic_read(&handle->n_user) >= 0;
-}
-
-static void bus1_handle_init(struct bus1_handle *handle, struct bus1_node *node)
-{
-	bus1_queue_node_init(&handle->qnode, BUS1_QUEUE_NODE_HANDLE_DESTRUCTION,
-			     (unsigned long)handle);
-	atomic_set(&handle->n_inflight, -1);
-	atomic_set(&handle->n_user, -1);
-	RB_CLEAR_NODE(&handle->rb_id);
-	RB_CLEAR_NODE(&handle->rb_node);
-	handle->node = node;
-	handle->id = BUS1_HANDLE_INVALID;
-	rcu_assign_pointer(handle->holder, NULL);
-	INIT_LIST_HEAD(&handle->link_node);
-
-	kref_get(&node->qnode.ref);
-}
-
-static void bus1_handle_finish(struct bus1_handle *handle)
-{
-	BUS1_WARN_ON(!list_empty(&handle->link_node));
-	BUS1_WARN_ON(!RB_EMPTY_NODE(&handle->rb_node));
-	BUS1_WARN_ON(!RB_EMPTY_NODE(&handle->rb_id));
-	BUS1_WARN_ON(atomic_read(&handle->n_user) > -1);
-	BUS1_WARN_ON(atomic_read(&handle->n_inflight) > 0);
-	BUS1_WARN_ON(handle->holder);
-
-	bus1_queue_node_deinit(&handle->qnode);
-
-	/*
-	 * CAUTION: The handle might be embedded into the node. Make sure not
-	 * to touch @handle after we dropped the reference.
-	 */
-	kref_put(&handle->node->qnode.ref, bus1_node_free);
-}
-
-static struct bus1_handle *bus1_handle_new_owner(u64 id)
-{
-	struct bus1_node *node;
-
-	if (id & ~(BUS1_NODE_FLAG_MANAGED |
-		   BUS1_NODE_FLAG_ALLOCATE |
-		   BUS1_NODE_FLAG_PERSISTENT))
-		return ERR_PTR(-EINVAL);
-	if (!(id & BUS1_NODE_FLAG_MANAGED))
-		return ERR_PTR(-EOPNOTSUPP);
-
-	node = kmalloc(sizeof(*node), GFP_KERNEL);
-	if (!node)
-		return ERR_PTR(-ENOMEM);
-
-	node->flags = 0;
-	node->timestamp = 0;
-	INIT_LIST_HEAD(&node->list_handles);
-	bus1_queue_node_init(&node->qnode, BUS1_QUEUE_NODE_HANDLE_RELEASE,
-			     (unsigned long)node);
-	bus1_handle_init(&node->owner, node);
-
-	if (id & BUS1_NODE_FLAG_PERSISTENT)
-		__set_bit(BUS1_NODE_BIT_PERSISTENT, &node->flags);
-
-	/* node->owner owns a reference to the node, drop the initial one */
-	kref_put(&node->qnode.ref, bus1_node_no_free);
-
-	/* return the exclusive reference to @node->owner, and as such @node */
-	return &node->owner;
-}
-
-static struct bus1_handle *bus1_handle_new_holder(struct bus1_node *node)
-{
-	struct bus1_handle *handle;
-
-	handle = kmalloc(sizeof(*handle), GFP_KERNEL);
-	if (!handle)
-		return ERR_PTR(-ENOMEM);
-
-	bus1_handle_init(handle, node);
-	return handle;
-}
-
-static void bus1_handle_free(struct kref *ref)
-{
-	struct bus1_handle *handle = container_of(ref, struct bus1_handle,
-						  qnode.ref);
-	bool is_owner;
-
-	/*
-	 * Owner-handles are embedded into the linked node. They own a
-	 * reference to the node, effectively making their ref-count a subset
-	 * of the node ref-count. bus1_handle_finish() drops the
-	 * ref-count to the node, as such, the handle itself might already be
-	 * gone once it returns. Therefore, check whether the handle is an
-	 * owner-handle before destroying it, and then skip releasing the
-	 * memory if it is the owner handle.
-	 */
-	is_owner = bus1_handle_is_owner(handle);
-	bus1_handle_finish(handle);
-	if (!is_owner)
-		kfree_rcu(handle, qnode.rcu);
-}
-
-static struct bus1_handle *bus1_handle_ref(struct bus1_handle *handle)
-{
-	if (handle)
-		kref_get(&handle->qnode.ref);
-	return handle;
-}
-
-static struct bus1_handle *bus1_handle_unref(struct bus1_handle *handle)
-{
-	if (handle)
-		kref_put(&handle->qnode.ref, bus1_handle_free);
-	return NULL;
-}
-
-/**
- * bus1_handle_unref_queued() - unref queued handle
- * @qnode:		queue node to operate on, or NULL
- *
- * This returns the handle-id of the queued handle notification @qnode and
- * drops a single reference of @qnode.
- *
- * If the returned ID is required to be stable and valid, the owning peer of
- * the respective handle must be locked.
- *
- * If NULL is passed, this is a no-op and returns BUS1_HANDLE_INVALID.
- *
- * Return: Handle ID, or BUS1_HANDLE_INVALID if unknown to the user.
- */
-u64 bus1_handle_unref_queued(struct bus1_queue_node *qnode)
-{
-	struct bus1_handle *handle;
-	struct bus1_node *node;
-	u64 id;
-
-	if (!qnode)
-		return BUS1_HANDLE_INVALID;
-
-	switch (bus1_queue_node_get_type(qnode)) {
-	case BUS1_QUEUE_NODE_HANDLE_DESTRUCTION:
-		handle = container_of(qnode, struct bus1_handle, qnode);
-		id = handle->id;
-		kref_put(&qnode->ref, bus1_handle_free);
-		break;
-	case BUS1_QUEUE_NODE_HANDLE_RELEASE:
-		node = container_of(qnode, struct bus1_node, qnode);
-		id = node->owner.id;
-		kref_put(&qnode->ref, bus1_node_free);
-		break;
-	default:
-		WARN(1, "Invalid queue-node type");
-		id = BUS1_HANDLE_INVALID;
-		break;
+	if (h == h->anchor) {
+		WARN_ON(atomic_read(&h->node.n_strong) != 0);
+		WARN_ON(!RB_EMPTY_ROOT(&h->node.map_handles));
+	} else if (h->anchor) {
+		WARN_ON(!RB_EMPTY_NODE(&h->remote.rb_to_anchor));
+		bus1_handle_unref(h->anchor);
 	}
 
-	return id;
+	bus1_queue_node_deinit(&h->qnode);
+	WARN_ON(!RB_EMPTY_NODE(&h->rb_to_peer));
+	WARN_ON(h->tlink);
+	WARN_ON(atomic_read(&h->n_user) != 0);
+	WARN_ON(atomic_read(&h->n_weak) != 0);
 }
 
-static struct bus1_peer *
-bus1_handle_acquire_holder(struct bus1_handle *handle)
+/**
+ * bus1_handle_new_anchor() - allocate new anchor handle
+ * @holder:			peer to set as holder
+ *
+ * This allocates a new, fresh, anchor handle for free use to the caller.
+ *
+ * Return: Pointer to handle, or ERR_PTR on failure.
+ */
+struct bus1_handle *bus1_handle_new_anchor(struct bus1_peer *holder)
 {
-	struct bus1_peer *peer;
+	struct bus1_handle *anchor;
 
+	anchor = kmalloc(sizeof(*anchor), GFP_KERNEL);
+	if (!anchor)
+		return ERR_PTR(-ENOMEM);
+
+	bus1_handle_init(anchor, holder);
+	anchor->anchor = anchor;
+	bus1_queue_node_init(&anchor->qnode, BUS1_MSG_NODE_RELEASE);
+	anchor->node.map_handles = RB_ROOT;
+	anchor->node.flags = 0;
+	atomic_set(&anchor->node.n_strong, 0);
+
+	return anchor;
+}
+
+/**
+ * bus1_handle_new_remote() - allocate new remote handle
+ * @holder:			peer to set as holder
+ * @other:			other handle to link to
+ *
+ * This allocates a new, fresh, remote handle for free use to the caller. The
+ * handle will use the same anchor as @other (or @other in case it is an
+ * anchor).
+ *
+ * Return: Pointer to handle, or ERR_PTR on failure.
+ */
+struct bus1_handle *bus1_handle_new_remote(struct bus1_peer *holder,
+					   struct bus1_handle *other)
+{
+	struct bus1_handle *remote;
+
+	if (WARN_ON(!other))
+		return ERR_PTR(-ENOTRECOVERABLE);
+
+	remote = kmalloc(sizeof(*remote), GFP_KERNEL);
+	if (!remote)
+		return ERR_PTR(-ENOMEM);
+
+	bus1_handle_init(remote, holder);
+	remote->anchor = bus1_handle_ref(other->anchor);
+	bus1_queue_node_init(&remote->qnode, BUS1_MSG_NODE_DESTROY);
+	RB_CLEAR_NODE(&remote->remote.rb_to_anchor);
+
+	return remote;
+}
+
+/**
+ * bus1_handle_free() - free handle
+ * @k:		kref of handle to free
+ *
+ * This frees the handle belonging to the kref @k. It is meant to be used as
+ * callback for kref_put(). The actual memory release is rcu-delayed so the
+ * handle stays around at least until the next grace period.
+ */
+void bus1_handle_free(struct kref *k)
+{
+	struct bus1_handle *h = container_of(k, struct bus1_handle, ref);
+
+	bus1_handle_deinit(h);
+	kfree_rcu(h, qnode.rcu);
+}
+
+static struct bus1_peer *bus1_handle_acquire_holder(struct bus1_handle *handle)
+{
+	struct bus1_peer *peer = NULL;
+
+	/*
+	 * The holder of a handle is set during ATTACH and remains set until
+	 * the handle is destroyed. This ACQUIRE pairs with the RELEASE during
+	 * ATTACH, and guarantees handle->holder is non-NULL, if n_weak is set.
+	 *
+	 * We still need to do this under rcu-lock. During DETACH, n_weak drops
+	 * to 0, and then may be followed by a kfree_rcu() on the peer. Hence,
+	 * we guarantee that if we read n_weak > 0 and the holder in the same
+	 * critical section, it must be accessible.
+	 */
 	rcu_read_lock();
-	peer = bus1_peer_acquire(rcu_dereference(handle->holder));
+	if (atomic_read_acquire(&handle->n_weak) > 0)
+		peer = bus1_peer_acquire(lockless_dereference(handle->holder));
 	rcu_read_unlock();
 
 	return peer;
 }
 
-static void bus1_handle_attach_internal(struct bus1_handle *handle,
-					struct bus1_peer *peer)
+/**
+ * bus1_handle_acquire_owner() - acquire owner of a handle
+ * @handle:			handle to operate on
+ *
+ * This tries to acquire the owner of a handle. If the owner is already
+ * detached, this will return NULL.
+ *
+ * Return: Pointer to owner on success, NULL on failure.
+ */
+struct bus1_peer *bus1_handle_acquire_owner(struct bus1_handle *handle)
 {
+	return bus1_handle_acquire_holder(handle->anchor);
+}
+
+static void bus1_handle_queue_release(struct bus1_handle *handle)
+{
+	struct bus1_handle *anchor = handle->anchor;
 	struct bus1_peer *owner;
 
-	BUS1_WARN_ON(rcu_access_pointer(handle->holder));
-	BUS1_WARN_ON(bus1_handle_was_attached(handle));
-	BUS1_WARN_ON(bus1_node_is_destroyed(handle->node));
+	if (test_bit(BUS1_HANDLE_BIT_RELEASED, &anchor->node.flags) ||
+	    test_bit(BUS1_HANDLE_BIT_DESTROYED, &anchor->node.flags))
+		return;
 
-	atomic_set(&handle->n_inflight, 1);
-	rcu_assign_pointer(handle->holder, peer);
-	list_add_tail(&handle->link_node, &handle->node->list_handles);
-	bus1_handle_ref(handle);
+	owner = anchor->holder;
+	lockdep_assert_held(&owner->data.lock);
 
-	/*
-	 * This BUS1_WARN_ON and lockdep must be after the attach operation,
-	 * since otherwise the holder would be unset for owner attachments.
-	 */
-	owner = rcu_access_pointer(handle->node->owner.holder);
-	BUS1_WARN_ON(!owner);
-	lockdep_assert_held(&owner->lock);
+	if (!bus1_queue_node_is_queued(&anchor->qnode)) {
+		/*
+		 * A release notification is a unicast message. Hence, we can
+		 * simply queue it right away without any pre-staging.
+		 * Furthermore, no transaction context is needed. But we still
+		 * need a group tag. NULL would serve well, but disallows
+		 * re-use detection. Hence, we use the sending peer as group
+		 * tag (there cannot be any conflicts since we have a unique
+		 * commit timestamp for this message, thus any group tag would
+		 * work fine).
+		 * If the group tag is already set, we know the release
+		 * notification was already used before. Hence, we must
+		 * re-initialize the object.
+		 */
+		if (anchor->qnode.group) {
+			WARN_ON(anchor->qnode.group != owner);
+			bus1_queue_node_deinit(&anchor->qnode);
+			bus1_queue_node_init(&anchor->qnode,
+					     BUS1_MSG_NODE_RELEASE);
+		}
 
-	/* flush any release-notification whenever a new handle is attached */
+		anchor->qnode.group = owner;
+		bus1_handle_ref(anchor);
+		bus1_queue_commit_unstaged(&owner->data.queue, &owner->waitq,
+					   &anchor->qnode);
+	}
+}
+
+static void bus1_handle_flush_release(struct bus1_handle *handle)
+{
+	struct bus1_handle *anchor = handle->anchor;
+	struct bus1_peer *owner;
+
+	if (test_bit(BUS1_HANDLE_BIT_RELEASED, &anchor->node.flags) ||
+	    test_bit(BUS1_HANDLE_BIT_DESTROYED, &anchor->node.flags))
+		return;
+
+	owner = anchor->holder;
+	lockdep_assert_held(&owner->data.lock);
+
+	if (bus1_queue_node_is_queued(&anchor->qnode)) {
+		bus1_queue_remove(&owner->data.queue, &owner->waitq,
+				  &anchor->qnode);
+		bus1_handle_unref(anchor);
+	}
+}
+
+/**
+ * bus1_handle_ref_by_other() - lookup handle on a peer
+ * @peer:		peer to lookup handle for
+ * @handle:		other handle to match for
+ *
+ * This looks for an handle held by @peer, which points to the same node as
+ * @handle (i.e., it is linked to @handle->anchor). If @peer does not hold such
+ * a handle, this returns NULL. Otherwise, an object reference is acquired and
+ * returned as pointer.
+ *
+ * The caller must hold an active reference to @peer.
+ *
+ * Return: Pointer to handle if found, NULL if not found.
+ */
+struct bus1_handle *bus1_handle_ref_by_other(struct bus1_peer *peer,
+					     struct bus1_handle *handle)
+{
+	struct bus1_handle *h, *res = NULL;
+	struct bus1_peer *owner = NULL;
+	struct rb_node *n;
+
+	if (peer == handle->anchor->holder)
+		return bus1_handle_ref(handle->anchor);
+
+	owner = bus1_handle_acquire_owner(handle);
+	if (!owner)
+		return NULL;
+
 	mutex_lock(&owner->data.lock);
-	bus1_queue_remove(&owner->data.queue, &owner->waitq,
-			  &handle->node->qnode);
+	n = handle->anchor->node.map_handles.rb_node;
+	while (n) {
+		h = container_of(n, struct bus1_handle, remote.rb_to_anchor);
+		if (peer < h->holder) {
+			n = n->rb_left;
+		} else if (peer > h->holder) {
+			n = n->rb_right;
+		} else /* if (peer == h->holder) */ {
+			res = bus1_handle_ref(h);
+			break;
+		}
+	}
 	mutex_unlock(&owner->data.lock);
+
+	bus1_peer_release(owner);
+	return res;
 }
 
-static void bus1_handle_attach_owner(struct bus1_handle *handle,
-				     struct bus1_peer *owner)
+static struct bus1_handle *bus1_handle_splice(struct bus1_handle *handle)
 {
-	BUS1_WARN_ON(!bus1_handle_is_owner(handle));
-	BUS1_WARN_ON(!list_empty(&handle->node->list_handles));
-
-	/* nodes pin their owners until destroyed */
-	bus1_handle_ref(handle);
-	WARN_ON(test_and_set_bit(BUS1_NODE_BIT_ATTACHED, &handle->node->flags));
-
-	bus1_handle_attach_internal(handle, owner);
-}
-
-static bool bus1_handle_attach_holder(struct bus1_handle *handle,
-				      struct bus1_peer *holder)
-{
-	if (bus1_node_is_destroyed(handle->node))
-		return false;
-
-	BUS1_WARN_ON(!test_bit(BUS1_NODE_BIT_ATTACHED, &handle->node->flags));
-	BUS1_WARN_ON(bus1_handle_is_owner(handle));
-	bus1_handle_attach_internal(handle, holder);
-
-	return true;
-}
-
-static struct bus1_handle *
-bus1_handle_install_internal(struct bus1_handle *handle,
-			     struct bus1_peer *peer)
-{
-	struct bus1_handle *iter, *old = NULL;
+	struct bus1_queue_node *qnode = &handle->qnode;
+	struct bus1_handle *h, *anchor = handle->anchor;
 	struct rb_node *n, **slot;
 
-	lockdep_assert_held(&peer->lock);
-	BUS1_WARN_ON(!bus1_handle_was_attached(handle));
-	BUS1_WARN_ON(!RB_EMPTY_NODE(&handle->rb_node));
-
-	/*
-	 * The holder of the handle is locked. Try inserting the new handle into
-	 * the lookup tree of the peer. Note that someone might have raced us,
-	 * in case the linked node is *not* exclusively owned by this handle.
-	 * Hence, first try to find a conflicting handle entry. If none is found
-	 * we're fine. If a conflict is found, take a reference to it and skip
-	 * the insertion. Return the conflict to the caller and let them deal
-	 * with it (meaning: they unlock the peer, then release their temporary
-	 * handle and switch over to the conflict).
-	 */
 	n = NULL;
-	slot = &peer->data.map_handles_by_node.rb_node;
+	slot = &anchor->node.map_handles.rb_node;
 	while (*slot) {
 		n = *slot;
-		iter = container_of(n, struct bus1_handle, rb_node);
-		if (unlikely(handle->node == iter->node)) {
-			/*
-			 * Someone raced us installing a handle for the
-			 * well-known node faster than we did. Drop our node
-			 * and switch over to the other one.
-			 */
-			BUS1_WARN_ON(iter->holder != handle->holder);
-
-			old = handle;
-			handle = bus1_handle_ref(iter);
-			WARN_ON(atomic_inc_return(&handle->n_inflight) == 1);
-			break;
-		} else if (handle->node < iter->node) {
+		h = container_of(n, struct bus1_handle, remote.rb_to_anchor);
+		if (unlikely(handle->holder == h->holder)) {
+			/* conflict detected; return ref to caller */
+			return bus1_handle_ref(h);
+		} else if (handle->holder < h->holder) {
 			slot = &n->rb_left;
-		} else /* if (handle->node > iter->node) */ {
+		} else /* if (handle->holder > h->holder) */ {
 			slot = &n->rb_right;
 		}
 	}
-	if (likely(!old)) {
-		rb_link_node_rcu(&handle->rb_node, n, slot);
-		rb_insert_color(&handle->rb_node,
-				&peer->data.map_handles_by_node);
+
+	rb_link_node(&handle->remote.rb_to_anchor, n, slot);
+	rb_insert_color(&handle->remote.rb_to_anchor,
+			&anchor->node.map_handles);
+	/* map_handles pins one ref of each entry */
+	bus1_handle_ref(handle);
+
+	/*
+	 * If a destruction is ongoing on @anchor, we must try joining it. If
+	 * @qnode->group is set, we already tried joining it and can skip it.
+	 * If it is not set, we acquire the owner and try joining once. See
+	 * bus1_tx_join() for details.
+	 *
+	 * Note that we must not react to a possible failure! Any such reaction
+	 * would be out-of-order, hence just ignore it silently. We simply end
+	 * up with a stale handle, which is completely fine.
+	 */
+	if (test_bit(BUS1_HANDLE_BIT_DESTROYED, &anchor->node.flags) &&
+	    !qnode->group) {
+		qnode->owner = bus1_peer_acquire(handle->holder);
+		if (qnode->owner && bus1_tx_join(&anchor->qnode, qnode))
+			bus1_handle_ref(handle);
+		else
+			qnode->owner = bus1_peer_release(qnode->owner);
+	}
+
+	return NULL;
+}
+
+/**
+ * bus1_handle_acquire_locked() - acquire strong reference
+ * @handle:		handle to operate on, or NULL
+ * @strong:		whether to acquire a strong reference
+ *
+ * This is the same as bus1_handle_acquire_slow(), but requires the caller to
+ * hold the data lock of @holder and the owner.
+ *
+ * Return: Acquired handle (possibly a conflict).
+ */
+struct bus1_handle *bus1_handle_acquire_locked(struct bus1_handle *handle,
+					       bool strong)
+{
+	struct bus1_handle *h, *anchor = handle->anchor;
+	struct bus1_peer *owner = NULL;
+
+	if (!test_bit(BUS1_HANDLE_BIT_RELEASED, &anchor->node.flags))
+		owner = anchor->holder;
+
+	/*
+	 * Verify the correct locks are held: If @handle is already attached,
+	 * its holder must match @holder (otherwise, its holder must be NULL).
+	 * In all cases, @holder must be locked.
+	 * Additionally, the owner must be locked as well. However, the owner
+	 * might be released already. The caller must guarantee that if the
+	 * owner is not released, yet, it must be locked.
+	 */
+	WARN_ON(!handle->holder);
+	lockdep_assert_held(&handle->holder->data.lock);
+	if (owner)
+		lockdep_assert_held(&owner->data.lock);
+
+	if (atomic_read(&handle->n_weak) == 0) {
+		if (test_bit(BUS1_HANDLE_BIT_RELEASED, &anchor->node.flags)) {
+			/*
+			 * When the node is already released, any attach ends
+			 * up as stale handle. So nothing special to do here.
+			 */
+		} else if (handle == anchor) {
+			/*
+			 * Attach of an anchor: There is nothing to do, we
+			 * simply verify the map is empty and continue.
+			 */
+			WARN_ON(!RB_EMPTY_ROOT(&handle->node.map_handles));
+		} else if (owner) {
+			/*
+			 * Attach of a remote: If the node is not released,
+			 * yet, we insert it into the lookup tree. Otherwise,
+			 * we leave it around as stale handle. Note that
+			 * tree-insertion might race. If a conflict is detected
+			 * we drop this handle and restart with the conflict.
+			 */
+			h = bus1_handle_splice(handle);
+			if (unlikely(h)) {
+				bus1_handle_unref(handle);
+				WARN_ON(atomic_read(&h->n_weak) != 1);
+				return bus1_handle_acquire_locked(h, strong);
+			}
+		}
+
 		bus1_handle_ref(handle);
+
+		/*
+		 * This RELEASE pairs with the ACQUIRE in
+		 * bus1_handle_acquire_holder(). It simply guarantees that
+		 * handle->holder is set before n_weak>0 is visible. It does
+		 * not give any guarantees on the validity of the holder. All
+		 * it does is guarantee it is non-NULL and will stay constant.
+		 */
+		atomic_set_release(&handle->n_weak, 1);
+	} else {
+		WARN_ON(atomic_inc_return(&handle->n_weak) < 1);
+	}
+
+	if (strong && atomic_inc_return(&anchor->node.n_strong) == 1) {
+		if (owner)
+			bus1_handle_flush_release(anchor);
 	}
 
 	return handle;
 }
 
-static void bus1_handle_install_owner(struct bus1_handle *handle)
+/**
+ * bus1_handle_acquire_slow() - slow-path of handle acquisition
+ * @handle:		handle to acquire
+ * @strong:		whether to acquire a strong reference
+ *
+ * This is the slow-path of bus1_handle_acquire(). See there for details.
+ *
+ * Return: Acquired handle (possibly a conflict).
+ */
+struct bus1_handle *bus1_handle_acquire_slow(struct bus1_handle *handle,
+					     bool strong)
 {
-	struct bus1_peer *peer;
+	const bool is_anchor = (handle == handle->anchor);
+	struct bus1_peer *owner;
 
-	BUS1_WARN_ON(!bus1_handle_is_owner(handle));
-	peer = rcu_access_pointer(handle->holder);
-	WARN_ON(handle != bus1_handle_install_internal(handle, peer));
+	if (is_anchor)
+		owner = handle->holder;
+	else
+		owner = bus1_handle_acquire_owner(handle);
+
+	bus1_mutex_lock2(&handle->holder->data.lock,
+			 owner ? &owner->data.lock : NULL);
+	handle = bus1_handle_acquire_locked(handle, strong);
+	bus1_mutex_unlock2(&handle->holder->data.lock,
+			   owner ? &owner->data.lock : NULL);
+
+	if (!is_anchor)
+		bus1_peer_release(owner);
+
+	return handle;
 }
 
-static struct bus1_handle *
-bus1_handle_install_holder(struct bus1_handle *handle)
+static void bus1_handle_release_locked(struct bus1_handle *h,
+				       struct bus1_peer *owner,
+				       bool strong)
 {
-	struct bus1_peer *peer;
+	struct bus1_handle *t, *safe, *anchor = h->anchor;
 
-	BUS1_WARN_ON(bus1_handle_is_owner(handle));
-	peer = rcu_access_pointer(handle->holder);
-	return bus1_handle_install_internal(handle, peer);
-}
-
-static void bus1_handle_uninstall_internal(struct bus1_handle *handle,
-					   struct bus1_peer *peer)
-{
-	lockdep_assert_held(&peer->lock);
-	BUS1_WARN_ON(atomic_read(&handle->n_inflight) > 0);
-
-	rcu_assign_pointer(handle->holder, NULL);
-
-	if (!RB_EMPTY_NODE(&handle->rb_node)) {
-		rb_erase(&handle->rb_node, &peer->data.map_handles_by_node);
-		RB_CLEAR_NODE(&handle->rb_node);
-		bus1_handle_unref(handle);
-	}
-	if (!RB_EMPTY_NODE(&handle->rb_id)) {
-		rb_erase(&handle->rb_id, &peer->local.map_handles_by_id);
-		RB_CLEAR_NODE(&handle->rb_id);
-	}
-}
-
-static void bus1_handle_uninstall_owner(struct bus1_handle *handle,
-					struct bus1_peer *peer)
-{
-	BUS1_WARN_ON(!bus1_handle_is_owner(handle));
-	BUS1_WARN_ON(!bus1_node_is_destroyed(handle->node));
-	BUS1_WARN_ON(!list_empty(&handle->node->list_handles));
-
-	/*
-	 * In case of owners, we always leave notifications queued. This
-	 * guarantees that owners always know the time their node is destroyed,
-	 * regardless whether they own a handle or not. This is important, as
-	 * implementations must be able to track their nodes even if they're
-	 * exclusively remotely held.
-	 */
-
-	bus1_handle_uninstall_internal(handle, peer);
-}
-
-static void bus1_handle_uninstall_holder(struct bus1_handle *handle,
-					 struct bus1_peer *peer)
-{
-	lockdep_assert_held(&peer->lock);
-	BUS1_WARN_ON(bus1_handle_is_owner(handle));
-
-	bus1_handle_uninstall_internal(handle, peer);
-
-	/*
-	 * For non-owners we always drop notifications before uninstalling a
-	 * handle. We could leave them queued, but we know the peer cannot
-	 * acquire another user-ref to the handle at this time. Therefore, we
-	 * dequeue it so we can use the handle->qnode as a union for other
-	 * state *after* a handle is uninstalled.
-	 */
-	mutex_lock(&peer->data.lock);
-	bus1_queue_remove(&peer->data.queue, &peer->waitq, &handle->qnode);
-	mutex_unlock(&peer->data.lock);
-}
-
-static void bus1_node_commit_notifications(struct bus1_handle *list)
-{
-	struct bus1_peer *peer;
-	struct bus1_handle *h;
-
-	/* sync all clocks so side-channels are ordered */
-	for (h = list; h; h = h->link.next) {
-		peer = bus1_peer_list_bind(&h->link);
-
-		mutex_lock(&peer->data.lock);
-		bus1_queue_sync(&peer->data.queue, h->node->timestamp);
-		mutex_unlock(&peer->data.lock);
-
-		bus1_peer_list_unbind(&h->link);
-	}
-
-	/* commit all queued notifications */
-	while ((h = list)) {
-		list = h->link.next;
-		peer = bus1_peer_list_bind(&h->link);
-		INIT_LIST_HEAD(&h->link_node);
-
-		mutex_lock(&peer->data.lock);
-		bus1_queue_commit_staged(&peer->data.queue, &peer->waitq,
-					 &h->qnode, h->node->timestamp);
-		mutex_unlock(&peer->data.lock);
-
-		bus1_peer_release(peer);
-		bus1_handle_unref(h);
-	}
-}
-
-static void bus1_node_destroy(struct bus1_node *node,
-			      struct bus1_peer *peer)
-{
-	struct bus1_peer *holder;
-	struct bus1_handle *h, *list = NULL;
-	u64 timestamp = 0;
-
-	lockdep_assert_held(&peer->lock);
-
-	if (bus1_node_is_destroyed(node))
-		goto done;
-
-	/* make sure owner handle is always linked */
-	list_move_tail(&node->owner.link_node, &node->list_handles);
-
-	while ((h = list_first_entry_or_null(&node->list_handles,
-					     struct bus1_handle,
-					     link_node))) {
-		list_del(&h->link_node);
-
-		holder = bus1_handle_acquire_holder(h);
-		if (holder) {
-			mutex_lock(&holder->data.lock);
-			timestamp = bus1_queue_stage(&holder->data.queue,
-						     &h->qnode, timestamp);
-			mutex_unlock(&holder->data.lock);
-			h->link.peer = holder;
-			h->link.next = list;
-			bus1_peer_list_unbind(&h->link);
-			list = h;
-		} else {
-			INIT_LIST_HEAD(&h->link_node);
+	if (atomic_dec_return(&h->n_weak) == 0) {
+		if (test_bit(BUS1_HANDLE_BIT_RELEASED, &anchor->node.flags)) {
+			/*
+			 * In case a node is already released, all its handles
+			 * are already stale (and new handles are instantiated
+			 * as stale). Nothing to do.
+			 */
+		} else if (h == anchor) {
+			/*
+			 * Releasing an anchor requires us to drop all remotes
+			 * from the map. We do not detach them, though, we just
+			 * clear the map and drop the pinned reference.
+			 */
+			WARN_ON(!owner);
+			rbtree_postorder_for_each_entry_safe(t, safe,
+							&h->node.map_handles,
+							remote.rb_to_anchor) {
+				RB_CLEAR_NODE(&t->remote.rb_to_anchor);
+				/* drop reference held by link into map */
+				bus1_handle_unref(t);
+			}
+			h->node.map_handles = RB_ROOT;
+			bus1_handle_flush_release(h);
+			set_bit(BUS1_HANDLE_BIT_RELEASED, &h->node.flags);
+		} else if (!owner) {
+			/*
+			 * If an owner is disconnected, its nodes remain until
+			 * the owner is drained. In that period, it is
+			 * impossible for any handle-release to acquire, and
+			 * thus lock, the owner. Therefore, if that happens we
+			 * leave the handle linked and rely on the owner
+			 * cleanup to flush them all.
+			 *
+			 * A side-effect of this is that the holder field must
+			 * remain set, even though it must not be dereferenced
+			 * as it is a stale pointer. This is required to keep
+			 * the rbtree lookup working. Anyone dereferencing the
+			 * holder of a remote must therefore either hold a weak
+			 * reference or check for n_weak with the owner locked.
+			 */
+		} else if (!WARN_ON(RB_EMPTY_NODE(&h->remote.rb_to_anchor))) {
+			rb_erase(&h->remote.rb_to_anchor,
+				 &anchor->node.map_handles);
+			RB_CLEAR_NODE(&h->remote.rb_to_anchor);
+			/* drop reference held by link into map */
 			bus1_handle_unref(h);
 		}
-	}
 
-	mutex_lock(&peer->data.lock);
-	bus1_queue_sync(&peer->data.queue, timestamp);
-	node->timestamp = bus1_queue_tick(&peer->data.queue);
-	/* test_and_set_bit() provides barriers for node->timestamp */
-	WARN_ON(test_and_set_bit(BUS1_NODE_BIT_DESTROYED, &node->flags));
-	mutex_unlock(&peer->data.lock);
-
-	bus1_node_commit_notifications(list);
-
-	/* nodes pin their owners until destroyed */
-	bus1_handle_unref(&node->owner);
-
-done:
-	/*
-	 * If either we successfully committed the destruction, or if we waited
-	 * for someone else to commit it, we must check n_inflight afterwards.
-	 * If we were the last one, we must also trigger uninstall of the owner
-	 * handle.
-	 * Note that not all paths here are guaranteed that node->owner.holder
-	 * is non-NULL, so we must check it again to avoid double uninstall.
-	 */
-	if (atomic_read(&node->owner.n_inflight) == 0 &&
-	    rcu_access_pointer(node->owner.holder))
-		bus1_handle_uninstall_owner(&node->owner, peer);
-}
-
-static void bus1_handle_detach_internal(struct bus1_handle *handle,
-					struct bus1_peer *owner)
-{
-	lockdep_assert_held(&owner->lock);
-
-	/*
-	 * Unlink from node. If destruction is already staged, we must not
-	 * touch @link_node. The destruction will clear all stale handles when
-	 * done, so we can simply ignore it in that case.
-	 */
-	if (!bus1_node_is_destroyed(handle->node) &&
-	    !list_empty(&handle->link_node)) {
-		list_del_init(&handle->link_node);
-		if (!bus1_handle_is_owner(handle))
-			bus1_handle_unref(handle);
-	}
-
-	/*
-	 * Once the last handle was detached, we queue a notification for the
-	 * node owner. However, if the owner handle was never installed, we
-	 * know it is inaccessible, and so we rather trigger an immediate node
-	 * destruction.
-	 */
-	if (list_empty(&handle->node->list_handles)) {
-		if (RB_EMPTY_NODE(&handle->node->owner.rb_id))
-			bus1_node_destroy(handle->node, owner);
-		else if (!bus1_node_is_destroyed(handle->node)) {
-			mutex_lock(&owner->data.lock);
-			bus1_queue_commit_unstaged(&owner->data.queue,
-						   &owner->waitq,
-						   &handle->node->qnode);
-			mutex_unlock(&owner->data.lock);
+		/* queue release after detach but before unref */
+		if (strong && atomic_dec_return(&anchor->node.n_strong) == 0) {
+			if (owner)
+				bus1_handle_queue_release(anchor);
 		}
+
+		/*
+		 * This is the reference held by n_weak>0 (or 'holder valid').
+		 * Note that the holder-field will remain set and stale.
+		 */
+		bus1_handle_unref(h);
+	} else if (strong && atomic_dec_return(&anchor->node.n_strong) == 0) {
+		/* still weak refs left, only queue release notification */
+		if (owner)
+			bus1_handle_queue_release(anchor);
 	}
 }
 
-static void bus1_handle_detach_owner(struct bus1_handle *handle,
-				     struct bus1_peer *peer)
+/**
+ * bus1_handle_release_slow() - slow-path of handle release
+ * @handle:		handle to release
+ * @strong:		whether to release a strong reference
+ *
+ * This is the slow-path of bus1_handle_release(). See there for details.
+ */
+void bus1_handle_release_slow(struct bus1_handle *handle, bool strong)
 {
-	BUS1_WARN_ON(!bus1_handle_is_owner(handle));
-	bus1_handle_detach_internal(handle, peer);
+	const bool is_anchor = (handle == handle->anchor);
+	struct bus1_peer *owner, *holder;
 
 	/*
-	 * If a node is already destroyed, dropping the last reference will
-	 * also uninstall the handle. Owner handles only stay accessible as
-	 * long as their node is alive, or at least one reference is held.
+	 * Caller must own an active reference to the holder of @handle.
+	 * Furthermore, since the caller also owns a weak reference to @handle
+	 * we know that its holder cannot be NULL nor modified in parallel.
 	 */
-	if (bus1_node_is_destroyed(handle->node) &&
-	    rcu_access_pointer(handle->holder))
-		bus1_handle_uninstall_owner(handle, peer);
-}
+	holder = handle->holder;
+	WARN_ON(!holder);
+	lockdep_assert_held(&holder->active);
 
-static void bus1_handle_detach_holder(struct bus1_handle *handle)
-{
-	struct bus1_peer *owner;
+	if (is_anchor)
+		owner = holder;
+	else
+		owner = bus1_handle_acquire_owner(handle);
 
-	BUS1_WARN_ON(bus1_handle_is_owner(handle));
-	BUS1_WARN_ON(rcu_access_pointer(handle->holder));
+	bus1_mutex_lock2(&holder->data.lock,
+			 owner ? &owner->data.lock : NULL);
+	bus1_handle_release_locked(handle, owner, strong);
+	bus1_mutex_unlock2(&holder->data.lock,
+			   owner ? &owner->data.lock : NULL);
 
-	owner = bus1_handle_acquire_holder(&handle->node->owner);
-	if (owner) {
-		mutex_lock(&owner->lock);
-		bus1_handle_detach_internal(handle, owner);
-		mutex_unlock(&owner->lock);
+	if (!is_anchor)
 		bus1_peer_release(owner);
-	}
 }
 
-static struct bus1_handle *
-bus1_handle_acquire(struct bus1_handle *handle,
-		    struct bus1_peer *peer)
+/**
+ * bus1_handle_destroy_locked() - stage node destruction
+ * @handle:			handle to destroy
+ * @tx:				transaction to use
+ *
+ * This stages a destruction on @handle. That is, it marks @handle as destroyed
+ * and stages a release-notification for all live handles via @tx. It is the
+ * responsibility of the caller to commit @tx.
+ *
+ * The given handle must be an anchor and not destroyed, yet. Furthermore, the
+ * caller must hold the local-lock and data-lock of the owner.
+ */
+void bus1_handle_destroy_locked(struct bus1_handle *handle, struct bus1_tx *tx)
 {
-	if (!handle || BUS1_WARN_ON(!bus1_handle_was_attached(handle)))
-		return NULL;
+	struct bus1_peer *owner = handle->holder;
+	struct bus1_handle *t, *safe;
 
-	if (!atomic_add_unless(&handle->n_inflight, 1, 0)) {
-		if (!bus1_handle_is_owner(handle))
-			return NULL;
+	if (WARN_ON(handle != handle->anchor || !owner))
+		return;
 
-		/* in case of OWNERs, we allow re-attach */
-		mutex_lock(&peer->lock);
-		if (bus1_node_is_destroyed(handle->node)) {
-			handle = NULL;
-		} else {
-			atomic_inc(&handle->n_inflight);
-			list_add_tail(&handle->link_node,
-				      &handle->node->list_handles);
+	lockdep_assert_held(&owner->local.lock);
+	lockdep_assert_held(&owner->data.lock);
 
-			/* flush any release-notification */
-			mutex_lock(&peer->data.lock);
-			bus1_queue_remove(&peer->data.queue,
-					  &peer->waitq,
-					  &handle->node->qnode);
-			mutex_unlock(&peer->data.lock);
-		}
-		mutex_unlock(&peer->lock);
+	if (WARN_ON(test_and_set_bit(BUS1_HANDLE_BIT_DESTROYED,
+				     &handle->node.flags)))
+		return;
+
+	/* flush release and reuse qnode for destruction */
+	if (bus1_queue_node_is_queued(&handle->qnode)) {
+		bus1_queue_remove(&owner->data.queue, &owner->waitq,
+				  &handle->qnode);
+		bus1_handle_unref(handle);
 	}
-	return handle;
-}
+	bus1_queue_node_deinit(&handle->qnode);
+	bus1_queue_node_init(&handle->qnode, BUS1_MSG_NODE_DESTROY);
 
-static bool bus1_handle_release_internal(struct bus1_handle *handle,
-					 struct bus1_peer *peer)
-{
-	/*
-	 * Release a single inflight reference. This is the slow-path that
-	 * expects @peer to be locked, and to be the holder of @handle. If
-	 * this drops the last inflight reference, the handle is detached from
-	 * its node. In case it was the last handle, the node is destroyed as
-	 * well.
-	 * This function might relock the peer lock. If this function returns
-	 * with the peer-lock held (again), it returns "false". If the lock has
-	 * been released and not re-taken, it returns true.
-	 */
+	bus1_tx_stage_sync(tx, &handle->qnode);
+	bus1_handle_ref(handle);
 
-	lockdep_assert_held(&peer->lock);
+	/* collect all handles in the transaction */
+	rbtree_postorder_for_each_entry_safe(t, safe,
+					     &handle->node.map_handles,
+					     remote.rb_to_anchor) {
+		/*
+		 * Bail if the qnode of the remote-handle was already used for
+		 * a destruction notification.
+		 */
+		if (WARN_ON(t->qnode.group))
+			continue;
 
-	if (handle && atomic_dec_and_test(&handle->n_inflight)) {
-		if (bus1_handle_is_owner(handle)) {
-			/*
-			 * An owner can be detached and re-attached many times.
-			 * Only if the node destruction is committed, and it is
-			 * detached, then it is uninstalled. This is always
-			 * triggered by the destruction during detach. We never
-			 * call it directly here.
-			 */
-			bus1_handle_detach_owner(handle, peer);
-		} else {
-			bus1_handle_uninstall_holder(handle, peer);
-			mutex_unlock(&peer->lock);
-			bus1_handle_detach_holder(handle);
-			return true;
+		/*
+		 * We hold the owner-lock, so we cannot lock any other peer.
+		 * Therefore, just acquire the peer and remember it on @tx. It
+		 * will be staged just before @tx is committed.
+		 * Note that this modifies the qnode of the remote only
+		 * partially. Neither timestamps nor rb-links are modified.
+		 */
+		t->qnode.owner = bus1_handle_acquire_holder(t);
+		if (t->qnode.owner) {
+			bus1_tx_stage_later(tx, &t->qnode);
+			bus1_handle_ref(t);
 		}
 	}
-
-	return false;
 }
 
-static struct bus1_handle *
-bus1_handle_release_owner(struct bus1_handle *handle,
-			  struct bus1_peer *peer)
+/**
+ * bus1_handle_is_live_at() - check whether handle is live at a given time
+ * @h:				handle to check
+ * @timestamp:			timestamp to check
+ *
+ * This checks whether the handle @h is live at the time of @timestamp. The
+ * caller must make sure that @timestamp was acquired on the clock of the
+ * holder of @h.
+ *
+ * Note that this does not synchronize on the node owner. That is, usually you
+ * want to call this at the time of RECV, so it is guaranteed that there is no
+ * staging message in front of @timestamp. Otherwise, a node owner might
+ * acquire a commit-timestamp for the destruction of @h lower than @timestamp.
+ *
+ * The caller must hold the data-lock of the holder of @h.
+ *
+ * Return: True if live at the given timestamp, false if destroyed.
+ */
+bool bus1_handle_is_live_at(struct bus1_handle *h, u64 timestamp)
 {
-	/*
-	 * See bus1_handle_release(). This must be called only on owner handles
-	 * and guarantees that the peer-lock stays locked.
-	 */
-	BUS1_WARN_ON(!bus1_handle_is_owner(handle));
-	WARN_ON(bus1_handle_release_internal(handle, peer));
-	return NULL;
-}
+	u64 ts;
 
-static struct bus1_handle *
-bus1_handle_release_unlock(struct bus1_handle *handle,
-			   struct bus1_peer *peer)
-{
-	/*
-	 * See bus1_handle_release(). This expects the caller to have already
-	 * locked @peer, and it will return with the peer unlocked.
-	 */
-	if (!bus1_handle_release_internal(handle, peer))
-		mutex_unlock(&peer->lock);
-	return NULL;
-}
+	WARN_ON(timestamp & 1);
+	lockdep_assert_held(&h->holder->data.lock);
 
-static struct bus1_handle *
-bus1_handle_release(struct bus1_handle *handle,
-		    struct bus1_peer *peer)
-{
-	/*
-	 * This is the inverse of bus1_handle_acquire(). It drops a single
-	 * inflight reference of the caller. If it is the last inflight
-	 * reference, the handle is also detached from its node, and in case it
-	 * was the last handle, the node is destroyed as well.
-	 *
-	 * This function might lock @peer in case this drops the last
-	 * inflight reference.
-	 */
-	if (handle && !atomic_add_unless(&handle->n_inflight, -1, 1)) {
-		mutex_lock(&peer->lock);
-		bus1_handle_release_unlock(handle, peer);
-	}
-	return NULL;
-}
-
-static bool bus1_node_is_valid(struct bus1_node *node,
-			       u64 timestamp,
-			       unsigned long sender)
-{
-	/*
-	 * Check whether a possible message with the passed timestamp and sender
-	 * tag would be ordered *before* a possible node destruction of @node.
-	 *
-	 * Two scenarios are supported:
-	 *
-	 *   1) A message is destined for @node, in which case the message must
-	 *      have been staged on the message queue of the node owner, as well
-	 *      as a commit timestamp must have been acquired on the owner's
-	 *      clock.
-	 *      We now check whether the given message should be delivered or
-	 *      not. That is, whether the destruction of @node happened before
-	 *      @timestamp or not. We do this by guaranteeing that if the node
-	 *      is not destroyed, yet, its destruction is guaranteed to get
-	 *      committed with a higher timestamp than @timestamp (see the queue
-	 *      for details why this is true). Hence, the message should be
-	 *      transmitted. However, if the destruction is already committed,
-	 *      we can easily compare its (timestamp, sender) tuple to order it.
-	 *
-	 *   2) A message carries @node as ancillary data. In that case, this
-	 *      function decides whether @node was destroyed before the message
-	 *      carrying it was committed, in which case an invalid handle must
-	 *      be put in place.
-	 *      This requires the message to be already committed *and*
-	 *      dequeuable. That is, there is *no* staging entry in front of the
-	 *      message. We now check whether @node has a destruction committed.
-	 *      If not, we know its destruction can never be queued before the
-	 *      message, hence the handle on the message receiver is valid.
-	 *
-	 * We rely on bus1_node_is_destroyed() to provide the required read-side
-	 * barrier before we fetch @node->timestamp. See bus1_node_destroy() for
-	 * the equivalent write-side barrier.
-	 */
-
-	BUS1_WARN_ON(timestamp & 1);
-
-	if (!bus1_node_is_destroyed(node))
+	if (!test_bit(BUS1_HANDLE_BIT_DESTROYED, &h->anchor->node.flags))
 		return true;
 
-	return bus1_queue_compare(timestamp, sender, node->timestamp,
-				  node->qnode.sender) < 0;
-}
-
-static void bus1_handle_refresh_id(struct bus1_handle *handle,
-				   struct bus1_peer *peer)
-{
 	/*
-	 * This (re-)allocates an ID for @handle to be exported to user-space.
-	 * If @handle already has an ID, it is dropped and a new one is
-	 * allocated. This assumes that no userref exists to @handle, yet, so
-	 * any possible previous ID must not be re-used for re-publish. We don't
-	 * do this for owner-handles, though. Those always keep their initial ID
-	 * since we pretend they're always pinned by user-space. This also
-	 * guarantees that a possible unmanaged ID provided by user-space is not
-	 * changed (those can only exist for owner handles).
-	 *
-	 * The caller must hold the peer-lock on @peer.
+	 * If BIT_DESTROYED is set, we know that the qnode can only be used for
+	 * a destruction notification. Furthermore, we know that its timestamp
+	 * is protected by the data-lock of the holder, so we can read it
+	 * safely here.
+	 * If the timestamp is not set, or staging, or higher than, or equal
+	 * to, @timestamp, then the destruction cannot have been ordered before
+	 * @timestamp, so the handle must be live.
 	 */
-
-	if (!RB_EMPTY_NODE(&handle->rb_id) && !bus1_handle_is_owner(handle)) {
-		rb_erase(&handle->rb_id, &peer->local.map_handles_by_id);
-		RB_CLEAR_NODE(&handle->rb_id);
-		handle->id = BUS1_HANDLE_INVALID;
-	}
-	if (RB_EMPTY_NODE(&handle->rb_id)) {
-		if (handle->id == BUS1_HANDLE_INVALID)
-			handle->id = (++peer->local.handle_ids << 2) |
-							BUS1_NODE_FLAG_MANAGED;
-	}
+	ts = bus1_queue_node_get_timestamp(&h->qnode);
+	return (ts == 0) || (ts & 1) || (timestamp <= ts);
 }
 
-static u64 bus1_handle_prepare_publish(struct bus1_handle *handle,
-				       struct bus1_peer *peer,
-				       u64 timestamp,
-				       unsigned long sender)
+/**
+ * bus1_handle_import() - import handle
+ * @peer:			peer to operate on
+ * @id:				ID of handle
+ * @is_newp:			store whether handle is new
+ *
+ * This searches the ID-namespace of @peer for a handle with the given ID. If
+ * found, it is referenced, returned to the caller, and @is_newp is set to
+ * false.
+ *
+ * If not found and @id is a remote ID, then an error is returned. But if it
+ * is a local ID, a new handle is created and placed in the lookup tree. In
+ * this case @is_newp is set to true.
+ *
+ * Return: Pointer to referenced handle is returned.
+ */
+struct bus1_handle *bus1_handle_import(struct bus1_peer *peer,
+				       u64 id,
+				       bool *is_newp)
 {
-	/*
-	 * This prepares @handle to be published to user-space. That is, it
-	 * makes sure @handle has a valid ID assigned and is ordered properly
-	 * against the tuple (@timestamp, @sender).
-	 *
-	 * Note that the caller must keep the peer locked between this call and
-	 * the eventual publish operation, otherwise the returned ID might have
-	 * changed. This is *not* the case for owner-handles, though. Their ID
-	 * is valid for their entire lifetime, once assigned.
-	 */
-
-	lockdep_assert_held(&peer->lock);
-	BUS1_WARN_ON(!bus1_handle_is_owner(handle) &&
-		!bus1_handle_is_attached(handle));
-
-	if (!bus1_node_is_valid(handle->node, timestamp, sender))
-		return BUS1_HANDLE_INVALID;
-	if (atomic_read(&handle->n_user) >= 0)
-		return handle->id;
-
-	bus1_handle_refresh_id(handle, peer);
-
-	return handle->id;
-}
-
-static u64 bus1_handle_publish(struct bus1_handle *handle,
-			       struct bus1_peer *peer,
-			       u64 timestamp,
-			       unsigned long sender,
-			       bool userref)
-{
+	struct bus1_handle *h;
 	struct rb_node *n, **slot;
-	struct bus1_handle *iter;
 
-	lockdep_assert_held(&peer->lock);
-	BUS1_WARN_ON(!bus1_handle_is_attached(handle));
+	lockdep_assert_held(&peer->local.lock);
 
-	if (!bus1_node_is_valid(handle->node, timestamp, sender))
-		return BUS1_HANDLE_INVALID;
-	if (atomic_read(&handle->n_user) >= 0) {
-		WARN_ON(atomic_inc_return(&handle->n_user) == 0);
-		return handle->id;
+	n = NULL;
+	slot = &peer->local.map_handles.rb_node;
+	while (*slot) {
+		n = *slot;
+		h = container_of(n, struct bus1_handle, rb_to_peer);
+		if (id < h->id) {
+			slot = &n->rb_left;
+		} else if (id > h->id) {
+			slot = &n->rb_right;
+		} else /* if (id == h->id) */ {
+			*is_newp = false;
+			return bus1_handle_ref(h);
+		}
 	}
 
-	bus1_handle_refresh_id(handle, peer);
-	if (RB_EMPTY_NODE(&handle->rb_id)) {
+	if (id & (BUS1_HANDLE_FLAG_MANAGED | BUS1_HANDLE_FLAG_REMOTE))
+		return ERR_PTR(-ENXIO);
+
+	h = bus1_handle_new_anchor(peer);
+	if (IS_ERR(h))
+		return ERR_CAST(h);
+
+	h->id = id;
+	bus1_handle_ref(h);
+	rb_link_node(&h->rb_to_peer, n, slot);
+	rb_insert_color(&h->rb_to_peer, &peer->local.map_handles);
+
+	*is_newp = true;
+	return h;
+}
+
+/**
+ * bus1_handle_identify() - identify handle
+ * @h:				handle to operate on
+ *
+ * This returns the ID of @h. If no ID was assigned, yet, a new one is picked.
+ *
+ * Return: The ID of @h is returned.
+ */
+u64 bus1_handle_identify(struct bus1_handle *h)
+{
+	WARN_ON(!h->holder);
+	lockdep_assert_held(&h->holder->local.lock);
+
+	if (h->id == BUS1_HANDLE_INVALID) {
+		h->id = ++h->holder->local.handle_ids << 3;
+		h->id |= BUS1_HANDLE_FLAG_MANAGED;
+		if (h != h->anchor)
+			h->id |= BUS1_HANDLE_FLAG_REMOTE;
+	}
+
+	return h->id;
+}
+
+/**
+ * bus1_handle_export() - export handle
+ * @handle:			handle to operate on
+ *
+ * This exports @handle into the ID namespace of its holder. That is, if
+ * @handle is not linked into the ID namespace yet, it is linked into it.
+ *
+ * If @handle is already linked, nothing is done.
+ */
+void bus1_handle_export(struct bus1_handle *handle)
+{
+	struct bus1_handle *h;
+	struct rb_node *n, **slot;
+
+	/*
+	 * The caller must own a weak reference to @handle when calling this.
+	 * Hence, we know that its holder is valid. Also verify that the caller
+	 * holds the required active reference and local lock.
+	 */
+	WARN_ON(!handle->holder);
+	lockdep_assert_held(&handle->holder->local.lock);
+
+	if (RB_EMPTY_NODE(&handle->rb_to_peer)) {
+		bus1_handle_identify(handle);
+
 		n = NULL;
-		slot = &peer->local.map_handles_by_id.rb_node;
+		slot = &handle->holder->local.map_handles.rb_node;
 		while (*slot) {
 			n = *slot;
-			iter = container_of(n, struct bus1_handle,
-					    rb_id);
-			if (handle->id < iter->id) {
+			h = container_of(n, struct bus1_handle, rb_to_peer);
+			if (WARN_ON(handle->id == h->id))
+				return;
+			else if (handle->id < h->id)
 				slot = &n->rb_left;
-			} else /* if (handle->id >= iter->id) */ {
-				BUS1_WARN_ON(handle->id == iter->id);
+			else /* if (handle->id > h->id) */
 				slot = &n->rb_right;
-			}
 		}
-		rb_link_node_rcu(&handle->rb_id, n, slot);
-		rb_insert_color(&handle->rb_id,
-				&peer->local.map_handles_by_id);
-	}
 
-	/* publish the ref to user-space; this pins an inflight ref */
-	if (userref) {
-		WARN_ON(atomic_inc_return(&handle->n_user) != 0);
-		WARN_ON(atomic_inc_return(&handle->n_inflight) < 2);
+		bus1_handle_ref(handle);
+		rb_link_node(&handle->rb_to_peer, n, slot);
+		rb_insert_color(&handle->rb_to_peer,
+				&handle->holder->local.map_handles);
 	}
-
-	return handle->id;
 }
 
-static struct bus1_handle *
-bus1_handle_find_by_id(struct bus1_peer *peer, u64 id)
+static void bus1_handle_forget_internal(struct bus1_handle *h, bool erase_rb)
 {
-	struct bus1_handle *handle, *res = NULL;
-	struct rb_node *n;
-
-	lockdep_assert_held(&peer->lock);
-
-	n = peer->local.map_handles_by_id.rb_node;
-	while (n) {
-		handle = container_of(n, struct bus1_handle, rb_id);
-		if (id == handle->id) {
-			if (kref_get_unless_zero(&handle->qnode.ref))
-				res = handle;
-			break;
-		} else if (id < handle->id) {
-			n = n->rb_left;
-		} else /* if (id > handle->id) */ {
-			n = n->rb_right;
-		}
-	}
-
-	return res;
-}
-
-static struct bus1_handle *
-bus1_handle_find_by_node(struct bus1_peer *peer,
-			 struct bus1_node *node)
-{
-	struct bus1_handle *handle, *res = NULL;
-	struct rb_node *n;
-
-	lockdep_assert_held(&peer->lock);
-
-	n = peer->data.map_handles_by_node.rb_node;
-	while (n) {
-		handle = container_of(n, struct bus1_handle, rb_node);
-		if (node == handle->node) {
-			if (kref_get_unless_zero(&handle->qnode.ref))
-				res = handle;
-			break;
-		} else if (node < handle->node) {
-			n = n->rb_left;
-		} else /* if (node > handle->node) */ {
-			n = n->rb_right;
-		}
-	}
-
-	return res;
-}
-
-/**
- * bus1_handle_pair() - transfer handle manually from one peer to another
- * @src:	holder of handle to transfer
- * @dst:	peer to import handle to
- * @src_idp:	ID of handle to transfer
- * @dst_idp:	output for newly created handle ID
- *
- * This imports a handle into the peer @dst and returns its new ID via @dst_idp.
- * The handle to be transferred must be given via @src_idp (and @src must be its
- * holder). If BUS1_NODE_FLAG_ALLOCATE is given, a new node is allocated in
- * @src and returned in @src_idp.
- *
- * Return: 0 on success, negative error code on failure.
- */
-int bus1_handle_pair(struct bus1_peer *src,
-		     struct bus1_peer *dst,
-		     u64 *src_idp,
-		     u64 *dst_idp)
-{
-	struct bus1_handle *src_handle = NULL, *dst_handle = NULL, *t;
-	struct bus1_peer *owner = NULL;
-	bool accounted_handle = false, accounted_node = false;
-	int r;
-
-	if (*src_idp & BUS1_NODE_FLAG_ALLOCATE) {
-		/* account new node on @src */
-		if (atomic_dec_if_positive(&src->user->limits.n_handles) < 0)
-			return -EDQUOT;
-
-		accounted_node = true;
-
-		src_handle = bus1_handle_new_owner(*src_idp);
-		if (IS_ERR(src_handle)) {
-			r = PTR_ERR(src_handle);
-			src_handle = NULL;
-			goto exit;
-		}
-
-		r = security_bus1_transfer_handle(src, dst, src_handle->node);
-		if (r < 0)
-			goto exit;
-	} else {
-		mutex_lock(&src->lock);
-		src_handle = bus1_handle_find_by_id(src, *src_idp);
-		mutex_unlock(&src->lock);
-		if (!src_handle)
-			return -ENXIO;
-
-		if (!bus1_handle_has_userref(src_handle)) {
-			r = -ENXIO;
-			goto exit;
-		}
-
-		r = security_bus1_transfer_handle(src, dst, src_handle->node);
-		if (r < 0)
-			goto exit;
-
-		rcu_read_lock();
-		owner = rcu_dereference(src_handle->node->owner.holder);
-		owner = bus1_peer_acquire(owner);
-		rcu_read_unlock();
-
-		if (!owner) {
-			r = -ENXIO;
-			goto exit;
-		}
-
-		mutex_lock(&dst->lock);
-		dst_handle = bus1_handle_find_by_node(dst, src_handle->node);
-		mutex_unlock(&dst->lock);
-		if (dst_handle) {
-			if (bus1_handle_acquire(dst_handle, dst)) {
-				mutex_lock(&dst->lock);
-				*dst_idp = bus1_handle_publish(dst_handle,
-							       dst, 0, 0,
-							       true);
-				mutex_unlock(&dst->lock);
-				r = 0;
-				goto exit;
-			} else {
-				dst_handle = bus1_handle_unref(dst_handle);
-			}
-		}
-	}
-
-	/* account new handle on @dst */
-	if (atomic_dec_if_positive(&dst->user->limits.n_handles) < 0) {
-		r = -EDQUOT;
-		goto exit;
-	}
-
-	accounted_handle = true;
-
-	dst_handle = bus1_handle_new_holder(src_handle->node);
-	if (IS_ERR(dst_handle)) {
-		r = PTR_ERR(dst_handle);
-		dst_handle = NULL;
-		goto exit;
-	}
-
-	if (owner) {
-		/* handle is to existing node, lock owner and attach */
-		mutex_lock(&owner->lock);
-		r = bus1_handle_attach_holder(dst_handle, dst) ? 0 : -ENXIO;
-		mutex_unlock(&owner->lock);
-		if (r < 0)
-			goto exit;
-	} else {
-		/*
-		 * Now that we allocated the original node, and allocated a
-		 * fresh handle for the destination, the handle must be attach
-		 * and the node must be attached, installed, and published.
-		 */
-		mutex_lock(&src->lock);
-
-		bus1_handle_attach_owner(src_handle, src);
-		bus1_handle_install_owner(src_handle);
-		WARN_ON(!bus1_handle_attach_holder(dst_handle, dst));
-
-		*src_idp = bus1_handle_publish(src_handle, src, 0, 0,
-						false);
-
-		/* release the inflight-ref acquired via attach() and unlock */
-		bus1_handle_release_unlock(src_handle, src);
-	}
-
 	/*
-	 * Now that the handle is fully attached we must install it in the
-	 * destination peer. This might race another install, in which case we
-	 * switch to the alternative, release our own temporary handle and undo
-	 * the quota charge.
+	 * The passed handle might not have any weak references. Hence, we
+	 * require the caller to pass the holder explicitly as @peer. However,
+	 * if @handle has weak references, we want to WARN if it does not match
+	 * @peer. Since this is unlocked, we use ACCESS_ONCE() here to get a
+	 * consistent value. This is purely for debugging.
 	 */
-	mutex_lock(&dst->lock);
-	t = dst_handle;
-	dst_handle = bus1_handle_install_holder(t);
-	*dst_idp = bus1_handle_publish(dst_handle, dst, 0, 0, true);
-	/* release the inflight-ref acquired via attach() and unlock */
-	bus1_handle_release_unlock(dst_handle, dst);
+	lockdep_assert_held(&h->holder->local.lock);
 
-	if (dst_handle != t) {
-		bus1_handle_release(t, dst);
-		bus1_handle_unref(t);
-		atomic_inc(&dst->user->limits.n_handles);
-	}
-
-	r = 0;
-	accounted_node = false;
-	accounted_handle = false;
-
-exit:
-	if (accounted_node)
-		atomic_inc(&src->user->limits.n_handles);
-	if (accounted_handle)
-		atomic_inc(&dst->user->limits.n_handles);
-	bus1_handle_unref(dst_handle);
-	bus1_handle_unref(src_handle);
-	bus1_peer_release(owner);
-	return r;
-}
-
-/**
- * bus1_handle_release_by_id() - release a user handle
- * @peer:		peer to operate on
- * @id:			handle ID
- * @n_handlesp:		output-var to store number of released handles, or NULL
- *
- * This releases a *user* visible reference to the handle with the given ID.
- *
- * For each handle of which the last user-refcount is dropped, this increments
- * @n_handlesp by one (usually this means either 0 or 1).
- *
- * Return: >=0 on success, negative error code on failure.
- */
-int bus1_handle_release_by_id(struct bus1_peer *peer,
-			      u64 id,
-			      size_t *n_handlesp)
-{
-	struct bus1_handle *handle;
-	size_t n_handles = 0;
-	int r, n_user;
-
-	mutex_lock(&peer->lock);
-	handle = bus1_handle_find_by_id(peer, id);
-	mutex_unlock(&peer->lock);
-	if (!handle)
-		return -ENXIO;
-
-	/* returns "old_value - 1", regardless whether it succeeded */
-	n_user = atomic_dec_if_positive(&handle->n_user);
-	if (n_user >= 0) {
-		/* DEC happened, but didn't drop to -1 */
-		r = 0;
-	} else if (n_user < -1) {
-		/* DEC did not happen, no ref owned */
-		r = -ENXIO;
-	} else {
-		/* DEC did not happen, try again locked */
-		mutex_lock(&peer->lock);
-		if (atomic_read(&handle->n_user) < 0) {
-			mutex_unlock(&peer->lock);
-			r = -ENXIO;
-		} else if (atomic_dec_return(&handle->n_user) > -1) {
-			mutex_unlock(&peer->lock);
-			r = 0;
-		} else {
-			++n_handles;
-			bus1_handle_release_unlock(handle, peer);
-			r = 0;
-		}
-	}
-
-	if (n_handlesp)
-		*n_handlesp = n_handles;
-
-	bus1_handle_unref(handle);
-	return r;
-}
-
-/**
- * bus1_node_destroy_by_id() - destroy a node
- * @peer:		peer to operate on
- * @idp:		pointer to handle ID
- * @n_handlesp:		output-var to store number of released handles, or NULL
- *
- * This destroys the underlying node of the handle with the given ID. The usual
- * allocation rules for @idp apply. If @idp was modified, 1 is returned. If
- * @idp was not modified, 0 is returned. On error, a negative error code is
- * returned.
- *
- * For each handle of which the last user-refcount is dropped, this increments
- * @n_handlesp by one (usually this means either 0 or 1).
- *
- * Return: >=0 on success, negative error code on failure.
- */
-int bus1_node_destroy_by_id(struct bus1_peer *peer,
-			    u64 *idp,
-			    size_t *n_handlesp)
-{
-	struct bus1_handle *handle;
-	size_t n_handles = 0;
-	int r;
-
-	if (*idp & BUS1_NODE_FLAG_ALLOCATE) {
-		handle = bus1_handle_new_owner(*idp);
-		if (IS_ERR(handle)) {
-			atomic_inc(&peer->user->limits.n_handles);
-			return PTR_ERR(handle);
-		}
-
-		mutex_lock(&peer->lock);
-		bus1_handle_attach_owner(handle, peer);
-		bus1_handle_install_owner(handle);
-		*idp = bus1_handle_publish(handle, peer, 0, 0, false);
-		bus1_node_destroy(handle->node, peer);
-		bus1_handle_release_unlock(handle, peer);
-
-		r = 1;
-	} else {
-		mutex_lock(&peer->lock);
-		handle = bus1_handle_find_by_id(peer, *idp);
-
-		if (!handle ||
-		    !bus1_handle_is_owner(handle) ||
-		    bus1_node_is_destroyed(handle->node)) {
-			r = -ENXIO;
-		} else {
-			++n_handles;
-			bus1_node_destroy(handle->node, peer);
-			r = 0;
-		}
-		mutex_unlock(&peer->lock);
-	}
-
-	if (n_handlesp)
-		*n_handlesp = n_handles;
-
-	bus1_handle_unref(handle);
-	return r;
-}
-
-/**
- * bus1_handle_flush_all() - flush all nodes and handles of a peer
- * @peer:		peer to operate on
- * @n_handlesp:		output-var to store number of released handles, or NULL
- * @final:		whether to flush persistent nodes
- *
- * This atomically destroys all nodes, and releases all handles, of the given
- * peer. Note that the destruction is atomic in all regards, but the handle
- * release is only atomic in regard to the holding peer. That is, the possible
- * effect on any remote node is not atomic, but done sequentially afterwards.
- *
- * For each handle of which the last user-refcount is dropped, this increments
- * @n_handlesp by one.
- *
- * If @final is false, persistent nodes are left untouched, otherwise, even
- * persistent nodes are destroyed.
- */
-void bus1_handle_flush_all(struct bus1_peer *peer,
-			   size_t *n_handlesp,
-			   bool final)
-{
-	struct bus1_handle *h;
-	struct rb_node *n, *next;
-	LIST_HEAD(list_remote);
-	size_t n_handles = 0;
-
-	mutex_lock(&peer->lock);
-	for (n = rb_first(&peer->data.map_handles_by_node); n; n = next) {
-		h = container_of(n, struct bus1_handle, rb_node);
-		next = rb_next(n);
-
-		if (bus1_handle_is_owner(h)) {
-			if (final || !test_bit(BUS1_NODE_BIT_PERSISTENT,
-					       &h->node->flags)) {
-				++n_handles;
-				bus1_handle_ref(h);
-				bus1_node_destroy(h->node, peer);
-				if (atomic_xchg(&h->n_user, -1) != -1) {
-					bus1_handle_release_owner(h, peer);
-					++n_handles;
-				}
-				bus1_handle_unref(h);
-			}
-		} else if (atomic_xchg(&h->n_user, -1) != -1) {
-			++n_handles;
-			if (atomic_dec_and_test(&h->n_inflight)) {
-				rb_erase(&h->rb_node,
-					 &peer->data.map_handles_by_node);
-				RB_CLEAR_NODE(&h->rb_node); /* steal ref */
-				bus1_handle_uninstall_holder(h, peer);
-				BUS1_WARN_ON(!RB_EMPTY_NODE(&h->qnode.rb));
-				list_add(&h->qnode.link, &list_remote);
-			}
-		}
-	}
-	mutex_unlock(&peer->lock);
-
-	/* for each detached remote node, we must also remote-detach it */
-	while ((h = list_first_entry_or_null(&list_remote, struct bus1_handle,
-					     qnode.link))) {
-		list_del(&h->qnode.link);
-		RB_CLEAR_NODE(&h->qnode.rb);
-		bus1_handle_detach_holder(h);
-		bus1_handle_unref(h);
-	}
-
-	if (n_handlesp)
-		*n_handlesp = n_handles;
-}
-
-/**
- * bus1_handle_dest_init() - initialize destination handle context
- * @dest:		destination context to initialize
- *
- * This initializes a destination handle context. The object is needed to
- * lookup and optionally create the destination handle held by the sender during
- * a transaction. That is, for each destination of a transaction, you need one
- * destination handle context.
- *
- * The destination handle can be imported via bus1_handle_dest_import().
- */
-void bus1_handle_dest_init(struct bus1_handle_dest *dest)
-{
-	dest->handle = NULL;
-	dest->raw_peer = NULL;
-	dest->idp = NULL;
-}
-
-/**
- * bus1_handle_dest_destroy() - destroy destination handle context
- * @dest:		destination handle context to destroy, or NULL
- * @peer:info:		owning peer
- *
- * This releases all data pinned by a destination handle context. If Null is
- * passed, or if the destination object was already destroyed, then nothing is
- * done.
- */
-void bus1_handle_dest_destroy(struct bus1_handle_dest *dest,
-			      struct bus1_peer *peer)
-{
-	if (!dest)
+	if (bus1_handle_is_public(h) || RB_EMPTY_NODE(&h->rb_to_peer))
 		return;
 
-	if (dest->handle) {
-		bus1_handle_release(dest->handle, peer);
-		dest->handle = bus1_handle_unref(dest->handle);
-	}
-	if (dest->raw_peer) {
-		bus1_active_lockdep_acquired(&dest->raw_peer->active);
-		dest->raw_peer = bus1_peer_release(dest->raw_peer);
-	}
+	if (erase_rb)
+		rb_erase(&h->rb_to_peer, &h->holder->local.map_handles);
+	RB_CLEAR_NODE(&h->rb_to_peer);
+	h->id = BUS1_HANDLE_INVALID;
+	bus1_handle_unref(h);
 }
 
 /**
- * bus1_handle_dest_import() - import destination handle
- * @dest:		destination context
- * @peer:		peer to import handles of
- * @idp:		user-space handle ID pointer
+ * bus1_handle_forget() - forget handle
+ * @h:				handle to operate on, or NULL
  *
- * This imports a handle-ID from user-space (provided as @idp) into the
- * destination handle context. It then resolves it to the actual bus1_handle
- * objects, optionally creating a new one on demand.
+ * If @h is not public, but linked into the ID-lookup tree, this will remove it
+ * from the tree and clear the ID of @h. It basically undoes what
+ * bus1_handle_import() and bus1_handle_export() do.
  *
- * This can only be called once per destination handle context.
- *
- * Return: 0 on success, negative error code on failure.
+ * Note that there is no counter in bus1_handle_import() or
+ * bus1_handle_export(). That is, if you call bus1_handle_import() multiple
+ * times, a single bus1_handle_forget() undoes it. It is the callers
+ * responsibility to not release the local-lock randomly, and to properly
+ * detect cases where the same handle is used multiple times.
  */
-int bus1_handle_dest_import(struct bus1_handle_dest *dest,
-			    struct bus1_peer *peer,
-			    u64 __user *idp)
+void bus1_handle_forget(struct bus1_handle *h)
 {
-	struct bus1_peer *dst_peer;
-	struct bus1_handle *handle;
-	u64 id;
-
-	if (BUS1_WARN_ON(dest->handle || dest->raw_peer || dest->idp))
-		return -ENOTRECOVERABLE;
-
-	if (get_user(id, idp))
-		return -EFAULT;
-
-	if (id & BUS1_NODE_FLAG_ALLOCATE) {
-		if (!bus1_peer_acquire(peer))
-			return -ESHUTDOWN;
-
-		/* account node+userref */
-		if (bus1_atomic_sub_if_ge(&peer->user->limits.n_handles,
-					  2, 2) < 0) {
-			bus1_peer_release(peer);
-			return -EDQUOT;
-		}
-
-		handle = bus1_handle_new_owner(id);
-		if (IS_ERR(handle)) {
-			atomic_inc(&peer->user->limits.n_handles);
-			bus1_peer_release(peer);
-			return PTR_ERR(handle);
-		}
-
-		mutex_lock(&peer->lock);
-		bus1_handle_attach_owner(handle, peer);
-		bus1_handle_install_owner(handle);
-		mutex_unlock(&peer->lock);
-
-		dest->handle = handle;
-		dest->raw_peer = peer;
-		dest->idp = idp;
-		bus1_active_lockdep_released(&peer->active);
-	} else {
-		mutex_lock(&peer->lock);
-		handle = bus1_handle_find_by_id(peer, id);
-		mutex_unlock(&peer->lock);
-		if (!handle)
-			return -ENXIO;
-
-		/*
-		 * Check that user-space knows of the handle and owns a
-		 * reference. This looks racy, but we care for none of the
-		 * races. We just assume that at the time we checked for n_user
-		 * we also atomically acquired the inflight reference. The fact
-		 * that it is not atomic, does not matter.
-		 */
-		if (!bus1_handle_has_userref(handle)) {
-			bus1_handle_unref(handle);
-			return -ENXIO;
-		}
-
-		dst_peer = bus1_handle_acquire_holder(&handle->node->owner);
-		if (!dst_peer || !bus1_handle_acquire(handle, peer)) {
-			bus1_peer_release(dst_peer);
-			bus1_handle_unref(handle);
-			return -ENXIO;
-		}
-
-		dest->handle = handle;
-		dest->raw_peer = dst_peer;
-		dest->idp = NULL;
-		bus1_active_lockdep_released(&dst_peer->active);
-	}
-
-	return 0;
+	if (h)
+		bus1_handle_forget_internal(h, true);
 }
 
 /**
- * bus1_handle_dest_export() - publish new nodes of destination context
- * @dest:		destination context
- * @peer:		owning peer of @dest
- * @timestamp:		final timestamp of message transaction
- * @commit:		whether to commit the node
+ * bus1_handle_forget_keep() - forget handle but keep rb-tree order
+ * @h:				handle to operate on, or NULL
  *
- * If a node was created as the destination of a transaction, we have to publish
- * its handle ID back to the caller. This function acquires the ID, and it is up
- * to the caller to copy it back to userspace.
- *
- * The caller must hold the peer lock of @peer.
- *
- * Return: 0 on success, negative error code on failure.
+ * This is like bus1_handle_forget(), but does not modify the ID-namespace
+ * rb-tree. That is, the backlink in @h is cleared (h->rb_to_peer), but the
+ * rb-tree is not rebalanced. As such, you can use it with
+ * rbtree_postorder_for_each_entry_safe() to drop all entries.
  */
-u64 bus1_handle_dest_export(struct bus1_handle_dest *dest,
-			    struct bus1_peer *peer,
-			    u64 timestamp,
-			    unsigned long sender,
-			    bool commit)
+void bus1_handle_forget_keep(struct bus1_handle *h)
 {
-	u64 id;
-
-	lockdep_assert_held(&peer->lock);
-
-	if (BUS1_WARN_ON(!dest->handle || !dest->raw_peer))
-		return BUS1_HANDLE_INVALID;
-
-	if (dest->idp) {
-		BUS1_WARN_ON(!bus1_handle_is_owner(dest->handle));
-		if (commit)
-			id = bus1_handle_publish(dest->handle, peer,
-						 timestamp, sender, false);
-		else
-			id = bus1_handle_prepare_publish(dest->handle,
-							 peer, timestamp,
-							 sender);
-	} else if (!bus1_node_is_valid(dest->handle->node, timestamp, sender)) {
-		id = BUS1_HANDLE_INVALID;
-	} else {
-		BUS1_WARN_ON(dest->handle->node->owner.id ==
-			     BUS1_HANDLE_INVALID);
-		id = dest->handle->node->owner.id;
-	}
-
-	return id;
-}
-
-/*
- * Handle Lists
- *
- * We support operations on large handle sets, bigger than we should allocate
- * linearly via kmalloc(). Hence, we rather use single-linked lists of
- * bus1_handle_entry arrays. Each entry in the list contains a maximum of
- * BUS1_HANDLE_BATCH_SIZE real entries. The BUS1_HANDLE_BATCH_SIZE+1'th entry
- * points to the next node in the linked list.
- *
- * bus1_handle_list_new() allocates a new list with space for @n entries. Such
- * lists can be released via bus1_handle_list_free().
- *
- * Entries are initially uninitialized. The caller has to fill them in.
- */
-
-static void bus1_handle_list_free(union bus1_handle_entry *list, size_t n)
-{
-	union bus1_handle_entry *t;
-
-	while (list && n > BUS1_HANDLE_BATCH_SIZE) {
-		t = list;
-		list = list[BUS1_HANDLE_BATCH_SIZE].next;
-		kfree(t);
-		n -= BUS1_HANDLE_BATCH_SIZE;
-	}
-	kfree(list);
-}
-
-static union bus1_handle_entry *bus1_handle_list_new(size_t n)
-{
-	union bus1_handle_entry list, *e, *slot;
-	size_t remaining;
-
-	list.next = NULL;
-	slot = &list;
-	remaining = n;
-
-	while (remaining >= BUS1_HANDLE_BATCH_SIZE) {
-		e = kmalloc(sizeof(*e) * (BUS1_HANDLE_BATCH_SIZE + 1),
-			    GFP_KERNEL);
-		if (!e)
-			goto error;
-
-		slot->next = e;
-		slot = &e[BUS1_HANDLE_BATCH_SIZE];
-		slot->next = NULL;
-
-		remaining -= BUS1_HANDLE_BATCH_SIZE;
-	}
-
-	if (remaining > 0) {
-		slot->next = kmalloc_array(remaining, sizeof(*e), GFP_KERNEL);
-		if (!slot->next)
-			goto error;
-	}
-
-	return list.next;
-
-error:
-	bus1_handle_list_free(list.next, n);
-	return NULL;
-}
-
-/*
- * Handle Batches
- *
- * A handle batch provides a convenience wrapper around handle lists. It embeds
- * the first node of the handle list into the batch object, but allocates the
- * remaining nodes on-demand.
- *
- * A handle-batch object is usually embedded into a parent object, and provides
- * space for a fixed number of handles (can be queried via batch->n_entries).
- * Initially, none of the entries is initialized. It is up to the user to fill
- * it with data.
- *
- * Batches can store two kinds of handles: Their IDs as entry->id, or a pinned
- * handle as entry->handle. By default it is assumed only IDs are stored, and
- * the caller can modify the batch freely. But once IDs are resolved to handles
- * and pinned in the batch, the caller must increment batch->n_handles for each
- * stored handle. This makes sure that the pinned handles are released on
- * destruction (starting at the front, up to @n_handles entries).
- *
- * Use the iterators BUS1_HANDLE_BATCH_FOREACH_ENTRY() and
- * BUS1_HANDLE_BATCH_FOREACH_HANDLE() to iterate either *all* entries, or only
- * the first entries up to the @n_handles'th entry (that is, iterate all entries
- * that have pinned handles).
- */
-
-#define BUS1_HANDLE_BATCH_FIRST(_batch, _pos)			\
-	((_pos) = 0, (_batch)->entries)
-
-#define BUS1_HANDLE_BATCH_NEXT(_iter, _pos)			\
-	((!(++(_pos) % BUS1_HANDLE_BATCH_SIZE)) ?		\
-			((_iter) + 1)->next :			\
-			((_iter) + 1))
-
-#define BUS1_HANDLE_BATCH_FOREACH_ENTRY(_iter, _pos, _batch)		\
-	for ((_iter) = BUS1_HANDLE_BATCH_FIRST((_batch), (_pos));	\
-	     (_pos) < (_batch)->n_entries;				\
-	     (_iter) = BUS1_HANDLE_BATCH_NEXT((_iter), (_pos)))
-
-#define BUS1_HANDLE_BATCH_FOREACH_HANDLE(_iter, _pos, _batch)		\
-	for ((_iter) = BUS1_HANDLE_BATCH_FIRST((_batch), (_pos));	\
-	     (_pos) < (_batch)->n_handles;				\
-	     (_iter) = BUS1_HANDLE_BATCH_NEXT((_iter), (_pos)))
-
-static void bus1_handle_batch_init(struct bus1_handle_batch *batch,
-				   size_t n_entries)
-{
-	batch->n_entries = n_entries;
-	batch->n_handles = 0;
-	if (n_entries >= BUS1_HANDLE_BATCH_SIZE)
-		batch->entries[BUS1_HANDLE_BATCH_SIZE].next = NULL;
-}
-
-static int bus1_handle_batch_preload(struct bus1_handle_batch *batch)
-{
-	union bus1_handle_entry *e;
-
-	/*
-	 * If the number of stored entries fits into the static buffer, or if
-	 * it was already pre-loaded, there is nothing to do.
-	 */
-	if (likely(batch->n_entries <= BUS1_HANDLE_BATCH_SIZE))
-		return 0;
-	if (batch->entries[BUS1_HANDLE_BATCH_SIZE].next)
-		return 0;
-
-	/* allocate handle-list for remaining, non-static entries */
-	e = bus1_handle_list_new(batch->n_entries - BUS1_HANDLE_BATCH_SIZE);
-	if (!e)
-		return -ENOMEM;
-
-	batch->entries[BUS1_HANDLE_BATCH_SIZE].next = e;
-	return 0;
-}
-
-static void bus1_handle_batch_release(struct bus1_handle_batch *batch,
-				      struct bus1_peer *peer)
-{
-	union bus1_handle_entry *e;
-	size_t pos;
-
-	if (!batch)
-		return;
-
-	BUS1_HANDLE_BATCH_FOREACH_HANDLE(e, pos, batch) {
-		if (e->handle) {
-			if (bus1_handle_was_attached(e->handle))
-				bus1_handle_release(e->handle, peer);
-			bus1_handle_unref(e->handle);
-		}
-	}
-
-	batch->n_handles = 0;
-}
-
-static void bus1_handle_batch_destroy(struct bus1_handle_batch *batch)
-{
-	union bus1_handle_entry *e;
-
-	if (!batch)
-		return;
-
-	if (unlikely(batch->n_entries > BUS1_HANDLE_BATCH_SIZE)) {
-		e = batch->entries[BUS1_HANDLE_BATCH_SIZE].next;
-		bus1_handle_list_free(e, batch->n_entries -
-						BUS1_HANDLE_BATCH_SIZE);
-	}
-
-	BUS1_WARN_ON(batch->n_handles > 0);
-	batch->n_entries = 0;
-}
-
-static int bus1_handle_batch_import(struct bus1_handle_batch *batch,
-				    const u64 __user *ids,
-				    size_t n_ids)
-{
-	union bus1_handle_entry *block;
-
-	if (BUS1_WARN_ON(n_ids != batch->n_entries || batch->n_handles > 0))
-		return -ENOTRECOVERABLE;
-
-	BUILD_BUG_ON(sizeof(*block) != sizeof(*ids));
-
-	block = batch->entries;
-	while (n_ids > BUS1_HANDLE_BATCH_SIZE) {
-		if (copy_from_user(block, ids,
-				   BUS1_HANDLE_BATCH_SIZE * sizeof(*ids)))
-			return -EFAULT;
-
-		ids += BUS1_HANDLE_BATCH_SIZE;
-		n_ids -= BUS1_HANDLE_BATCH_SIZE;
-		block = block[BUS1_HANDLE_BATCH_SIZE].next;
-	}
-
-	if (n_ids > 0 && copy_from_user(block, ids, n_ids * sizeof(*ids)))
-		return -EFAULT;
-
-	return 0;
-}
-
-static size_t bus1_handle_batch_walk(struct bus1_handle_batch *batch,
-				     size_t *pos,
-				     union bus1_handle_entry **iter)
-{
-	size_t n;
-
-	if (*pos >= batch->n_handles)
-		return 0;
-
-	n = batch->n_handles - *pos;
-	if (n > BUS1_HANDLE_BATCH_SIZE)
-		n = BUS1_HANDLE_BATCH_SIZE;
-
-	if (*pos == 0)
-		*iter = batch->entries;
-	else
-		*iter = (*iter)[BUS1_HANDLE_BATCH_SIZE].next;
-
-	*pos += n;
-	return n;
-}
-
-/**
- * bus1_handle_transfer_init() - initialize handle transfer context
- * @transfer:		transfer context to initialize
- * @n_entries:		number of handles that are transferred
- *
- * This initializes a handle-transfer context. This object is needed to lookup,
- * pin, and optionally create, the handles of the sender during a transaction.
- * That is, for each transaction, you need one handle-transfer object,
- * initialized with the number of handles to transfer.
- *
- * Handles can be imported via bus1_handle_transfer_import(). Once done,
- * the handle-inflight objects can be instantiated from it for each destination
- * of the transaction.
- *
- * The handle-transfer context embeds a handle-batch, as such must be
- * pre-allocated via bus1_handle_batch_inline_size().
- */
-void bus1_handle_transfer_init(struct bus1_handle_transfer *transfer,
-			       size_t n_entries)
-{
-	transfer->n_new = 0;
-	bus1_handle_batch_init(&transfer->batch, n_entries);
-}
-
-/**
- * bus1_handle_transfer_release() - release handle transfer context
- * @transfer:		transfer context to release, or NULL
- * @peer:		owning peer
- *
- * This releases all handles that were pinned on the transfer context. This
- * might require locking the owning peer.
- */
-void bus1_handle_transfer_release(struct bus1_handle_transfer *transfer,
-				  struct bus1_peer *peer)
-{
-	if (transfer)
-		bus1_handle_batch_release(&transfer->batch, peer);
-}
-
-/**
- * bus1_handle_transfer_destroy() - destroy handle transfer context
- * @transfer:		transfer context to destroy, or NULL
- *
- * This frees all allocated data of the handle-transfer context. If handles were
- * imported, the caller must call bus1_handle_transfer_release() before
- * destroying the transfer context.
- */
-void bus1_handle_transfer_destroy(struct bus1_handle_transfer *transfer)
-{
-	if (transfer)
-		bus1_handle_batch_destroy(&transfer->batch);
-}
-
-/**
- * bus1_handle_transfer_import() - import handles for transfer
- * @transfer:		transfer context
- * @peer:		peer to import handles of
- * @ids:		user-space array of handle IDs
- * @n_ids:		number of IDs in @ids
- *
- * This imports an array of handle-IDs from user-space (provided as @ids +
- * @n_ids) into the transfer context. It then resolves each of them to their
- * actual bus1_handle objects, optionally creating new ones on demand.
- *
- * This can only be called once per transfer context. Also, @n_ids must match
- * the size used with bus1_handle_transfer_init().
- *
- * Return: 0 on success, negative error code on failure.
- */
-int bus1_handle_transfer_import(struct bus1_handle_transfer *transfer,
-				struct bus1_peer *peer,
-				const u64 __user *ids,
-				size_t n_ids)
-{
-	union bus1_handle_entry *entry;
-	struct bus1_handle *handle;
-	size_t pos;
-	int r;
-
-	/*
-	 * Import the handle IDs from user-space (@ids + @n_ids) into the
-	 * handle-batch. Then resolve each of them and pin their underlying
-	 * handle. If a new node is demanded, we allocate a fresh node+handle,
-	 * but do *not* link it, yet. We just make sure it is allocated, so the
-	 * final commit cannot fail due to OOM.
-	 *
-	 * Note that the batch-import refuses operation if already used, so we
-	 * can rely on @n_handles to be 0.
-	 */
-
-	r = bus1_handle_batch_preload(&transfer->batch);
-	if (r < 0)
-		return r;
-
-	r = bus1_handle_batch_import(&transfer->batch, ids, n_ids);
-	if (r < 0)
-		return r;
-
-	BUS1_HANDLE_BATCH_FOREACH_ENTRY(entry, pos, &transfer->batch) {
-		if (entry->id == BUS1_HANDLE_INVALID) {
-			handle = NULL;
-		} else if (entry->id & BUS1_NODE_FLAG_ALLOCATE) {
-			handle = bus1_handle_new_owner(entry->id);
-			if (IS_ERR(handle))
-				return PTR_ERR(handle);
-
-			++transfer->n_new;
-		} else {
-			mutex_lock(&peer->lock);
-			handle = bus1_handle_find_by_id(peer, entry->id);
-			mutex_unlock(&peer->lock);
-			if (!handle ||
-			    !bus1_handle_has_userref(handle) ||
-			    !bus1_handle_acquire(handle, peer)) {
-				handle = bus1_handle_unref(handle);
-				return -ENXIO;
-			}
-		}
-
-		entry->handle = handle;
-		++transfer->batch.n_handles;
-	}
-
-	return 0;
-}
-
-/**
- * bus1_handle_transfer_export() - publish new nodes of transfer context
- * @transfer:		transfer context
- * @peer:		owning peer of @transfer
- * @ids:		user pointer to store IDs to
- * @n_ids:		number of IDs
- *
- * For every node that is created as part of an handle transfer, we have to
- * publish the handle ID back to the caller. This function acquires the handle
- * IDs *and* directly copies them over into the user-provided buffers.
- *
- * The caller must hold the peer lock of @peer.
- *
- * Return: 0 on success, negative error code on failure.
- */
-int bus1_handle_transfer_export(struct bus1_handle_transfer *transfer,
-				struct bus1_peer *peer,
-				u64 __user *ids,
-				size_t n_ids)
-{
-	union bus1_handle_entry *entry;
-	size_t pos, n_new = 0;
-	u64 id;
-
-	lockdep_assert_held(&peer->lock);
-	BUS1_WARN_ON(n_ids != transfer->batch.n_handles);
-
-	if (transfer->n_new < 1)
-		return 0;
-
-	BUS1_HANDLE_BATCH_FOREACH_HANDLE(entry, pos, &transfer->batch) {
-		if (!entry->handle || bus1_handle_was_attached(entry->handle))
-			continue;
-		if (BUS1_WARN_ON(!bus1_handle_is_owner(entry->handle)))
-			continue;
-
-		++n_new;
-		if (entry->handle->id == BUS1_HANDLE_INVALID) {
-			id = bus1_handle_prepare_publish(entry->handle,
-							 peer, 0, 0);
-			if (put_user(id, ids + pos))
-				return -EFAULT;
-		}
-	}
-
-	/* account for new nodes */
-	if (!bus1_atomic_sub_if_ge(&peer->user->limits.n_handles, n_new, n_new))
-		return -EDQUOT;
-
-	BUS1_HANDLE_BATCH_FOREACH_HANDLE(entry, pos, &transfer->batch) {
-		if (!entry->handle || bus1_handle_was_attached(entry->handle))
-			continue;
-		if (BUS1_WARN_ON(!bus1_handle_is_owner(entry->handle)))
-			continue;
-
-		bus1_handle_attach_owner(entry->handle, peer);
-		bus1_handle_install_owner(entry->handle);
-		bus1_handle_publish(entry->handle, peer, 0, 0, false);
-	}
-
-	transfer->n_new = 0;
-	return 0;
-}
-
-/**
- * bus1_handle_inflight_init() - initialize inflight context
- * @inflight:		inflight context to initialize
- * @n_entries:		number of entries to store in this context
- *
- * This initializes an inflight-context to carry @n_entries handles. An
- * inflight-context is used to instantiate and commit the handles a peer
- * *receives* via a transaction. That is, it is created once for each
- * destination of a transaction, and it is instantiated from the
- * transfer-context of the transaction origin/sender.
- *
- * The inflight-context embeds a handle-batch, as such must be pre-allocated
- * via bus1_handle_batch_inline_size().
- */
-void bus1_handle_inflight_init(struct bus1_handle_inflight *inflight,
-			       size_t n_entries)
-{
-	inflight->n_new = 0;
-	bus1_handle_batch_init(&inflight->batch, n_entries);
-}
-
-/**
- * bus1_handle_inflight_destroy() - destroy inflight-context
- * @inflight:		inflight context to destroy
- *
- * This destroys the inflight context. The caller must make sure to flush the
- * context before destroying it, in case any handles were imported.
- */
-void bus1_handle_inflight_destroy(struct bus1_handle_inflight *inflight)
-{
-	bus1_handle_batch_destroy(&inflight->batch);
-}
-
-/**
- * bus1_handle_inflight_flush() - flush pinned resources
- * @inflight:		inflight context to flush
- * @peer:		owning peer
- *
- * This releases all handles that were pinned on the inflight context. This
- * might require locking the owning peer.
- */
-void bus1_handle_inflight_flush(struct bus1_handle_inflight *inflight,
-				struct bus1_peer *peer)
-{
-	bus1_handle_batch_release(&inflight->batch, peer);
-}
-
-/**
- * bus1_handle_inflight_import() - import inflight context
- * @inflight:		inflight context to instantiate
- * @peer:		peer info to instantiate for
- * @transfer:		transfer object to instantiate from
- * @transfer:	peer info owning the transfer object
- *
- * Instantiate an inflight-context from an existing transfer-context. Import
- * each pinned handle from the transfer-context into the peer @peer,
- * creating new handles if required. All the handles are pinned in the inflight
- * context, but not committed, yet.
- *
- * This must only be called once per inflight object. Furthermore, the number
- * of handles must match the number of handles of the transfer-context.
- *
- * Return: 0 on success, negative error code on failure.
- */
-int bus1_handle_inflight_import(struct bus1_handle_inflight *inflight,
-				struct bus1_peer *peer,
-				struct bus1_handle_transfer *transfer,
-				struct bus1_peer *src)
-{
-	union bus1_handle_entry *from, *to;
-	struct bus1_handle *handle, *t;
-	size_t pos_from, pos_to;
-	int r;
-
-	r = bus1_handle_batch_preload(&inflight->batch);
-	if (r < 0)
-		return r;
-	if (BUS1_WARN_ON(inflight->batch.n_handles > 0))
-		return -ENOTRECOVERABLE;
-	if (BUS1_WARN_ON(inflight->batch.n_entries !=
-			 transfer->batch.n_entries))
-		return -ENOTRECOVERABLE;
-
-	to = BUS1_HANDLE_BATCH_FIRST(&inflight->batch, pos_to);
-
-	BUS1_HANDLE_BATCH_FOREACH_HANDLE(from, pos_from, &transfer->batch) {
-		t = from->handle;
-		if (t) {
-			r = security_bus1_transfer_handle(src, peer, t->node);
-			if (r < 0)
-				return r;
-
-			mutex_lock(&peer->lock);
-			handle = bus1_handle_find_by_node(peer, t->node);
-			mutex_unlock(&peer->lock);
-			if (handle && !bus1_handle_acquire(handle, peer))
-				handle = bus1_handle_unref(handle);
-			if (!handle) {
-				handle = bus1_handle_new_holder(t->node);
-				if (IS_ERR(handle))
-					return PTR_ERR(handle);
-
-				++inflight->n_new;
-			}
-		} else {
-			handle = NULL;
-		}
-
-		to->handle = handle;
-		to = BUS1_HANDLE_BATCH_NEXT(to, pos_to);
-		++inflight->batch.n_handles;
-	}
-
-	return 0;
-}
-
-/**
- * bus1_handle_inflight_install() - install inflight handles
- * @inflight:		instantiated inflight context
- * @dst:		peer @inflight is for
- *
- * After an inflight context was successfully instantiated, this will install
- * the handles into the peer @dst.
- */
-void bus1_handle_inflight_install(struct bus1_handle_inflight *inflight,
-				  struct bus1_peer *dst)
-{
-	union bus1_handle_entry *e;
-	struct bus1_handle *h, *t;
-	struct bus1_peer *owner;
-	size_t pos, n_installs;
-
-	if (inflight->batch.n_handles < 1)
-		return;
-
-	n_installs = inflight->n_new;
-
-	if (inflight->n_new > 0) {
-		BUS1_HANDLE_BATCH_FOREACH_HANDLE(e, pos, &inflight->batch) {
-			h = e->handle;
-			if (!h || bus1_handle_was_attached(h))
-				continue;
-
-			owner = bus1_handle_acquire_holder(&h->node->owner);
-			if (owner) {
-				mutex_lock(&owner->lock);
-				if (!bus1_handle_attach_holder(h, dst)) {
-					e->handle = bus1_handle_unref(h);
-					--n_installs;
-				}
-				mutex_unlock(&owner->lock);
-				bus1_peer_release(owner);
-			} else {
-				e->handle = bus1_handle_unref(h);
-				--n_installs;
-			}
-
-			if (--inflight->n_new < 1)
-				break;
-		}
-		BUS1_WARN_ON(inflight->n_new > 0);
-	}
-
-	if (n_installs > 0) {
-		mutex_lock(&dst->lock);
-		BUS1_HANDLE_BATCH_FOREACH_HANDLE(e, pos, &inflight->batch) {
-			h = e->handle;
-			if (!h || !RB_EMPTY_NODE(&h->rb_node))
-				continue;
-			if (BUS1_WARN_ON(!bus1_handle_was_attached(h)))
-				continue;
-
-			t = bus1_handle_install_holder(h);
-			if (t != h) {
-				bus1_handle_release_unlock(h, dst);
-				bus1_handle_unref(h);
-				e->handle = t;
-				mutex_lock(&dst->lock);
-			}
-
-			if (--n_installs < 1)
-				break;
-		}
-		mutex_unlock(&dst->lock);
-		BUS1_WARN_ON(n_installs > 0);
-	}
-}
-
-/**
- * bus1_handle_inflight_walk() - walk all handle IDs
- * @inflight:		inflight context to walk
- * @peer:		peer info of inflight owner
- * @pos:		current iterator position
- * @iter:		opaque iterator
- * @new:		counts new handle installs
- * @ids:		output storage for ID block
- * @timestamp:		timestamp of the transaction
- *
- * This walks over all stored handles of @inflight, returning their IDs in
- * blocks to the caller, instantiating them if necessary. If a given handle will
- * be invalid at @timestamp, BUS1_HANDLE_INVALID is returned instead. The caller
- * must initialize @pos to 0 and pre-allocate @ids large enough to hold IDs of
- * all stored handles, but at most BUS1_HANDLE_BATCH_SIZE.
- *
- * On each call, this function advances @pos and @iter to keep track of the
- * iteration, and updates @ids with the handle IDs of the current block. It
- * returns the size of the current block, which is at most
- * BUS1_HANDLE_BATCH_SIZE. For each newly to-be-installed user-space, it
- * increases @new by one.
- *
- * Once this returns 0, the iteration is finished.
- *
- * Return: Number of IDs in the next block, 0 if done.
- */
-size_t bus1_handle_inflight_walk(struct bus1_handle_inflight *inflight,
-				 struct bus1_peer *peer,
-				 size_t *pos,
-				 size_t *new,
-				 void **iter,
-				 u64 *ids,
-				 u64 timestamp,
-				 unsigned long sender)
-{
-	union bus1_handle_entry **block = (union bus1_handle_entry **)iter;
-	struct bus1_handle *h;
-	size_t i, n;
-
-	lockdep_assert_held(&peer->lock);
-
-	if (BUS1_WARN_ON(inflight->batch.n_handles !=
-			 inflight->batch.n_entries))
-		return 0;
-
-	n = bus1_handle_batch_walk(&inflight->batch, pos, block);
-
-	for (i = 0; i < n; ++i) {
-		h = (*block)[i].handle;
-		if (h) {
-			ids[i] = bus1_handle_prepare_publish(h, peer,
-							     timestamp, sender);
-			if (ids[i] != BUS1_HANDLE_INVALID &&
-			    atomic_read(&h->n_user) < 0)
-				++*new;
-		} else {
-			ids[i] = BUS1_HANDLE_INVALID;
-		}
-	}
-
-	return n;
-}
-
-/**
- * bus1_handle_inflight_commit() - commit inflight context
- * @inflight:		inflight context to commit
- * @seq:		sequence number of transaction
- *
- * This commits a fully installed inflight context, given the timestamp of a
- * transaction. This will make sure to only transfer the actual handles if it is
- * ordered *before* the handle destruction.
- *
- * This must be called after a successful walk via bus1_handle_inflight_walk().
- * You must not release the peer-lock in-between, and the same timestamp must
- * be provided.
- */
-void bus1_handle_inflight_commit(struct bus1_handle_inflight *inflight,
-				 struct bus1_peer *peer,
-				 u64 timestamp,
-				 unsigned long sender)
-{
-	union bus1_handle_entry *e;
-	size_t pos;
-
-	lockdep_assert_held(&peer->lock);
-	BUS1_WARN_ON(inflight->batch.n_handles != inflight->batch.n_entries);
-
-	BUS1_HANDLE_BATCH_FOREACH_HANDLE(e, pos, &inflight->batch) {
-		if (e->handle)
-			bus1_handle_publish(e->handle, peer, timestamp,
-					    sender, true);
-	}
+	if (h)
+		bus1_handle_forget_internal(h, false);
 }

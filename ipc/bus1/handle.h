@@ -24,7 +24,8 @@
  * Internally, objects are called 'nodes'. A reference to an object is a
  * 'handle'. Whenever a new node is created, the owner implicitly gains an
  * handle as well. In fact, handles are the only way to refer to a node. The
- * node itself is entirely hidden in the implementation.
+ * node itself is entirely hidden in the implementation, and visible in the API
+ * as an "anchor handle".
  *
  * Whenever a handle is passed as payload of a message, the target peer will
  * gain a handle linked to the same underlying node. This works regardless
@@ -32,20 +33,14 @@
  *
  * Each peer can identify all its handles (both owned and un-owned) by a 64-bit
  * integer. The namespace is local to each peer, and the numbers cannot be
- * compared with the numbers of other peers (in fact, they will be very likely
+ * compared with the numbers of other peers (in fact, they are very likely
  * to clash, but might still have *different* underlying nodes). However, if a
  * peer receives a reference to the same node multiple times, the resulting
- * handle will be the same. The kernel keeps count of how often each peer owns a
- * handle.
+ * handle will be the same. The kernel keeps count of how often each peer owns
+ * a handle.
  *
  * If a peer no longer requires a specific handle, it can release it. If the
  * peer releases its last reference to a handle, the handle will be destroyed.
- *
- * The ID of an handle is never reused. That is, once a handle was fully
- * released, any new handle the peer receives will have a different ID. Note,
- * however, that the handle of the owner of a node is internally pinned. As
- * such, it is always reused if the owner gains a handle to its own node again
- * (this is required for explicit node destruction).
  *
  * The owner of a node (and *only* the owner) can trigger the destruction of a
  * node (even if other peers still own handles to it). In this case, all peers
@@ -59,216 +54,259 @@
  * and all its handles are valid in every message that is transmitted *before*
  * the notification of its destruction. Furthermore, no message after this
  * notification will carry the ID of such a destroyed node.
- * Note that message transactions are fully async. That is, there is no unique
+ * Note that message transactions are asynchronous. That is, there is no unique
  * point in time that a message is synchronized with another message. Hence,
  * whether a specific handle passed with a message is still valid or not,
  * cannot be predicted by the sender, but only by one of the receivers.
  */
 
+#include <linux/atomic.h>
+#include <linux/err.h>
 #include <linux/kernel.h>
+#include <linux/kref.h>
 #include <linux/rbtree.h>
+#include "util.h"
+#include "util/queue.h"
 
-struct bus1_handle;
 struct bus1_peer;
-struct bus1_queue_node;
+struct bus1_tx;
 
 /**
- * struct bus1_handle_dest - destination context
- * @handle:		local destination handle
- * @raw_peer:		remote destination peer (raw active ref)
- * @idp:		user-memory to store allocated ID at
+ * enum bus1_handle_bits - node flags
+ * @BUS1_HANDLE_BIT_RELEASED:		The anchor handle has been released.
+ *					Any further attach operation will still
+ *					work, but result in a stale attach,
+ *					even in case of re-attach of the anchor
+ *					itself.
+ * @BUS1_HANDLE_BIT_DESTROYED:		A destruction has already been
+ *					scheduled for this node.
  */
-struct bus1_handle_dest {
-	struct bus1_handle *handle;
-	struct bus1_peer *raw_peer;
-	u64 __user *idp;
+enum bus1_handle_bits {
+	BUS1_HANDLE_BIT_RELEASED,
+	BUS1_HANDLE_BIT_DESTROYED,
 };
 
 /**
- * BUS1_HANDLE_BATCH_SIZE - number of handles per set in a batch
- *
- * We need to support large handle transactions, bigger than any linear
- * allocation we're supposed to do in a running kernel. Hence, we batch all
- * handles in a transaction into sets of this size. The `bus1_handle_batch`
- * object transparently hides this, and pretends it is a linear array.
+ * struct bus1_handle - object handle
+ * @ref:				object reference counter
+ * @n_weak:				number of weak references
+ * @n_user:				number of user references
+ * @holder:				holder of this handle
+ * @anchor:				anchor handle
+ * @tlink:				singly-linked list for free use
+ * @rb_to_peer:				rb-link into peer by ID
+ * @id:					current ID
+ * @qnode:				queue node for notifications
+ * @node.map_handles:			map of attached handles by peer
+ * @node.flags:				node flags
+ * @node.n_strong:			number of strong references
+ * @remote.rb_to_anchor:		rb-link into node by peer
  */
-#define BUS1_HANDLE_BATCH_SIZE (1024)
-
-/**
- * union bus1_handle_entry - batch entry
- * @next:		pointer to next batch entry
- * @handle:		pointer to stored handle
- * @id:			stored handle ID
- *
- * This union represents a single handle-entry in a batch. To support large
- * batches, we only store a limited number of handles consecutively. Once the
- * batch size is reached, a new batch is allocated and linked  This is all
- * hidden in the batch implementation, the details are hidden from the caller.
- */
-union bus1_handle_entry {
-	union bus1_handle_entry *next;
-	struct bus1_handle *handle;
+struct bus1_handle {
+	struct kref ref;
+	atomic_t n_weak;
+	atomic_t n_user;
+	struct bus1_peer *holder;
+	struct bus1_handle *anchor;
+	struct bus1_handle *tlink;
+	struct rb_node rb_to_peer;
 	u64 id;
+	struct bus1_queue_node qnode;
+	union {
+		struct {
+			struct rb_root map_handles;
+			unsigned long flags;
+			atomic_t n_strong;
+		} node;
+		struct {
+			struct rb_node rb_to_anchor;
+		} remote;
+	};
 };
 
-/**
- * struct bus1_handle_batch - dynamic set of handles
- * @n_entries:		number of ids or handles this batch carries (excluding
- *			.next pointers)
- * @n_handles:		number of slots that actually have a handle pinned
- * @entries:		stored entries
- *
- * The batch object allows handling multiple handles in a single set. Each
- * batch can store an unlimited number of handles, and internally they're
- * grouped into batches of BUS1_HANDLE_BATCH_SIZE entries.
- *
- * All handles are put into the trailing array @entries. However, at most
- * BUS1_HANDLE_BATCH_SIZE entries are stored there. If this number is exceeded,
- * then batch->entries[BUS1_HANDLE_BATCH_SIZE].next points to the next
- * dynamically allocated array of bus1_handle_entry objects. This can be
- * extended as often as you want, to support unlimited sized batches.
- *
- * The caller must not access @entries directly!
- */
-struct bus1_handle_batch {
-	size_t n_entries;
-	size_t n_handles;
-	union bus1_handle_entry entries[0];
-};
+struct bus1_handle *bus1_handle_new_anchor(struct bus1_peer *holder);
+struct bus1_handle *bus1_handle_new_remote(struct bus1_peer *holder,
+					   struct bus1_handle *other);
+void bus1_handle_free(struct kref *ref);
+struct bus1_peer *bus1_handle_acquire_owner(struct bus1_handle *handle);
+
+struct bus1_handle *bus1_handle_ref_by_other(struct bus1_peer *peer,
+					     struct bus1_handle *handle);
+
+struct bus1_handle *bus1_handle_acquire_slow(struct bus1_handle *handle,
+					     bool strong);
+struct bus1_handle *bus1_handle_acquire_locked(struct bus1_handle *handle,
+					       bool strong);
+void bus1_handle_release_slow(struct bus1_handle *h, bool strong);
+
+void bus1_handle_destroy_locked(struct bus1_handle *h, struct bus1_tx *tx);
+bool bus1_handle_is_live_at(struct bus1_handle *h, u64 timestamp);
+
+struct bus1_handle *bus1_handle_import(struct bus1_peer *peer,
+				       u64 id,
+				       bool *is_newp);
+u64 bus1_handle_identify(struct bus1_handle *h);
+void bus1_handle_export(struct bus1_handle *h);
+void bus1_handle_forget(struct bus1_handle *h);
+void bus1_handle_forget_keep(struct bus1_handle *h);
 
 /**
- * struct bus1_handle_transfer - handle transfer context
- * @n_new:		number of newly allocated nodes
- * @batch:		associated handles
+ * bus1_handle_is_anchor() - check whether handle is an anchor
+ * @h:			handle to check
  *
- * The bus1_handle_transfer object contains context state for message
- * transactions, regarding handle transfers. It pins all the local handles of
- * the sending peer for the whole duration of a transaction. It is usually used
- * to instantiate bus1_handle_inflight objects for each destination.
+ * This checks whether @h is an anchor. That is, @h was created via
+ * bus1_handle_new_anchor(), rather than via bus1_handle_new_remote().
  *
- * A transfer context should have the same lifetime as the parent transaction
- * context.
- *
- * Note that the tail of the object contains a dynamically sized array with the
- * first handle-set of @batch.
+ * Return: True if it is an anchor, false if not.
  */
-struct bus1_handle_transfer {
-	size_t n_new;
-	struct bus1_handle_batch batch;
-	/* @batch must be last */
-};
-
-/**
- * struct bus1_handle_inflight - set of inflight handles
- * @n_new:		number of newly allocated nodes
- * @batch:		associated handles
- *
- * The bus1_handle_inflight object carries state for each message instance
- * regarding handle transfers. That is, it contains all the handle instances
- * for the receiver of the message (while bus1_handle_transfer pins the handles
- * of the sender). This object is usually embedded in the queue-entry that is
- * used to send a single message instance to another peer.
- *
- * Note that the tail of the object contains a dynamically sized array with the
- * first handle-set of @batch.
- */
-struct bus1_handle_inflight {
-	size_t n_new;
-	struct bus1_handle_batch batch;
-	/* @batch must be last */
-};
-
-/* api */
-u64 bus1_handle_unref_queued(struct bus1_queue_node *node);
-int bus1_handle_pair(struct bus1_peer *peer,
-		     struct bus1_peer *clone,
-		     u64 *node_idp,
-		     u64 *handle_idp);
-int bus1_handle_release_by_id(struct bus1_peer *peer,
-			      u64 id,
-			      size_t *n_handlesp);
-int bus1_node_destroy_by_id(struct bus1_peer *peer,
-			    u64 *idp,
-			    size_t *n_handlesp);
-void bus1_handle_flush_all(struct bus1_peer *peer,
-			   size_t *n_handlesp,
-			   bool final);
-
-/* destination context */
-void bus1_handle_dest_init(struct bus1_handle_dest *dest);
-void bus1_handle_dest_destroy(struct bus1_handle_dest *dest,
-			      struct bus1_peer *peer);
-int bus1_handle_dest_import(struct bus1_handle_dest *dest,
-			    struct bus1_peer *peer,
-			    u64 __user *idp);
-u64 bus1_handle_dest_export(struct bus1_handle_dest *dest,
-			    struct bus1_peer *peer,
-			    u64 timestamp,
-			    unsigned long sender,
-			    bool commit);
-
-/* transfer contexts */
-void bus1_handle_transfer_init(struct bus1_handle_transfer *transfer,
-			       size_t n_entries);
-void bus1_handle_transfer_release(struct bus1_handle_transfer *transfer,
-				  struct bus1_peer *peer);
-void bus1_handle_transfer_destroy(struct bus1_handle_transfer *transfer);
-int bus1_handle_transfer_import(struct bus1_handle_transfer *transfer,
-				struct bus1_peer *peer,
-				const u64 __user *ids,
-				size_t n_ids);
-int bus1_handle_transfer_export(struct bus1_handle_transfer *transfer,
-				struct bus1_peer *peer,
-				u64 __user *ids,
-				size_t n_ids);
-
-/* inflight tracking */
-void bus1_handle_inflight_init(struct bus1_handle_inflight *inflight,
-			       size_t n_entries);
-void bus1_handle_inflight_destroy(struct bus1_handle_inflight *inflight);
-void bus1_handle_inflight_flush(struct bus1_handle_inflight *inflight,
-				struct bus1_peer *peer);
-int bus1_handle_inflight_import(struct bus1_handle_inflight *inflight,
-				struct bus1_peer *peer,
-				struct bus1_handle_transfer *transfer,
-				struct bus1_peer *src);
-void bus1_handle_inflight_install(struct bus1_handle_inflight *inflight,
-				  struct bus1_peer *dst);
-size_t bus1_handle_inflight_walk(struct bus1_handle_inflight *inflight,
-				 struct bus1_peer *peer,
-				 size_t *pos,
-				 size_t *new,
-				 void **iter,
-				 u64 *ids,
-				 u64 timestamp,
-				 unsigned long sender);
-void bus1_handle_inflight_commit(struct bus1_handle_inflight *inflight,
-				 struct bus1_peer *peer,
-				 u64 timestamp,
-				 unsigned long sender);
-
-/**
- * bus1_handle_batch_inline_size() - calculate required inline size
- * @n_entries:		size of batch
- *
- * This calculates the size of the trailing entries array that is to be
- * embedded into a "struct bus1_handle_batch". That is, to statically allocate
- * a batch, you need a memory block of size:
- *
- *     sizeof(struct bus1_handle_batch) + bus1_handle_batch_inline_size(n);
- *
- * where 'n' is the number of entries to store. Note that @n is capped. You
- * still need to call bus1_handle_batch_create() afterwards, to make sure the
- * memory is properly allocated, in case it does not fit into a single set.
- *
- * Return: Size of required trailing bytes of a batch structure.
- */
-static inline size_t bus1_handle_batch_inline_size(size_t n_entries)
+static inline bool bus1_handle_is_anchor(struct bus1_handle *h)
 {
-	if (n_entries < BUS1_HANDLE_BATCH_SIZE)
-		return sizeof(union bus1_handle_entry) * n_entries;
+	return h == h->anchor;
+}
 
-	return sizeof(union bus1_handle_entry) * (BUS1_HANDLE_BATCH_SIZE + 1);
+/**
+ * bus1_handle_is_live() - check whether handle is live
+ * @h:			handle to check
+ *
+ * This checks whether the given handle is still live. That is, its anchor was
+ * not destroyed, yet.
+ *
+ * Return: True if it is live, false if already destroyed.
+ */
+static inline bool bus1_handle_is_live(struct bus1_handle *h)
+{
+	return !test_bit(BUS1_HANDLE_BIT_DESTROYED, &h->anchor->node.flags);
+}
+
+/**
+ * bus1_handle_is_public() - check whether handle is public
+ * @h:			handle to check
+ *
+ * This checks whether the given handle is public. That is, it was exported to
+ * user-space and at least one public reference is left.
+ *
+ * Return: True if it is public, false if not.
+ */
+static inline bool bus1_handle_is_public(struct bus1_handle *h)
+{
+	return atomic_read(&h->n_user) > 0;
+}
+
+/**
+ * bus1_handle_ref() - acquire object reference
+ * @h:			handle to operate on, or NULL
+ *
+ * This acquires an object reference to @h. The caller must already hold a
+ * reference. Otherwise, the behavior is undefined.
+ *
+ * If NULL is passed, this is a no-op.
+ *
+ * Return: @h is returned.
+ */
+static inline struct bus1_handle *bus1_handle_ref(struct bus1_handle *h)
+{
+	if (h)
+		kref_get(&h->ref);
+	return h;
+}
+
+/**
+ * bus1_handle_unref() - release object reference
+ * @h:			handle to operate on, or NULL
+ *
+ * This releases an object reference. If the reference count drops to 0, the
+ * object is released (rcu-delayed).
+ *
+ * If NULL is passed, this is a no-op.
+ *
+ * Return: NULL is returned.
+ */
+static inline struct bus1_handle *bus1_handle_unref(struct bus1_handle *h)
+{
+	if (h)
+		kref_put(&h->ref, bus1_handle_free);
+	return NULL;
+}
+
+/**
+ * bus1_handle_acquire() - acquire weak/strong reference
+ * @h:			handle to operate on, or NULL
+ * @strong:		whether to acquire a strong reference
+ *
+ * This acquires a weak/strong reference to the node @h is attached to.
+ * This always succeeds. However, if a conflict is detected, @h is
+ * unreferenced and the conflicting handle is returned (with an object
+ * reference taken and strong reference acquired).
+ *
+ * If NULL is passed, this is a no-op.
+ *
+ * Return: Pointer to the acquired handle is returned.
+ */
+static inline struct bus1_handle *
+bus1_handle_acquire(struct bus1_handle *h,
+		    bool strong)
+{
+	if (h) {
+		if (bus1_atomic_add_if_ge(&h->n_weak, 1, 1) < 1) {
+			h = bus1_handle_acquire_slow(h, strong);
+		} else if (bus1_atomic_add_if_ge(&h->anchor->node.n_strong,
+						 1, 1) < 1) {
+			WARN_ON(h != bus1_handle_acquire_slow(h, strong));
+			WARN_ON(atomic_dec_return(&h->n_weak) < 1);
+		}
+	}
+	return h;
+}
+
+/**
+ * bus1_handle_release() - release weak/strong reference
+ * @h:			handle to operate on, or NULL
+ * @strong:		whether to release a strong reference
+ *
+ * This releases a weak or strong reference to the node @h is attached to.
+ *
+ * If NULL is passed, this is a no-op.
+ *
+ * Return: NULL is returned.
+ */
+static inline struct bus1_handle *
+bus1_handle_release(struct bus1_handle *h, bool strong)
+{
+	if (h) {
+		if (strong &&
+		    bus1_atomic_add_if_ge(&h->anchor->node.n_strong, -1, 2) < 2)
+			bus1_handle_release_slow(h, true);
+		else if (bus1_atomic_add_if_ge(&h->n_weak, -1, 2) < 2)
+			bus1_handle_release_slow(h, false);
+	}
+	return NULL;
+}
+
+/**
+ * bus1_handle_release_n() - release multiple references
+ * @h:			handle to operate on, or NULL
+ * @n:			number of references to release
+ * @strong:		whether to release strong references
+ *
+ * This releases @n weak or strong references to the node @h is attached to.
+ *
+ * If NULL is passed, this is a no-op.
+ *
+ * Return: NULL is returned.
+ */
+static inline struct bus1_handle *
+bus1_handle_release_n(struct bus1_handle *h, unsigned int n, bool strong)
+{
+	if (h && n > 0) {
+		if (n > 1) {
+			if (strong)
+				WARN_ON(atomic_sub_return(n - 1,
+						&h->anchor->node.n_strong) < 1);
+			WARN_ON(atomic_sub_return(n - 1, &h->n_weak) < 1);
+		}
+		bus1_handle_release(h, strong);
+	}
+	return NULL;
 }
 
 #endif /* __BUS1_HANDLE_H */
