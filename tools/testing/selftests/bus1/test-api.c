@@ -430,6 +430,88 @@ static void test_api_multicast(void)
 	test_close(fd1, map1, n_map1);
 }
 
+/* make sure basic payload-handles work */
+static void test_api_handle(void)
+{
+	struct bus1_cmd_send cmd_send;
+	struct bus1_cmd_recv cmd_recv;
+	uint64_t id = 0x100;
+	const uint8_t *map1;
+	size_t n_map1;
+	int r, fd1;
+
+	/* setup */
+
+	fd1 = test_open(&map1, &n_map1);
+
+	/* send message */
+
+	cmd_send = (struct bus1_cmd_send){
+		.flags			= 0,
+		.ptr_destinations	= (unsigned long)&id,
+		.ptr_errors		= 0,
+		.n_destinations		= 1,
+		.ptr_vecs		= 0,
+		.n_vecs			= 0,
+		.ptr_handles		= (unsigned long)&id,
+		.n_handles		= 1,
+		.ptr_fds		= 0,
+		.n_fds			= 0,
+	};
+	r = bus1_ioctl_send(fd1, &cmd_send);
+	assert(r >= 0);
+
+	/* retrieve messages */
+
+	cmd_recv = (struct bus1_cmd_recv){
+		.flags = 0,
+		.max_offset = n_map1,
+	};
+	r = bus1_ioctl_recv(fd1, &cmd_recv);
+	assert(r >= 0);
+	assert(cmd_recv.msg.type == BUS1_MSG_DATA);
+	assert(cmd_recv.msg.flags == 0);
+	assert(cmd_recv.msg.destination == id);
+	assert(cmd_recv.msg.n_handles == 1);
+
+	/* queue must be empty now */
+
+	cmd_recv = (struct bus1_cmd_recv){
+		.flags = 0,
+		.max_offset = n_map1,
+	};
+	r = bus1_ioctl_recv(fd1, &cmd_recv);
+	assert(r == -EAGAIN);
+
+	/* releasing one reference must trigger a release notification */
+
+	r = bus1_ioctl_handle_release(fd1, &id);
+	assert(r >= 0);
+
+	cmd_recv = (struct bus1_cmd_recv){
+		.flags = 0,
+		.max_offset = n_map1,
+	};
+	r = bus1_ioctl_recv(fd1, &cmd_recv);
+	assert(r >= 0);
+	assert(cmd_recv.msg.type == BUS1_MSG_NODE_RELEASE);
+	assert(cmd_recv.msg.flags == 0);
+	assert(cmd_recv.msg.destination == id);
+
+	/* queue must be empty again */
+
+	cmd_recv = (struct bus1_cmd_recv){
+		.flags = 0,
+		.max_offset = n_map1,
+	};
+	r = bus1_ioctl_recv(fd1, &cmd_recv);
+	assert(r == -EAGAIN);
+
+	/* cleanup */
+
+	test_close(fd1, map1, n_map1);
+}
+
 int main(int argc, char **argv)
 {
 	int r;
@@ -443,6 +525,7 @@ int main(int argc, char **argv)
 		test_api_notify_destroy();
 		test_api_unicast();
 		test_api_multicast();
+		test_api_handle();
 	}
 
 	return r < 0 ? EXIT_FAILURE : EXIT_SUCCESS;
