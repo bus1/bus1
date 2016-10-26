@@ -818,16 +818,4 @@ Local peer was already disconnected.
     </variablelist>
   </refsect1> <!-- ERRORS -->
 
-  <refsect1> <!-- SEE ALSO -->
-    <title>See Also</title>
-    <simplelist type="inline">
-      <member>
-        <citerefentry>
-          <refentrytitle>bus1.pool</refentrytitle>
-          <manvolnum>7</manvolnum>
-        </citerefentry>
-      </member>
-    </simplelist>
-  </refsect1> <!-- SEE ALSO -->
-
 </refentry>
