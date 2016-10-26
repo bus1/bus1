@@ -99,9 +99,12 @@ handle on that particular peer. The ID is only valid locally on that peer, it
 cannot be used by remote peers to address the handle (in other words, the ID
 namespace is tied to each peer and does not define global entities). When
 creating a new node, userspace freely selects the ID except that the
-<constant>BUS1_HANDLE_FLAG_REMOTE</constant> bit must be cleared, and when
+<constant>BUS1_HANDLE_FLAG_MANAGED</constant> bit must be cleared, and when
 receiving a handle from a remote peer the kernel assigns the ID, which always
-has the <constant>BUS1_HANDLE_FLAG_REMOTE</constant> set. An ID assigned by the
+has the <constant>BUS1_HANDLE_FLAG_MANAGED</constant> set. Additionally, the
+<constant>BUS1_HANDLE_FLAG_REMOTE</constant> flag tells whether a specific ID
+refers to a remote handle (if set), or to an owner handle (if unset). An ID
+assigned by the
 kernel is never reused, even after a handle has been dropped. The kernel keeps a
 user-reference count for each handle. Every time a handle is exposed to a peer,
 the user-reference count of that handle is incremented by one. This is never
@@ -120,7 +123,7 @@ the same remote node again, its ID will be different, as IDs are never reused.
 New nodes are allocated on-demand by passing the desired ID to the kernel in any
 ioctl that accepts a handle ID. When allocating a new node, the node owner
 implicitly also gets a handle to that node. As long as the node is valid, the
-kernel will pin a single user-referenceto the owner's handle. This guarantees
+kernel will pin a single user-reference to the owner's handle. This guarantees
 that a node owner always retains access to their node, until they explicitly
 destroy it (which will make it possible for userspace to release the handle like
 any other). Once all the handles to a local node have been released, no more
@@ -128,9 +131,9 @@ messages destined for the node will be received. Otherwise, a handle to a local
 node behaves just like any other handle, that is, user-references are acquired
 and released according to its use. However, whenever the overall sum of all
 user-references on all handles to a node drops to one (which implies that only
-the pinned reference of the owner is left), a notification is queued on the node
-owner. If the counter is incremented again, any such notification is dropped, if
-not already dequeued.
+the pinned reference of the owner is left), a release-notification is queued on
+the node owner. If the counter is incremented again, any such notification is
+dropped, if not already dequeued.
       </para>
     </refsect2>
 
@@ -156,7 +159,7 @@ The kernel amends all data messages with the <varname>uid</varname>,
 <varname>gid</varname>, <varname>pid</varname>, <varname>tid</varname>, and
 optionally the security context of the sending peer. The information is
 collected from the sending peer when the message is sent and translated into the
-namespaces of the receiving peer (which was pinned when the peer was created).
+namespaces of the receiving peer's file-descriptor.
       </para>
     </refsect2>
 
@@ -592,6 +595,7 @@ struct bus1_cmd_recv {
         __u64 max_offset;
         struct {
                 __u64 type;
+                __u64 flags;
                 __u64 destination;
                 __u32 uid;
                 __u32 gid;
@@ -601,6 +605,7 @@ struct bus1_cmd_recv {
                 __u64 n_bytes;
                 __u64 n_handles;
                 __u64 n_fds;
+                __u64 n_secctx;
         } msg;
 };
 </programlisting>
@@ -630,6 +635,14 @@ that all the references to handles referencing the node in
 <varname>msg.destination</varname> have been released.
                   </para>
                   <para>
+<varname>msg.flags</varname> indicates additional flags of the message.
+<constant>BUS1_MSG_FLAG_HAS_SECCTX</constant> indicates that a security context
+was attached to the message (to distinguish an empty <varname>n_secctx</varname>
+from an invalid one).
+<constant>BUS1_MSG_FLAG_CONTINUE</constant> indicates that there are more
+messages queued which belong to the same message transaction.
+                  </para>
+                  <para>
 <varname>msg.destination</varname> is the ID of the destination node or handle
 of the message.
                   </para>
@@ -653,7 +666,12 @@ message, or 0 if <constant>BUS1_RECV_FLAG_INSTALL_FDS</constant> was not set.
 The file descriptor numbers are stored in the pool following the handle array
 (and possibly padding to make the array 8-byte aligned).
                   </para>
-<!-- XXX: document n_secctx and verify the behavior without INSTALL_FDS -->
+                  <para>
+<varname>msg.n_secctx</varname> is the number of bytes attached to the message,
+which contain the security context of the sender. The security context is
+stored in the pool following the payload (and possibly padding to make it
+8-byte aligned).
+                  </para>
                 </listitem>
               </varlistentry>
             </variablelist>
