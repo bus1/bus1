@@ -80,11 +80,11 @@ bool bus1_active_deactivate(struct bus1_active *active);
 void bus1_active_drain(struct bus1_active *active, wait_queue_head_t *waitq);
 bool bus1_active_cleanup(struct bus1_active *active,
 			 wait_queue_head_t *waitq,
-			 void (*cleanup) (struct bus1_active *, void *),
+			 void (*cleanup)(struct bus1_active *, void *),
 			 void *userdata);
 
 #ifdef CONFIG_DEBUG_LOCK_ALLOC
-#  define bus1_active_init(_active) 					\
+#  define bus1_active_init(_active)					\
 	({								\
 		static struct lock_class_key bus1_active_lock_key;	\
 		lockdep_init_map(&(_active)->dep_map, "bus1.active",	\
