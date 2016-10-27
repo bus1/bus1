@@ -22,7 +22,7 @@ extern "C" {
 static inline int
 bus1_ioctl(int fd, unsigned int cmd, void *arg)
 {
-	return (ioctl(fd, cmd, arg) >= 0) ? 0: -errno;
+	return (ioctl(fd, cmd, arg) >= 0) ? 0 : -errno;
 }
 
 static inline int
