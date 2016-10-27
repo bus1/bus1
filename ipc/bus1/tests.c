@@ -192,13 +192,13 @@ static void bus1_test_queue(void)
 
 	/* set type to 0 and sender group to numbers to make order obvious */
 	bus1_queue_node_init(&n1a, 0);
-	n1a.group = (void*)1;
+	n1a.group = (void *)1;
 	bus1_queue_node_init(&n1b, 0);
-	n1b.group = (void*)1;
+	n1b.group = (void *)1;
 	bus1_queue_node_init(&n2a, 0);
-	n2a.group = (void*)2;
+	n2a.group = (void *)2;
 	bus1_queue_node_init(&n2b, 0);
-	n2b.group = (void*)2;
+	n2b.group = (void *)2;
 
 	/* arbitrarily initialize the clocks */
 	WARN_ON(bus1_queue_sync(&q1, 2) != 2);
