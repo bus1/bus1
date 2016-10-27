@@ -235,7 +235,7 @@ accordingly.
       </para>
       <para>
 Also in the case where there can be no causal relationship, we are guaranteed a
-global order. In case two events happend concurrently, there can never be any
+global order. In case two events happened concurrently, there can never be any
 inconsistency in which occurred before the other. By way of example, consider
 two peers sending one message each to two different peers, we are guaranteed
 that both the recipient peers receive the two messages in the same order, even
