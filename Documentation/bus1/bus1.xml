@@ -145,7 +145,7 @@ destinations. Unless requested otherwise, the message transaction fully succeeds
 or fully fails.
       </para>
       <para>
-To receive messag payloads, each peer has an associated shmem-backed
+To receive message payloads, each peer has an associated shmem-backed
 <emphasis>pool</emphasis> which may be mapped read-only by the receiving peer.
 The kernel copies the message payload directly from the sending peer to each of
 the receivers' pool without an intermediary kernel buffer. The pool is divided
