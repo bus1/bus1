@@ -700,7 +700,7 @@ static void bus1_test_handle_ids(void)
 
 	bus1_mutex_lock2(&p[0]->local.lock, &p[1]->local.lock);
 
-	/* test non-existant remote lookup (must fail) */
+	/* test non-existent remote lookup (must fail) */
 
 	id = BUS1_HANDLE_FLAG_REMOTE;
 	t = bus1_handle_import(p[0], id, &is_new);
@@ -709,7 +709,7 @@ static void bus1_test_handle_ids(void)
 	t = bus1_handle_import(p[0], id, &is_new);
 	WARN_ON(!IS_ERR(t) || PTR_ERR(t) != -ENXIO);
 
-	/* test non-existant node lookup (creates and links node) */
+	/* test non-existent node lookup (creates and links node) */
 
 	id = 0;
 	h[0] = bus1_handle_import(p[0], id, &is_new);

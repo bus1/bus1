@@ -274,7 +274,7 @@ int bus1_factory_seal(struct bus1_factory *f)
  * @handle:			destination handle
  * @peer:			destination peer
  *
- * This instantiates a new message targetted at @handle, based on the plans in
+ * This instantiates a new message targeted at @handle, based on the plans in
  * the message factory @f.
  *
  * The newly created message is not linked into any contexts, but is available
