@@ -19,7 +19,7 @@
  *
  * Fixed lists are a combination of a linked list and a static array. That is,
  * fixed lists behave like linked lists (no random access, but arbitrary size),
- * but compare in speed with arrays (consequetive accesses are fast). Unlike
+ * but compare in speed with arrays (consecutive accesses are fast). Unlike
  * fixed arrays, fixed lists can hold huge number of elements without requiring
  * vmalloc(), but solely relying on small-size kmalloc() allocations.
  *
