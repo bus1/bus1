@@ -443,7 +443,7 @@ If <varname>peer_flags</varname> has
 sending task is attached to each message received by this peer.
 <varname>max_slices</varname>, <varname>max_handles</varname>,
 <varname>max_inflight_bytes</varname>, and <varname>max_inflight_fds</varname>
-are the resource limits for this peer. Note that these are simply max valuse,
+are the resource limits for this peer. Note that these are simply max values,
 the resource usage is also limited per user.
                   </para>
                   <para>
