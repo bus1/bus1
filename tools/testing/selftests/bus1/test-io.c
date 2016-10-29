@@ -41,10 +41,10 @@ static void test_one_uds(int uds[2], void *payload, size_t n_bytes)
 
 static uint64_t test_iterate_uds(unsigned int iterations, size_t n_bytes)
 {
-	int uds[2];
+	uint64_t time_start, time_end;
 	char payload[n_bytes];
 	unsigned int i;
-	uint64_t time_start, time_end;
+	int uds[2];
 	int r;
 
 	/* create socket pair */
@@ -73,9 +73,9 @@ static void test_one(int fd1,
 		     char *payload,
 		     size_t n_bytes)
 {
+	struct iovec vec = { payload, n_bytes };
 	struct bus1_cmd_send cmd_send;
 	struct bus1_cmd_recv cmd_recv;
-	struct iovec vec = { payload, n_bytes };
 	size_t i;
 	int r;
 
@@ -116,8 +116,8 @@ static uint64_t test_iterate(unsigned int iterations,
 {
 	struct bus1_cmd_handle_transfer cmd_transfer;
 	const uint8_t *maps[MAX_DESTINATIONS + 1];
-	size_t n_maps[MAX_DESTINATIONS + 1];
 	uint64_t handles[MAX_DESTINATIONS + 1];
+	size_t n_maps[MAX_DESTINATIONS + 1];
 	int r, fds[MAX_DESTINATIONS + 1];
 	uint64_t time_start, time_end;
 	char payload[n_bytes];
