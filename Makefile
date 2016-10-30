@@ -94,6 +94,7 @@ check:
 clean:
 	rm -f *.o *~ core .depend .*.cmd *.ko *.mod.c
 	rm -f ipc/bus1/{*.ko,*.o,.*.cmd,*.order,*.mod.c}
+	rm -f ipc/bus1/util/*.o
 	rm -f Module.markers Module.symvers modules.order
 	rm -f Documentation/bus1/{*.7,*.html}
 	rm -f tools/testing/selftests/bus1/*.o
