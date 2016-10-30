@@ -62,7 +62,7 @@ message into the message queue of the peer context that owns this object.
     <para>
 The message bus manages object access using capabilities. That is, by default
 only the owner of an object is granted access rights. No other peer can access
-the object, nor are they aware of the existance of the object. However, access
+the object, nor are they aware of the existence of the object. However, access
 rights can be transmitted as auxiliary data with any message, effectively
 granting them to the receiver of the message. This even works transitively, that
 is, any peer that was granted access to an object can pass on those rights, even
@@ -213,7 +213,7 @@ always possible to consider one to have happened before the other in such a way
 that it is consistent with all the effects observed on the bus.
       </para>
       <para>
-For instance, if two events occurr on one peer (say the sending of a message,
+For instance, if two events occur on one peer (say the sending of a message,
 and the destruction of a node), and they are observed on another peer (by
 receiving the message and receiving a destruction notification for the node), we
 are guaranteed that the order the events occurred in and the order they were
@@ -226,7 +226,7 @@ sends a further message to the second recipient, it is guaranteed that the
 original message is received before the subsequent one.
       </para>
       <para>
-This principle of causality is also respected in the pressence of side-channel
+This principle of causality is also respected in the presence of side-channel
 communication. That is, if one event may have triggered another, even if on
 different, disconnected, peers, we are guaranteed that the events are ordered
 accordingly. To be precise, if one event (such as receiving a message) completed
