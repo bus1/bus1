@@ -27,7 +27,8 @@ obj-$(CONFIG_BUS1) += ipc/bus1/
 
 BUS1EXT			?= 1
 KERNELVER		?= $(shell uname -r)
-KERNELDIR 		?= /lib/modules/$(KERNELVER)/build
+MODLIB			:= $(INSTALL_MOD_PATH)/lib/modules/$(KERNELVER)
+KERNELDIR 		?= $(MODLIB)/build
 SHELL			:= /bin/bash
 PWD			:= $(shell pwd)
 EXTRA_CFLAGS		+= -I$(PWD)/include -DCONFIG_BUS1_TESTS=1
@@ -101,13 +102,13 @@ clean:
 .PHONY: clean
 
 install: module
-	mkdir -p /lib/modules/$(KERNELVER)/kernel/ipc/bus1/
-	cp -f ipc/bus1/bus$(BUS1EXT).ko /lib/modules/$(KERNELVER)/kernel/ipc/bus1/
-	depmod $(KERNELVER)
+	mkdir -p $(MODLIB)/kernel/ipc/bus1/
+	cp -f ipc/bus1/bus$(BUS1EXT).ko $(MODLIB)/kernel/ipc/bus1/
+	depmod -b $(INSTALL_MOD_PATH) $(KERNELVER)
 .PHONY: install
 
 uninstall:
-	rm -f /lib/modules/$(KERNELVER)/kernel/ipc/bus1/bus$(BUS1EXT).ko
+	rm -f $(MODLIB)/kernel/ipc/bus1/bus$(BUS1EXT).ko
 .PHONY: uninstall
 
 tt-prepare: module
