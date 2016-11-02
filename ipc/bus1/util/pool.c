@@ -25,55 +25,83 @@
 #include <linux/uio.h>
 #include "pool.h"
 
-static struct bus1_pool_slice *bus1_pool_slice_new(size_t offset, size_t size)
+static int bus1_pool_slice_init(struct bus1_pool_slice *slice,
+				size_t offset,
+				size_t size,
+				size_t free)
+{
+	if (offset > U32_MAX || size > U32_MAX || free > U32_MAX ||
+	    offset + size + free > BUS1_POOL_SLICE_SIZE_MAX)
+		return -EMSGSIZE;
+
+	slice->offset = offset;
+	slice->size = size;
+	slice->free = free;
+
+	slice->ref_kernel = true;
+	slice->ref_user = false;
+
+	INIT_LIST_HEAD(&slice->entry);
+
+	return 0;
+}
+
+static struct bus1_pool_slice *bus1_pool_slice_new(size_t offset,
+						   size_t size,
+						   size_t free)
 {
 	struct bus1_pool_slice *slice;
-
-	if (offset > U32_MAX || size == 0 || size > BUS1_POOL_SLICE_SIZE_MAX)
-		return ERR_PTR(-EMSGSIZE);
+	int r;
 
 	slice = kmalloc(sizeof(*slice), GFP_KERNEL);
 	if (!slice)
 		return ERR_PTR(-ENOMEM);
 
-	slice->offset = offset;
-	slice->size = size;
+	r = bus1_pool_slice_init(slice, offset, size, free);
+	if (r < 0) {
+		kfree(slice);
+		return ERR_PTR(r);
+	}
 
 	return slice;
 }
 
 /* insert slice into the free tree */
 static void bus1_pool_slice_link_free(struct bus1_pool_slice *slice,
-				      struct bus1_pool *pool)
+					 struct bus1_pool *pool)
 {
 	struct rb_node **n, *prev = NULL;
 	struct bus1_pool_slice *ps;
 
+	WARN_ON(slice->free == 0);
+
 	n = &pool->slices_free.rb_node;
 	while (*n) {
 		prev = *n;
-		ps = container_of(prev, struct bus1_pool_slice, rb);
-		if (slice->size < ps->size)
+		ps = container_of(prev, struct bus1_pool_slice, rb_free);
+		if (slice->free < ps->free)
 			n = &prev->rb_left;
 		else
 			n = &prev->rb_right;
 	}
 
-	rb_link_node(&slice->rb, prev, n);
-	rb_insert_color(&slice->rb, &pool->slices_free);
+	rb_link_node(&slice->rb_free, prev, n);
+	rb_insert_color(&slice->rb_free, &pool->slices_free);
 }
 
-/* insert slice into the busy tree */
-static void bus1_pool_slice_link_busy(struct bus1_pool_slice *slice,
-				      struct bus1_pool *pool)
+/* insert slice into the offset tree */
+static void bus1_pool_slice_link_offset(struct bus1_pool_slice *slice,
+					struct bus1_pool *pool)
 {
 	struct rb_node **n, *prev = NULL;
 	struct bus1_pool_slice *ps;
 
-	n = &pool->slices_busy.rb_node;
+	WARN_ON(slice->size == 0);
+
+	n = &pool->slices_offset.rb_node;
 	while (*n) {
 		prev = *n;
-		ps = container_of(prev, struct bus1_pool_slice, rb);
+		ps = container_of(prev, struct bus1_pool_slice, rb_offset);
 		if (WARN_ON(slice->offset == ps->offset))
 			n = &prev->rb_right; /* add anyway */
 		else if (slice->offset < ps->offset)
@@ -82,28 +110,28 @@ static void bus1_pool_slice_link_busy(struct bus1_pool_slice *slice,
 			n = &prev->rb_right;
 	}
 
-	rb_link_node(&slice->rb, prev, n);
-	rb_insert_color(&slice->rb, &pool->slices_busy);
+	rb_link_node(&slice->rb_offset, prev, n);
+	rb_insert_color(&slice->rb_offset, &pool->slices_offset);
 
 	pool->allocated_size += slice->size;
 }
 
-/* find free slice big enough to hold @size bytes */
+/* find free space large enough to hold @size bytes */
 static struct bus1_pool_slice *
-bus1_pool_slice_find_by_size(struct bus1_pool *pool, size_t size)
+bus1_pool_slice_find_free(struct bus1_pool *pool, size_t size)
 {
 	struct bus1_pool_slice *ps, *closest = NULL;
 	struct rb_node *n;
 
 	n = pool->slices_free.rb_node;
 	while (n) {
-		ps = container_of(n, struct bus1_pool_slice, rb);
-		if (size < ps->size) {
+		ps = container_of(n, struct bus1_pool_slice, rb_free);
+		if (size < ps->free) {
 			closest = ps;
 			n = n->rb_left;
-		} else if (size > ps->size) {
+		} else if (size > ps->free) {
 			n = n->rb_right;
-		} else /* if (size == ps->size) */ {
+		} else /* if (size == ps->free) */ {
 			return ps;
 		}
 	}
@@ -118,9 +146,9 @@ bus1_pool_slice_find_by_offset(struct bus1_pool *pool, size_t offset)
 	struct bus1_pool_slice *ps;
 	struct rb_node *n;
 
-	n = pool->slices_busy.rb_node;
+	n = pool->slices_offset.rb_node;
 	while (n) {
-		ps = container_of(n, struct bus1_pool_slice, rb);
+		ps = container_of(n, struct bus1_pool_slice, rb_offset);
 		if (offset < ps->offset)
 			n = n->rb_left;
 		else if (offset > ps->offset)
@@ -143,13 +171,10 @@ bus1_pool_slice_find_by_offset(struct bus1_pool *pool, size_t offset)
  */
 int bus1_pool_init(struct bus1_pool *pool, const char *filename)
 {
-	struct bus1_pool_slice *slice;
 	struct page *p;
 	struct file *f;
 	int r;
 
-	/* cannot calculate width of bitfields, so hardcode '4' as flag-size */
-	BUILD_BUG_ON(BUS1_POOL_SLICE_SIZE_BITS + 3 > 32);
 	BUILD_BUG_ON(BUS1_POOL_SLICE_SIZE_MAX > U32_MAX);
 
 	f = shmem_file_setup(filename, ALIGN(BUS1_POOL_SLICE_SIZE_MAX, 8),
@@ -167,20 +192,16 @@ int bus1_pool_init(struct bus1_pool *pool, const char *filename)
 	pool->allocated_size = 0;
 	INIT_LIST_HEAD(&pool->slices);
 	pool->slices_free = RB_ROOT;
-	pool->slices_busy = RB_ROOT;
+	pool->slices_offset = RB_ROOT;
 
-	slice = bus1_pool_slice_new(0, BUS1_POOL_SLICE_SIZE_MAX);
-	if (IS_ERR(slice)) {
-		bus1_pool_deinit(pool);
-		return PTR_ERR(slice);
+	r = bus1_pool_slice_init(&pool->root_slice, 0, 0,
+				 BUS1_POOL_SLICE_SIZE_MAX);
+	if (r < 0) {
+		fput(f);
+		return r;
 	}
-
-	slice->free = true;
-	slice->ref_kernel = false;
-	slice->ref_user = false;
-
-	list_add(&slice->entry, &pool->slices);
-	bus1_pool_slice_link_free(slice, pool);
+	bus1_pool_slice_link_free(&pool->root_slice, pool);
+	list_add(&pool->root_slice.entry, &pool->slices);
 
 	/*
 	 * Touch first page of client pool so the initial allocation overhead
@@ -199,27 +220,26 @@ int bus1_pool_init(struct bus1_pool *pool, const char *filename)
  * bus1_pool_deinit() - destroy pool
  * @pool:	pool to destroy, or NULL
  *
- * This destroys a pool that was previously create via bus1_pool_init(). If
- * NULL is passed, or if @pool->f is NULL (i.e., the pool was initialized to 0
- * but not created via bus1_pool_init(), yet), then this is a no-op.
+ * This destroys a pool that was previously create via bus1_pool_init(). The
+ * caller must flush the pool before calling this. If NULL is passed, or if
+ * @pool->f is NULL (i.e., the pool was initialized to 0 but not created via
+ * bus1_pool_init(), yet), then this is a no-op.
  *
- * The caller must make sure that no kernel reference to any slice exists. Any
- * pending user-space reference to any slice is dropped by this function.
+ * The caller must make sure that no kernel reference to any slice exists.
  */
 void bus1_pool_deinit(struct bus1_pool *pool)
 {
-	struct bus1_pool_slice *slice;
-
 	if (!pool || !pool->f)
 		return;
 
-	while ((slice = list_first_entry_or_null(&pool->slices,
-						 struct bus1_pool_slice,
-						 entry))) {
-		WARN_ON(slice->ref_kernel);
-		list_del(&slice->entry);
-		kfree(slice);
-	}
+	WARN_ON(!list_is_singular(&pool->slices));
+	WARN_ON(!RB_EMPTY_ROOT(&pool->slices_offset));
+	WARN_ON(pool->slices_free.rb_node != &pool->root_slice.rb_free);
+	WARN_ON(pool->root_slice.rb_free.rb_left != NULL);
+	WARN_ON(pool->root_slice.rb_free.rb_right != NULL);
+	WARN_ON(pool->root_slice.size != 0);
+	WARN_ON(pool->root_slice.free != BUS1_POOL_SLICE_SIZE_MAX);
+	WARN_ON(pool->allocated_size != 0);
 
 	put_write_access(file_inode(pool->f));
 	fput(pool->f);
@@ -242,10 +262,9 @@ void bus1_pool_deinit(struct bus1_pool *pool)
  * be dropped via bus1_pool_release_kernel(). However, if you previously
  * publish the slice via bus1_pool_publish(), it will also have a user-space
  * reference, which user-space must (indirectly) release via a call to
- * bus1_pool_release_user().
- * A slice is only actually freed if neither reference exists, anymore. Hence,
- * pool-slice can be held by both, the kernel and user-space, and both can rely
- * on it staying around as long as they wish.
+ * bus1_pool_release_user(). A slice is only actually freed if neither reference
+ * exists, anymore. Hence, pool-slice can be held by both, the kernel and
+ * user-space, and both can rely on it staying around as long as they wish.
  *
  * Return: Pointer to new slice, or ERR_PTR on failure.
  */
@@ -258,35 +277,29 @@ struct bus1_pool_slice *bus1_pool_alloc(struct bus1_pool *pool, size_t size)
 	if (slice_size == 0 || slice_size > BUS1_POOL_SLICE_SIZE_MAX)
 		return ERR_PTR(-EMSGSIZE);
 
-	/* find smallest suitable, free slice */
-	slice = bus1_pool_slice_find_by_size(pool, slice_size);
-	if (!slice)
+	/* find smallest suitable free space */
+	ps = bus1_pool_slice_find_free(pool, slice_size);
+	if (!ps)
 		return ERR_PTR(-EXFULL);
 
-	/* split slice if it doesn't match exactly */
-	if (slice_size < slice->size) {
-		ps = bus1_pool_slice_new(slice->offset + slice_size,
-					 slice->size - slice_size);
-		if (IS_ERR(ps))
-			return ERR_CAST(ps);
+	/* add new slice in free space */
+	slice = bus1_pool_slice_new(ps->offset + ps->size, slice_size,
+				    ps->free - slice_size);
+	if (IS_ERR(slice))
+		return ERR_CAST(slice);
 
-		ps->free = true;
-		ps->ref_kernel = false;
-		ps->ref_user = false;
+	/* remove @ps from free tree */
+	rb_erase(&ps->rb_free, &pool->slices_free);
+	ps->free = 0;
 
-		list_add(&ps->entry, &slice->entry); /* add after @slice */
-		bus1_pool_slice_link_free(ps, pool);
+	/* add @slice to free tree, if necessary */
+	if (slice->free > 0)
+		bus1_pool_slice_link_free(slice, pool);
 
-		slice->size = slice_size;
-	}
+	/* add after @ps */
+	list_add(&slice->entry, &ps->entry);
 
-	/* move from free-tree to busy-tree */
-	rb_erase(&slice->rb, &pool->slices_free);
-	bus1_pool_slice_link_busy(slice, pool);
-
-	slice->ref_kernel = true;
-	slice->ref_user = false;
-	slice->free = false;
+	bus1_pool_slice_link_offset(slice, pool);
 
 	return slice;
 }
@@ -297,45 +310,36 @@ static void bus1_pool_free(struct bus1_pool *pool,
 	struct bus1_pool_slice *ps;
 
 	/* don't free the slice if either has a reference */
-	if (slice->ref_kernel || slice->ref_user || WARN_ON(slice->free))
+	if (slice->ref_kernel || slice->ref_user)
+		return;
+
+	/* never try to free the root slice */
+	if (WARN_ON(slice->size == 0))
 		return;
 
 	/*
-	 * To release a pool-slice, we first drop it from the busy-tree, then
-	 * merge it with possible previous/following free slices and re-add it
-	 * to the free-tree.
+	 * To release a pool-slice, we first drop it from the offset tree, and
+	 * if it has free space we drop it from the free tree. Then merge it
+	 * into the free space of the previous slice, before re-adding the
+	 * following slice to the free tree.
 	 */
 
-	rb_erase(&slice->rb, &pool->slices_busy);
+	rb_erase(&slice->rb_offset, &pool->slices_offset);
+
+	if (slice->free > 0)
+		rb_erase(&slice->rb_free, &pool->slices_free);
 
 	if (!WARN_ON(slice->size > pool->allocated_size))
 		pool->allocated_size -= slice->size;
 
-	if (pool->slices.next != &slice->entry) {
-		ps = container_of(slice->entry.prev, struct bus1_pool_slice,
-				  entry);
-		if (ps->free) {
-			rb_erase(&ps->rb, &pool->slices_free);
-			list_del(&slice->entry);
-			ps->size += slice->size;
-			kfree(slice);
-			slice = ps; /* switch to previous slice */
-		}
-	}
+	ps = container_of(slice->entry.prev, struct bus1_pool_slice, entry);
+	if (ps->free)
+		rb_erase(&ps->rb_free, &pool->slices_free);
+	ps->free += slice->size + slice->free;
+	bus1_pool_slice_link_free(ps, pool);
 
-	if (pool->slices.prev != &slice->entry) {
-		ps = container_of(slice->entry.next, struct bus1_pool_slice,
-				  entry);
-		if (ps->free) {
-			rb_erase(&ps->rb, &pool->slices_free);
-			list_del(&ps->entry);
-			slice->size += ps->size;
-			kfree(ps);
-		}
-	}
-
-	slice->free = true;
-	bus1_pool_slice_link_free(slice, pool);
+	list_del(&slice->entry);
+	kfree(slice);
 }
 
 /**
@@ -429,10 +433,10 @@ void bus1_pool_flush(struct bus1_pool *pool, size_t *n_slicesp)
 	struct rb_node *node, *t;
 	size_t n_slices = 0;
 
-	for (node = rb_first(&pool->slices_busy);
+	for (node = rb_first(&pool->slices_offset);
 	     node && ((t = rb_next(node)), true);
 	     node = t) {
-		slice = container_of(node, struct bus1_pool_slice, rb);
+		slice = container_of(node, struct bus1_pool_slice, rb_offset);
 		if (!slice->ref_user)
 			continue;
 
@@ -440,10 +444,10 @@ void bus1_pool_flush(struct bus1_pool *pool, size_t *n_slicesp)
 			++n_slices;
 
 		/*
-		 * @slice (or the logically previous/next slice) might be freed
-		 * by bus1_pool_free(). However, this only ever affects 'free'
-		 * slices, never busy slices. Hence, @t is protected from
-		 * removal.
+		 * @slice might be freed by bus1_pool_free() and the logically
+		 * previous slice may be relinked on the free tree. However,
+		 * this does not reorder the offset tree, so @t is still the
+		 * next slice.
 		 */
 		slice->ref_user = false;
 		bus1_pool_free(pool, slice);

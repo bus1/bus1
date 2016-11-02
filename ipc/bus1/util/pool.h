@@ -33,19 +33,18 @@ struct file;
 struct iovec;
 struct kvec;
 
-/* internal: number of bits available to slice size */
-#define BUS1_POOL_SLICE_SIZE_BITS (29)
-#define BUS1_POOL_SLICE_SIZE_MAX ((1 << BUS1_POOL_SLICE_SIZE_BITS) - 1)
+#define BUS1_POOL_SLICE_SIZE_MAX (U32_MAX)
 
 /**
  * struct bus1_pool_slice - pool slice
  * @offset:		relative offset in parent pool
  * @size:		slice size
- * @free:		whether this slice is in-use or not
+ * @free:		free space after slice
  * @ref_kernel:		whether a kernel reference exists
  * @ref_user:		whether a user reference exists
  * @entry:		link into linear list of slices
- * @rb:			link to busy/free rb-tree
+ * @rb_offset:		link to slice rb-tree, indexed by offset
+ * @rb_free:		link to slice rb-tree, indexed by free size
  *
  * Each chunk of memory in the pool is managed as a slice. A slice can be
  * accessible by both the kernel and user-space, and their access rights are
@@ -71,18 +70,21 @@ struct kvec;
  * this is obvious, as no ref/unref functions are provided. But user-space must
  * be aware that the same slice being published several times does not increase
  * the reference count.
+ *
+ * A slice keeps track of the amount of free space after it in the pool, so the
+ * free space can be reused in case of fragmentation.
  */
 struct bus1_pool_slice {
 	u32 offset;
+	u32 size;
+	u32 free;
 
-	/* merge @size with flags to save 8 bytes per existing slice */
-	u32 size : BUS1_POOL_SLICE_SIZE_BITS;
-	u32 free : 1;
 	u32 ref_kernel : 1;
 	u32 ref_user : 1;
 
 	struct list_head entry;
-	struct rb_node rb;
+	struct rb_node rb_offset;
+	struct rb_node rb_free;
 };
 
 /**
@@ -90,8 +92,8 @@ struct bus1_pool_slice {
  * @f:			backing shmem file
  * @allocated_size:	currently allocated memory in bytes
  * @slices:		all slices sorted by address
- * @slices_busy:	tree of allocated slices
- * @slices_free:	tree of free slices
+ * @slices_offset:	tree of slices, by offset
+ * @slices_free:	tree of slices, by free size
  *
  * A pool is used to allocate memory slices that can be shared between
  * kernel-space and user-space. A pool is always backed by a shmem-file and puts
@@ -111,8 +113,9 @@ struct bus1_pool {
 	struct file *f;
 	size_t allocated_size;
 	struct list_head slices;
-	struct rb_root slices_busy;
+	struct rb_root slices_offset;
 	struct rb_root slices_free;
+	struct bus1_pool_slice root_slice;
 };
 
 #define BUS1_POOL_NULL ((struct bus1_pool){})
