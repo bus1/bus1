@@ -25,10 +25,6 @@ enum {
 };
 
 enum {
-	BUS1_PEER_FLAG_WANT_SECCTX				= 1ULL <<  0,
-};
-
-enum {
 	BUS1_PEER_RESET_FLAG_FLUSH				= 1ULL <<  0,
 	BUS1_PEER_RESET_FLAG_FLUSH_SEED				= 1ULL <<  1,
 };
@@ -91,8 +87,7 @@ enum {
 };
 
 enum {
-	BUS1_MSG_FLAG_HAS_SECCTX				= 1ULL <<  0,
-	BUS1_MSG_FLAG_CONTINUE					= 1ULL <<  1,
+	BUS1_MSG_FLAG_CONTINUE					= 1ULL <<  0,
 };
 
 struct bus1_cmd_recv {
@@ -102,15 +97,10 @@ struct bus1_cmd_recv {
 		__u64 type;
 		__u64 flags;
 		__u64 destination;
-		__u32 uid;
-		__u32 gid;
-		__u32 pid;
-		__u32 tid;
 		__u64 offset;
 		__u64 n_bytes;
 		__u64 n_handles;
 		__u64 n_fds;
-		__u64 n_secctx;
 	} __attribute__((__aligned__(8))) msg;
 } __attribute__((__aligned__(8)));
 

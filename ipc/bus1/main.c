@@ -8,6 +8,7 @@
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+#include <linux/cred.h>
 #include <linux/debugfs.h>
 #include <linux/err.h>
 #include <linux/fs.h>
@@ -28,9 +29,10 @@
 
 static int bus1_fop_open(struct inode *inode, struct file *file)
 {
+	const struct cred *cred = current_cred();
 	struct bus1_peer *peer;
 
-	peer = bus1_peer_new();
+	peer = bus1_peer_new(cred->uid);
 	if (IS_ERR(peer))
 		return PTR_ERR(peer);
 

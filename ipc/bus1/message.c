@@ -8,19 +8,15 @@
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
-#include <linux/cred.h>
 #include <linux/err.h>
 #include <linux/file.h>
 #include <linux/fs.h>
 #include <linux/kernel.h>
 #include <linux/kref.h>
-#include <linux/pid.h>
-#include <linux/pid_namespace.h>
 #include <linux/sched.h>
 #include <linux/security.h>
 #include <linux/slab.h>
 #include <linux/uaccess.h>
-#include <linux/uidgid.h>
 #include <linux/uio.h>
 #include <uapi/linux/bus1.h>
 #include "handle.h"
@@ -83,7 +79,6 @@ struct bus1_factory *bus1_factory_new(struct bus1_peer *peer,
 	size_t i, size;
 	bool is_new;
 	int r, fd;
-	u32 sid;
 	u64 id;
 
 	lockdep_assert_held(&peer->local.lock);
@@ -103,21 +98,14 @@ struct bus1_factory *bus1_factory_new(struct bus1_peer *peer,
 	/* set to default first, so the destructor can be called anytime */
 	f->peer = peer;
 	f->param = param;
-	f->cred = current_cred();
-	f->pid = task_tgid(current);
-	f->tid = task_pid(current);
-
-	f->has_secctx = false;
 
 	f->length_vecs = 0;
 	f->n_vecs = param->n_vecs;
 	f->n_handles = 0;
 	f->n_handles_charge = 0;
 	f->n_files = 0;
-	f->n_secctx = 0;
 	f->vecs = (void *)(f + 1) + bus1_flist_inline_size(param->n_handles);
 	f->files = (void *)(f->vecs + param->n_vecs);
-	f->secctx = NULL;
 	bus1_flist_init(f->handles, f->param->n_handles);
 
 	/* import vecs */
@@ -168,16 +156,6 @@ struct bus1_factory *bus1_factory_new(struct bus1_peer *peer,
 		f->files[f->n_files++] = file;
 	}
 
-	/* import secctx */
-	security_task_getsecid(current, &sid);
-	r = security_secid_to_secctx(sid, &f->secctx, &f->n_secctx);
-	if (r != -EOPNOTSUPP) {
-		if (r < 0)
-			goto error;
-
-		f->has_secctx = true;
-	}
-
 	return f;
 
 error:
@@ -204,9 +182,6 @@ struct bus1_factory *bus1_factory_free(struct bus1_factory *f)
 
 	if (f) {
 		lockdep_assert_held(&f->peer->local.lock);
-
-		if (f->has_secctx)
-			security_release_secctx(f->secctx, f->n_secctx);
 
 		for (i = 0; i < f->n_files; ++i)
 			fput(f->files[i]);
@@ -288,16 +263,10 @@ struct bus1_message *bus1_factory_instantiate(struct bus1_factory *f,
 {
 	struct bus1_flist *src_e, *dst_e;
 	struct bus1_message *m;
-	bool transmit_secctx;
-	struct kvec vec;
 	size_t size, i, j;
-	u64 offset;
 	int r;
 
 	lockdep_assert_held(&f->peer->local.lock);
-
-	transmit_secctx = f->has_secctx &&
-			  (READ_ONCE(peer->flags) & BUS1_PEER_FLAG_WANT_SECCTX);
 
 	r = bus1_user_charge(&peer->user->limits.n_slices,
 			     &peer->data.limits.n_slices, 1);
@@ -331,16 +300,11 @@ struct bus1_message *bus1_factory_instantiate(struct bus1_factory *f,
 	m->user = bus1_user_ref(f->peer->user);
 
 	m->flags = 0;
-	m->uid = from_kuid_munged(peer->cred->user_ns, f->cred->uid);
-	m->gid = from_kgid_munged(peer->cred->user_ns, f->cred->gid);
-	m->pid = pid_nr_ns(f->pid, peer->pid_ns);
-	m->tid = pid_nr_ns(f->tid, peer->pid_ns);
 
 	m->n_bytes = f->length_vecs;
 	m->n_handles = 0;
 	m->n_handles_charge = f->n_handles;
 	m->n_files = 0;
-	m->n_secctx = 0;
 	m->slice = NULL;
 	m->files = (void *)(m + 1) + bus1_flist_inline_size(f->n_handles);
 	bus1_flist_init(m->handles, f->n_handles);
@@ -349,8 +313,7 @@ struct bus1_message *bus1_factory_instantiate(struct bus1_factory *f,
 	size = max_t(size_t, 8,
 			     ALIGN(m->n_bytes, 8) +
 			     ALIGN(f->n_handles * sizeof(u64), 8) +
-			     ALIGN(f->n_files * sizeof(int), 8) +
-			     ALIGN(f->n_secctx, 8));
+			     ALIGN(f->n_files * sizeof(int), 8));
 	mutex_lock(&peer->data.lock);
 	m->slice = bus1_pool_alloc(&peer->data.pool, size);
 	mutex_unlock(&peer->data.lock);
@@ -411,25 +374,6 @@ struct bus1_message *bus1_factory_instantiate(struct bus1_factory *f,
 
 		m->files[m->n_files] = get_file(f->files[m->n_files]);
 		++m->n_files;
-	}
-
-	/* import secctx */
-	if (transmit_secctx) {
-		offset = ALIGN(m->n_bytes, 8) +
-			 ALIGN(m->n_handles * sizeof(u64), 8) +
-			 ALIGN(m->n_files * sizeof(int), 8);
-		vec = (struct kvec){
-			.iov_base = f->secctx,
-			.iov_len = f->n_secctx,
-		};
-
-		r = bus1_pool_write_kvec(&peer->data.pool, m->slice, offset,
-					 &vec, 1, vec.iov_len);
-		if (r < 0)
-			goto error;
-
-		m->n_secctx = f->n_secctx;
-		m->flags |= BUS1_MSG_FLAG_HAS_SECCTX;
 	}
 
 	return m;

@@ -154,13 +154,6 @@ received, its <emphasis>offset</emphasis> into the pool in bytes is returned to
 userspace, and userspace has to explicitly release the slice once it has
 finished with it.
       </para>
-      <para>
-The kernel amends all data messages with the <varname>uid</varname>,
-<varname>gid</varname>, <varname>pid</varname>, <varname>tid</varname>, and
-optionally the security context of the sending peer. The information is
-collected from the sending peer when the message is sent and translated into the
-namespaces of the receiving peer's file-descriptor.
-      </para>
     </refsect2>
 
     <refsect2>
@@ -438,9 +431,7 @@ struct bus1_cmd_peer_reset {
         __u64 max_inflight_fds;
 };
 </programlisting>
-If <varname>peer_flags</varname> has
-<constant>BUS1_PEER_FLAG_WANT_SECCTX</constant> set, the security context of the
-sending task is attached to each message received by this peer.
+<varname>peer_flags</varname> must always be set to -1.
 <varname>max_slices</varname>, <varname>max_handles</varname>,
 <varname>max_inflight_bytes</varname>, and <varname>max_inflight_fds</varname>
 are the resource limits for this peer. Note that these are simply max values,
@@ -597,15 +588,10 @@ struct bus1_cmd_recv {
                 __u64 type;
                 __u64 flags;
                 __u64 destination;
-                __u32 uid;
-                __u32 gid;
-                __u32 pid;
-                __u32 tid;
                 __u64 offset;
                 __u64 n_bytes;
                 __u64 n_handles;
                 __u64 n_fds;
-                __u64 n_secctx;
         } msg;
 };
 </programlisting>
@@ -636,20 +622,12 @@ that all the references to handles referencing the node in
                   </para>
                   <para>
 <varname>msg.flags</varname> indicates additional flags of the message.
-<constant>BUS1_MSG_FLAG_HAS_SECCTX</constant> indicates that a security context
-was attached to the message (to distinguish an empty <varname>n_secctx</varname>
-from an invalid one).
 <constant>BUS1_MSG_FLAG_CONTINUE</constant> indicates that there are more
 messages queued which belong to the same message transaction.
                   </para>
                   <para>
 <varname>msg.destination</varname> is the ID of the destination node or handle
 of the message.
-                  </para>
-                  <para>
-<varname>msg.uid</varname>, <varname>msg.gid</varname>,
-<varname>msg.pid</varname>, and <varname>msg.tid</varname> are the user, group,
-process and thread ID of the process that created the sending peer context.
                   </para>
                   <para>
 <varname>msg.offset</varname> is the offset, in bytes, into the pool of the
@@ -665,12 +643,6 @@ possibly padding to make the array 8-byte aligned).
 message, or 0 if <constant>BUS1_RECV_FLAG_INSTALL_FDS</constant> was not set.
 The file descriptor numbers are stored in the pool following the handle array
 (and possibly padding to make the array 8-byte aligned).
-                  </para>
-                  <para>
-<varname>msg.n_secctx</varname> is the number of bytes attached to the message,
-which contain the security context of the sender. The security context is
-stored in the pool following the payload (and possibly padding to make it
-8-byte aligned).
                   </para>
                 </listitem>
               </varlistentry>

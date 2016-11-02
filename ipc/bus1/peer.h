@@ -51,6 +51,7 @@
 #include <linux/mutex.h>
 #include <linux/rcupdate.h>
 #include <linux/rbtree.h>
+#include <linux/uidgid.h>
 #include <linux/wait.h>
 #include <uapi/linux/bus1.h>
 #include "user.h"
@@ -59,16 +60,12 @@
 #include "util/queue.h"
 
 struct bus1_message;
-struct cred;
 struct dentry;
-struct pid_namespace;
 
 /**
  * struct bus1_peer - peer context
  * @id:				peer ID
  * @flags:			peer flags
- * @cred:			pinned credentials
- * @pid_ns:			pinned pid-namespace
  * @user:			pinned user
  * @rcu:			rcu-delayed kfree of peer
  * @waitq:			peer wide wait queue
@@ -86,8 +83,6 @@ struct pid_namespace;
 struct bus1_peer {
 	u64 id;
 	u64 flags;
-	const struct cred *cred;
-	struct pid_namespace *pid_ns;
 	struct bus1_user *user;
 	struct rcu_head rcu;
 	wait_queue_head_t waitq;
@@ -109,7 +104,7 @@ struct bus1_peer {
 	} local;
 };
 
-struct bus1_peer *bus1_peer_new(void);
+struct bus1_peer *bus1_peer_new(kuid_t uid);
 struct bus1_peer *bus1_peer_free(struct bus1_peer *peer);
 long bus1_peer_ioctl(struct file *file, unsigned int cmd, unsigned long arg);
 

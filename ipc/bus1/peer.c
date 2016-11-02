@@ -9,14 +9,12 @@
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 #include <linux/atomic.h>
-#include <linux/cred.h>
 #include <linux/debugfs.h>
 #include <linux/err.h>
 #include <linux/file.h>
 #include <linux/fs.h>
 #include <linux/kernel.h>
 #include <linux/mutex.h>
-#include <linux/pid_namespace.h>
 #include <linux/rbtree.h>
 #include <linux/rcupdate.h>
 #include <linux/slab.h>
@@ -72,25 +70,22 @@ bus1_peer_free_qnode(struct bus1_queue_node *qnode)
 
 /**
  * bus1_peer_new() - allocate new peer
+ * @uid:	uid to account on
  *
  * Allocate a new peer. It is immediately activated and ready for use. It is
  * not linked into any context. The caller will get exclusively access to the
  * peer object on success.
  *
- * Note that the peer is opened on behalf of 'current'. That is, it pins its
- * credentials and namespaces.
- *
  * Return: Pointer to peer, ERR_PTR on failure.
  */
-struct bus1_peer *bus1_peer_new(void)
+struct bus1_peer *bus1_peer_new(kuid_t uid)
 {
 	static atomic64_t peer_ids = ATOMIC64_INIT(0);
-	const struct cred *cred = current_cred();
 	struct bus1_peer *peer;
 	struct bus1_user *user;
 	int r;
 
-	user = bus1_user_ref_by_uid(cred->uid);
+	user = bus1_user_ref_by_uid(uid);
 	if (IS_ERR(user))
 		return ERR_CAST(user);
 
@@ -103,8 +98,6 @@ struct bus1_peer *bus1_peer_new(void)
 	/* initialize constant fields */
 	peer->id = atomic64_inc_return(&peer_ids);
 	peer->flags = 0;
-	peer->cred = get_cred(current_cred());
-	peer->pid_ns = get_pid_ns(task_active_pid_ns(current));
 	peer->user = user;
 	peer->debugdir = NULL;
 	init_waitqueue_head(&peer->waitq);
@@ -296,8 +289,6 @@ struct bus1_peer *bus1_peer_free(struct bus1_peer *peer)
 	debugfs_remove_recursive(peer->debugdir);
 	bus1_active_deinit(&peer->active);
 	peer->user = bus1_user_unref(peer->user);
-	put_pid_ns(peer->pid_ns);
-	put_cred(peer->cred);
 	kfree_rcu(peer, rcu);
 
 	return NULL;
@@ -317,7 +308,7 @@ static int bus1_peer_ioctl_peer_query(struct bus1_peer *peer,
 		return -EINVAL;
 
 	mutex_lock(&peer->local.lock);
-	param.peer_flags = peer->flags & BUS1_PEER_FLAG_WANT_SECCTX;
+	param.peer_flags = 0;
 	param.max_slices = peer->data.limits.max_slices;
 	param.max_handles = peer->data.limits.max_handles;
 	param.max_inflight_bytes = peer->data.limits.max_inflight_bytes;
@@ -340,8 +331,7 @@ static int bus1_peer_ioctl_peer_reset(struct bus1_peer *peer,
 	if (unlikely(param.flags & ~(BUS1_PEER_RESET_FLAG_FLUSH |
 				     BUS1_PEER_RESET_FLAG_FLUSH_SEED)))
 		return -EINVAL;
-	if (unlikely(param.peer_flags != -1 &&
-		     (param.peer_flags & ~BUS1_PEER_FLAG_WANT_SECCTX)))
+	if (unlikely(param.peer_flags != -1))
 		return -EINVAL;
 	if (unlikely((param.max_slices != -1 &&
 		      param.max_slices > INT_MAX) ||
@@ -1029,15 +1019,10 @@ static int bus1_peer_ioctl_recv(struct bus1_peer *peer,
 		param.msg.type = BUS1_MSG_DATA;
 		param.msg.flags = m->flags;
 		param.msg.destination = m->dst->anchor->id;
-		param.msg.uid = m->uid;
-		param.msg.gid = m->gid;
-		param.msg.pid = m->pid;
-		param.msg.tid = m->tid;
 		param.msg.offset = m->slice->offset;
 		param.msg.n_bytes = m->n_bytes;
 		param.msg.n_handles = m->n_handles;
 		param.msg.n_fds = m->n_files;
-		param.msg.n_secctx = m->n_secctx;
 
 		if (likely(!(param.flags & BUS1_RECV_FLAG_PEEK))) {
 			if (unlikely(param.flags & BUS1_RECV_FLAG_SEED)) {
@@ -1059,15 +1044,10 @@ static int bus1_peer_ioctl_recv(struct bus1_peer *peer,
 		param.msg.type = type;
 		param.msg.flags = 0;
 		param.msg.destination = h->id;
-		param.msg.uid = -1;
-		param.msg.gid = -1;
-		param.msg.pid = 0;
-		param.msg.tid = 0;
 		param.msg.offset = BUS1_OFFSET_INVALID;
 		param.msg.n_bytes = 0;
 		param.msg.n_handles = 0;
 		param.msg.n_fds = 0;
-		param.msg.n_secctx = 0;
 
 		if (likely(!(param.flags & BUS1_RECV_FLAG_PEEK)))
 			bus1_handle_unref(h);

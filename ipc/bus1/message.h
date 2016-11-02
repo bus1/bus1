@@ -27,50 +27,36 @@ struct bus1_peer;
 struct bus1_pool_slice;
 struct bus1_tx;
 struct bus1_user;
-struct cred;
 struct file;
 struct iovec;
-struct pid;
 
 /**
  * struct bus1_factory - message factory
  * @peer:			sending peer
  * @param:			factory parameters
- * @cred:			sender credentials
- * @pid:			sender PID
- * @tid:			sender TID
  * @on_stack:			whether object lives on stack
- * @has_secctx:			whether secctx has been set
  * @length_vecs:		total length of data in vectors
  * @n_vecs:			number of vectors
  * @n_handles:			number of handles
  * @n_handles_charge:		number of handles to charge on commit
  * @n_files:			number of files
- * @n_secctx:			length of secctx
  * @vecs:			vector array
  * @files:			file array
- * @secctx:			allocated secctx
  * @handles:			handle array
  */
 struct bus1_factory {
 	struct bus1_peer *peer;
 	struct bus1_cmd_send *param;
-	const struct cred *cred;
-	struct pid *pid;
-	struct pid *tid;
 
 	bool on_stack : 1;
-	bool has_secctx : 1;
 
 	size_t length_vecs;
 	size_t n_vecs;
 	size_t n_handles;
 	size_t n_handles_charge;
 	size_t n_files;
-	u32 n_secctx;
 	struct iovec *vecs;
 	struct file **files;
-	char *secctx;
 
 	struct bus1_flist handles[];
 };
@@ -82,15 +68,10 @@ struct bus1_factory {
  * @dst:			destination handle
  * @user:			sending user
  * @flags:			message flags
- * @uid:			sender UID
- * @gid:			sender GID
- * @pid:			sender PID
- * @tid:			sender TID
  * @n_bytes:			number of user-bytes transmitted
  * @n_handles:			number of handles transmitted
  * @n_handles_charge:		number of handle charges
  * @n_files:			number of files transmitted
- * @n_secctx:			number of bytes of security context transmitted
  * @slice:			actual message data
  * @files:			passed file descriptors
  * @handles:			passed handles
@@ -102,16 +83,11 @@ struct bus1_message {
 	struct bus1_user *user;
 
 	u64 flags;
-	uid_t uid;
-	gid_t gid;
-	pid_t pid;
-	pid_t tid;
 
 	size_t n_bytes;
 	size_t n_handles;
 	size_t n_handles_charge;
 	size_t n_files;
-	size_t n_secctx;
 	struct bus1_pool_slice *slice;
 	struct file **files;
 
