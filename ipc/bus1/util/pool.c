@@ -42,15 +42,9 @@ static struct bus1_pool_slice *bus1_pool_slice_new(size_t offset, size_t size)
 	return slice;
 }
 
-static struct bus1_pool_slice *
-bus1_pool_slice_free(struct bus1_pool_slice *slice)
+static void bus1_pool_slice_free(struct bus1_pool_slice *slice)
 {
-	if (!slice)
-		return NULL;
-
 	kfree(slice);
-
-	return NULL;
 }
 
 /* insert slice into the free tree */
