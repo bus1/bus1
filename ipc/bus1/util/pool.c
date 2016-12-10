@@ -42,17 +42,6 @@ static struct bus1_pool_slice *bus1_pool_slice_new(size_t offset, size_t size)
 	return slice;
 }
 
-static struct bus1_pool_slice *
-bus1_pool_slice_free(struct bus1_pool_slice *slice)
-{
-	if (!slice)
-		return NULL;
-
-	kfree(slice);
-
-	return NULL;
-}
-
 /* insert slice into the free tree */
 static void bus1_pool_slice_link_free(struct bus1_pool_slice *slice,
 				      struct bus1_pool *pool)
@@ -229,7 +218,7 @@ void bus1_pool_deinit(struct bus1_pool *pool)
 						 entry))) {
 		WARN_ON(slice->ref_kernel);
 		list_del(&slice->entry);
-		bus1_pool_slice_free(slice);
+		kfree(slice);
 	}
 
 	put_write_access(file_inode(pool->f));
@@ -329,7 +318,7 @@ static void bus1_pool_free(struct bus1_pool *pool,
 			rb_erase(&ps->rb, &pool->slices_free);
 			list_del(&slice->entry);
 			ps->size += slice->size;
-			bus1_pool_slice_free(slice);
+			kfree(slice);
 			slice = ps; /* switch to previous slice */
 		}
 	}
@@ -341,7 +330,7 @@ static void bus1_pool_free(struct bus1_pool *pool,
 			rb_erase(&ps->rb, &pool->slices_free);
 			list_del(&ps->entry);
 			slice->size += ps->size;
-			bus1_pool_slice_free(ps);
+			kfree(ps);
 		}
 	}
 
