@@ -133,7 +133,7 @@ static void bus1_test_pool(void)
 	struct bus1_pool_slice *slice;
 	char *payload = "PAYLOAD";
 	struct iovec vec = {
-		.iov_base = payload,
+		.iov_base = (void __user *)payload,
 		.iov_len = strlen(payload),
 	};
 	struct kvec kvec = {
