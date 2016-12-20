@@ -13,7 +13,7 @@
 /**
  * DOC: Transactions
  *
- * The transaction engine is an object that lives an the stack and is used to
+ * The transaction engine is an object that lives on the stack and is used to
  * stage and commit multicasts properly. Unlike unicasts, a multicast cannot
  * just be queued on each destination, but must be properly synchronized. This
  * requires us to first stage each message on their respective destination,

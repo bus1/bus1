@@ -207,7 +207,7 @@ void bus1_tx_stage_later(struct bus1_tx *tx, struct bus1_queue_node *qnode)
  * visibly reacting to it. That is, user-space must not see that you failed to
  * join the transaction before the transaction is settled!
  *
- * Return: True if successfull, false if too late.
+ * Return: True if successful, false if too late.
  */
 bool bus1_tx_join(struct bus1_queue_node *whom, struct bus1_queue_node *qnode)
 {
