@@ -355,6 +355,115 @@ static void test_api_unicast(void)
 	test_close(fd1, map1, n_map1);
 }
 
+/* make sure the destination in a received message is a peer local handle id */
+static void test_api_msg_local_handle_id(void)
+{
+	struct bus1_cmd_handle_transfer cmd_transfer;
+	struct bus1_cmd_send cmd_send;
+	struct bus1_cmd_recv cmd_recv;
+	const uint8_t *map1, *map2, *map3;
+	size_t n_map1, n_map2, n_map3;
+	int r, fd1, fd2, fd3;
+
+	/* setup */
+
+	fd1 = test_open(&map1, &n_map1);
+	fd2 = test_open(&map2, &n_map2);
+	fd3 = test_open(&map3, &n_map3);
+
+	/* import a handle from @fd1 into @fd2 */
+
+	cmd_transfer = (struct bus1_cmd_handle_transfer){
+		.flags			= 0,
+		.src_handle		= 0x100,
+		.dst_fd			= fd2,
+		.dst_handle		= BUS1_HANDLE_INVALID,
+	};
+	r = bus1_ioctl_handle_transfer(fd1, &cmd_transfer);
+	assert(r >= 0);
+	assert(cmd_transfer.dst_handle != BUS1_HANDLE_INVALID);
+	assert(cmd_transfer.dst_handle & BUS1_HANDLE_FLAG_MANAGED);
+	assert(cmd_transfer.dst_handle & BUS1_HANDLE_FLAG_REMOTE);
+
+	/* send empty message */
+
+	cmd_send = (struct bus1_cmd_send){
+		.flags			= 0,
+		.ptr_destinations	= (unsigned long)&cmd_transfer.dst_handle,
+		.ptr_errors		= 0,
+		.n_destinations		= 1,
+		.ptr_vecs		= 0,
+		.n_vecs			= 0,
+		.ptr_handles		= 0,
+		.n_handles		= 0,
+		.ptr_fds		= 0,
+		.n_fds			= 0,
+	};
+	r = bus1_ioctl_send(fd2, &cmd_send);
+	assert(r >= 0);
+
+	/* retrieve empty message */
+
+	cmd_recv = (struct bus1_cmd_recv){
+		.flags = 0,
+		.max_offset = n_map1,
+	};
+	r = bus1_ioctl_recv(fd1, &cmd_recv);
+	assert(r >= 0);
+	assert(cmd_recv.msg.type == BUS1_MSG_DATA);
+	assert(cmd_recv.msg.flags == 0);
+	assert(cmd_recv.msg.destination == 0x100);
+
+	/* import a handle from @fd1 into @fd3 */
+
+	cmd_transfer = (struct bus1_cmd_handle_transfer){
+		.flags			= 0,
+		.src_handle		= 0x200,
+		.dst_fd			= fd3,
+		.dst_handle		= BUS1_HANDLE_INVALID,
+	};
+	r = bus1_ioctl_handle_transfer(fd1, &cmd_transfer);
+	assert(r >= 0);
+	assert(cmd_transfer.dst_handle != BUS1_HANDLE_INVALID);
+	assert(cmd_transfer.dst_handle & BUS1_HANDLE_FLAG_MANAGED);
+	assert(cmd_transfer.dst_handle & BUS1_HANDLE_FLAG_REMOTE);
+
+	/* send empty message */
+
+	cmd_send = (struct bus1_cmd_send){
+		.flags			= 0,
+		.ptr_destinations	= (unsigned long)&cmd_transfer.dst_handle,
+		.ptr_errors		= 0,
+		.n_destinations		= 1,
+		.ptr_vecs		= 0,
+		.n_vecs			= 0,
+		.ptr_handles		= 0,
+		.n_handles		= 0,
+		.ptr_fds		= 0,
+		.n_fds			= 0,
+	};
+	r = bus1_ioctl_send(fd3, &cmd_send);
+	assert(r >= 0);
+
+	/* retrieve empty message */
+
+	cmd_recv = (struct bus1_cmd_recv){
+		.flags = 0,
+		.max_offset = n_map1,
+	};
+	r = bus1_ioctl_recv(fd1, &cmd_recv);
+	assert(r >= 0);
+	assert(cmd_recv.msg.type == BUS1_MSG_DATA);
+	assert(cmd_recv.msg.flags == 0);
+	assert(cmd_recv.msg.destination == 0x200);
+
+	/* cleanup */
+
+	test_close(fd3, map3, n_map3);
+	test_close(fd2, map2, n_map2);
+	test_close(fd1, map1, n_map1);
+}
+
 /* make sure basic multicasts works */
 static void test_api_multicast(void)
 {
@@ -526,6 +635,7 @@ int main(int argc, char **argv)
 		test_api_unicast();
 		test_api_multicast();
 		test_api_handle();
+		test_api_msg_local_handle_id();
 	}
 
 	return r < 0 ? EXIT_FAILURE : EXIT_SUCCESS;
