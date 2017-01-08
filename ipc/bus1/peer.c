@@ -724,7 +724,7 @@ static struct bus1_message *bus1_peer_new_message(struct bus1_peer *peer,
 						  u64 id)
 {
 	struct bus1_message *m = NULL;
-	struct bus1_handle *h = NULL;
+	struct bus1_handle *h = NULL, *dst_h = NULL;
 	struct bus1_peer *p = NULL;
 	bool is_new;
 	int r;
@@ -740,8 +740,13 @@ static struct bus1_message *bus1_peer_new_message(struct bus1_peer *peer,
 
 	if (bus1_handle_is_anchor(h))
 		p = bus1_peer_acquire(peer);
-	else
+	else {
 		p = bus1_handle_acquire_owner(h);
+		bus1_handle_ref(h->anchor);
+		dst_h = h->anchor;
+		bus1_handle_unref(h);
+		h = dst_h;
+	}
 	if (!p) {
 		r = -ESHUTDOWN;
 		goto error;
