@@ -1028,7 +1028,7 @@ static int bus1_peer_ioctl_recv(struct bus1_peer *peer,
 
 		param.msg.type = BUS1_MSG_DATA;
 		param.msg.flags = m->flags;
-		param.msg.destination = m->dst->id;
+		param.msg.destination = m->dst->anchor->id;
 		param.msg.uid = m->uid;
 		param.msg.gid = m->gid;
 		param.msg.pid = m->pid;
