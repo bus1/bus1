@@ -104,7 +104,7 @@ struct bus1_peer {
 	} local;
 };
 
-struct bus1_peer *bus1_peer_new(kuid_t uid);
+struct bus1_peer *bus1_peer_new(const struct cred *cred);
 struct bus1_peer *bus1_peer_free(struct bus1_peer *peer);
 long bus1_peer_ioctl(struct file *file, unsigned int cmd, unsigned long arg);
 

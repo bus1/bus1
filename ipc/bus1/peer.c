@@ -70,7 +70,7 @@ bus1_peer_free_qnode(struct bus1_queue_node *qnode)
 
 /**
  * bus1_peer_new() - allocate new peer
- * @uid:	uid to account on
+ * @cred:	credentials used for accounting
  *
  * Allocate a new peer. It is immediately activated and ready for use. It is
  * not linked into any context. The caller will get exclusively access to the
@@ -78,14 +78,14 @@ bus1_peer_free_qnode(struct bus1_queue_node *qnode)
  *
  * Return: Pointer to peer, ERR_PTR on failure.
  */
-struct bus1_peer *bus1_peer_new(kuid_t uid)
+struct bus1_peer *bus1_peer_new(const struct cred *cred)
 {
 	static atomic64_t peer_ids = ATOMIC64_INIT(0);
 	struct bus1_peer *peer;
 	struct bus1_user *user;
 	int r;
 
-	user = bus1_user_ref_by_uid(uid);
+	user = bus1_user_ref_by_uid(cred->uid);
 	if (IS_ERR(user))
 		return ERR_CAST(user);
 

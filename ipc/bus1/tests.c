@@ -295,12 +295,12 @@ static void bus1_test_handle_basic(void)
 {
 	struct bus1_handle *t, *h[3] = {};
 	struct bus1_peer *p[2] = {};
-	kuid_t uid = KUIDT_INIT(0);
+	const struct cred *cred = current_cred();
 
 	/* peer setup */
 
-	p[0] = bus1_peer_new(uid);
-	p[1] = bus1_peer_new(uid);
+	p[0] = bus1_peer_new(cred);
+	p[1] = bus1_peer_new(cred);
 	WARN_ON(IS_ERR_OR_NULL(p[0]) || IS_ERR_OR_NULL(p[1]));
 	WARN_ON(!bus1_peer_acquire(p[0]));
 	WARN_ON(!bus1_peer_acquire(p[1]));
@@ -361,9 +361,9 @@ static void bus1_test_handle_basic(void)
 static void bus1_test_handle_lifetime(void)
 {
 	static const unsigned int n_tests = 10;
+	const struct cred *cred = current_cred();
 	struct bus1_handle *t, *h[5] = {};
 	struct bus1_peer *p[3] = {};
-	kuid_t uid = KUIDT_INIT(0);
 	unsigned int i, j;
 
 	/*
@@ -372,9 +372,9 @@ static void bus1_test_handle_lifetime(void)
 	 */
 
 	for (i = 0, j = 0; i < n_tests; ++i) {
-		p[0] = bus1_peer_new(uid);
-		p[1] = bus1_peer_new(uid);
-		p[2] = bus1_peer_new(uid);
+		p[0] = bus1_peer_new(cred);
+		p[1] = bus1_peer_new(cred);
+		p[2] = bus1_peer_new(cred);
 		WARN_ON(IS_ERR_OR_NULL(p[0]) ||
 		        IS_ERR_OR_NULL(p[1]) ||
 		        IS_ERR_OR_NULL(p[2]));
@@ -691,12 +691,12 @@ static void bus1_test_handle_ids(void)
 {
 	struct bus1_handle *t, *h[2] = {};
 	struct bus1_peer *p[2] = {};
-	kuid_t uid = KUIDT_INIT(0);
+	const struct cred *cred = current_cred();
 	bool is_new;
 	u64 id;
 
-	p[0] = bus1_peer_new(uid);
-	p[1] = bus1_peer_new(uid);
+	p[0] = bus1_peer_new(cred);
+	p[1] = bus1_peer_new(cred);
 	WARN_ON(IS_ERR_OR_NULL(p[0]) || IS_ERR_OR_NULL(p[1]));
 	WARN_ON(!bus1_peer_acquire(p[0]));
 	WARN_ON(!bus1_peer_acquire(p[1]));
