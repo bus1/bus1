@@ -94,6 +94,7 @@ struct bus1_pool_slice {
  * @slices:		all slices sorted by address
  * @slices_offset:	tree of slices, by offset
  * @slices_free:	tree of slices, by free size
+ * @root_slice:		slice tracking free space of the empty pool
  *
  * A pool is used to allocate memory slices that can be shared between
  * kernel-space and user-space. A pool is always backed by a shmem-file and puts
