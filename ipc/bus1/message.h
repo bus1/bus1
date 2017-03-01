@@ -19,12 +19,12 @@
 #include <linux/kernel.h>
 #include <linux/kref.h>
 #include "util/flist.h"
+#include "util/pool.h"
 #include "util/queue.h"
 
 struct bus1_cmd_send;
 struct bus1_handle;
 struct bus1_peer;
-struct bus1_pool_slice;
 struct bus1_tx;
 struct bus1_user;
 struct file;
@@ -88,7 +88,7 @@ struct bus1_message {
 	size_t n_handles;
 	size_t n_handles_charge;
 	size_t n_files;
-	struct bus1_pool_slice *slice;
+	struct bus1_pool_slice slice;
 	struct file **files;
 
 	struct bus1_flist handles[];

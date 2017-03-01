@@ -145,6 +145,7 @@ error:
 
 static void bus1_peer_flush(struct bus1_peer *peer, u64 flags)
 {
+	struct bus1_message *message;
 	struct bus1_pool_slice *slist, *slice;
 	struct bus1_queue_node *qlist, *qnode;
 	struct bus1_handle *h, *safe;
@@ -217,10 +218,10 @@ static void bus1_peer_flush(struct bus1_peer *peer, u64 flags)
 		while ((slice = slist)) {
 			slist = slice->next;
 			slice->next = NULL;
+			message = container_of(slice, struct bus1_message,
+					       slice);
 
-			bus1_pool_unpublish(&peer->data.pool, slice);
-			WARN_ON(!slice->userdata);
-			slice->userdata = bus1_message_unref(slice->userdata);
+			bus1_message_unref(message);
 		}
 
 		while ((qnode = qlist)) {
@@ -699,6 +700,7 @@ static int bus1_peer_ioctl_slice_release(struct bus1_peer *peer,
 					 unsigned long arg)
 {
 	struct bus1_pool_slice *slice;
+	struct bus1_message *message;
 	u64 offset;
 
 	BUILD_BUG_ON(_IOC_SIZE(BUS1_CMD_SLICE_RELEASE) != sizeof(offset));
@@ -709,13 +711,13 @@ static int bus1_peer_ioctl_slice_release(struct bus1_peer *peer,
 	mutex_lock(&peer->data.lock);
 	slice = bus1_pool_slice_find_published(&peer->data.pool, offset);
 	if (slice)
-		bus1_pool_unpublish(&peer->data.pool, slice);
+		bus1_pool_unpublish(slice);
 	mutex_unlock(&peer->data.lock);
 	if (!slice)
 		return -ENXIO;
 
-	WARN_ON(!slice->userdata);
-	slice->userdata = bus1_message_unref(slice->userdata);
+	message = container_of(slice, struct bus1_message, slice);
+	bus1_message_unref(message);
 	return 0;
 }
 
@@ -1016,7 +1018,7 @@ static int bus1_peer_ioctl_recv(struct bus1_peer *peer,
 		m = container_of(qnode, struct bus1_message, qnode);
 		WARN_ON(m->dst->id == BUS1_HANDLE_INVALID);
 
-		if (param.max_offset < m->slice->offset + m->slice->size) {
+		if (param.max_offset < m->slice.offset + m->slice.size) {
 			r = -ERANGE;
 			goto exit;
 		}
@@ -1029,7 +1031,7 @@ static int bus1_peer_ioctl_recv(struct bus1_peer *peer,
 		param.msg.type = BUS1_MSG_DATA;
 		param.msg.flags = m->flags;
 		param.msg.destination = m->dst->anchor->id;
-		param.msg.offset = m->slice->offset;
+		param.msg.offset = m->slice.offset;
 		param.msg.n_bytes = m->n_bytes;
 		param.msg.n_handles = m->n_handles;
 		param.msg.n_fds = m->n_files;

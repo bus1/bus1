@@ -25,49 +25,6 @@
 #include <linux/uio.h>
 #include "pool.h"
 
-static int bus1_pool_slice_init(struct bus1_pool_slice *slice,
-				size_t offset,
-				size_t size,
-				size_t free)
-{
-	if (offset > U32_MAX || size > U32_MAX || free > U32_MAX ||
-	    offset + size + free > BUS1_POOL_SLICE_SIZE_MAX)
-		return -EMSGSIZE;
-
-	slice->offset = offset;
-	slice->size = size;
-	slice->free = free;
-
-	slice->ref_kernel = true;
-	slice->published = false;
-
-	INIT_LIST_HEAD(&slice->entry);
-
-	slice->userdata = NULL;
-
-	return 0;
-}
-
-static struct bus1_pool_slice *bus1_pool_slice_new(size_t offset,
-						   size_t size,
-						   size_t free)
-{
-	struct bus1_pool_slice *slice;
-	int r;
-
-	slice = kmalloc(sizeof(*slice), GFP_KERNEL);
-	if (!slice)
-		return ERR_PTR(-ENOMEM);
-
-	r = bus1_pool_slice_init(slice, offset, size, free);
-	if (r < 0) {
-		kfree(slice);
-		return ERR_PTR(r);
-	}
-
-	return slice;
-}
-
 /* insert slice into the free tree */
 static void bus1_pool_slice_link_free(struct bus1_pool_slice *slice,
 					 struct bus1_pool *pool)
@@ -118,6 +75,41 @@ static void bus1_pool_slice_link_offset(struct bus1_pool_slice *slice,
 	pool->allocated_size += slice->size;
 }
 
+void bus1_pool_slice_init(struct bus1_pool_slice *slice)
+{
+	slice->published = false;
+	slice->allocated = false;
+}
+
+static int bus1_pool_slice_link(struct bus1_pool *pool,
+				struct bus1_pool_slice *slice,
+				size_t offset,
+				size_t size,
+				size_t free,
+				struct list_head *previous)
+{
+	if (offset > U32_MAX || size > U32_MAX || free > U32_MAX ||
+	    offset + size + free > BUS1_POOL_SLICE_SIZE_MAX)
+		return -EMSGSIZE;
+
+	slice->offset = offset;
+	slice->size = size;
+	slice->free = free;
+
+	/* add @slice to free tree, if necessary */
+	if (slice->free > 0)
+		bus1_pool_slice_link_free(slice, pool);
+
+	/* add @slice to offset tree, if necessary */
+	if (slice->size > 0)
+		bus1_pool_slice_link_offset(slice, pool);
+
+	/* add @slice after @previous */
+	list_add(&slice->entry, previous);
+
+	return 0;
+}
+
 /* find free space large enough to hold @size bytes */
 static struct bus1_pool_slice *
 bus1_pool_slice_find_free(struct bus1_pool *pool, size_t size)
@@ -142,7 +134,7 @@ bus1_pool_slice_find_free(struct bus1_pool *pool, size_t size)
 }
 
 /**
- * bus1_pool_slice_find_published - find published slice in pool
+ * bus1_pool_slice_find_published() - find published slice in pool
  * @pool:	pool to operate on
  * @offset:	offset to get slice at
  *
@@ -208,14 +200,13 @@ int bus1_pool_init(struct bus1_pool *pool, const char *filename)
 	pool->slices_free = RB_ROOT;
 	pool->slices_offset = RB_ROOT;
 
-	r = bus1_pool_slice_init(&pool->root_slice, 0, 0,
-				 BUS1_POOL_SLICE_SIZE_MAX);
+	bus1_pool_slice_init(&pool->root_slice);
+	r = bus1_pool_slice_link(pool, &pool->root_slice, 0, 0,
+				 BUS1_POOL_SLICE_SIZE_MAX, &pool->slices);
 	if (r < 0) {
 		fput(f);
 		return r;
 	}
-	bus1_pool_slice_link_free(&pool->root_slice, pool);
-	list_add(&pool->root_slice.entry, &pool->slices);
 
 	/*
 	 * Touch first page of client pool so the initial allocation overhead
@@ -266,70 +257,62 @@ void bus1_pool_deinit(struct bus1_pool *pool)
  * @size:	number of bytes to allocate
  *
  * This allocates a new slice of @size bytes from the memory pool at @pool. The
- * slice must be released via bus1_pool_release_kernel() by the caller. All
- * slices are aligned to 8 bytes (both offset and size).
+ * slice must be released via bus1_pool_dealloc() by the caller. All slices are
+ * aligned to 8 bytes (both offset and size).
  *
  * If no suitable slice can be allocated, an error is returned.
  *
- * Each pool slice can have two different references, a kernel reference and a
- * user-space reference. Initially, it only has a kernel-reference, which must
- * be dropped via bus1_pool_release_kernel(). However, if you previously
- * publish the slice via bus1_pool_publish(), it will also have a user-space
- * reference, which user-space must (indirectly) release via a call to
- * bus1_pool_release_user(). A slice is only actually freed if neither reference
- * exists, anymore. Hence, pool-slice can be held by both, the kernel and
- * user-space, and both can rely on it staying around as long as they wish.
+ * A pool slice can be published to userspace via bus1_pool_publish(), in which
+ * case it it must be released via bus1_pool_unpublish() before it can be
+ * deallocated.
  *
- * Return: Pointer to new slice, or ERR_PTR on failure.
+ * Return: 0 on success, negative error code on failure.
  */
-struct bus1_pool_slice *bus1_pool_alloc(struct bus1_pool *pool, size_t size)
+int bus1_pool_alloc(struct bus1_pool *pool, struct bus1_pool_slice *slice,
+		    size_t size)
 {
-	struct bus1_pool_slice *slice, *ps;
+	struct bus1_pool_slice *ps;
 	size_t slice_size;
+	int r;
+
+	if (WARN_ON(slice->allocated))
+		return -EFAULT;
 
 	slice_size = ALIGN(size, 8);
 	if (slice_size == 0 || slice_size > BUS1_POOL_SLICE_SIZE_MAX)
-		return ERR_PTR(-EMSGSIZE);
+		return -EMSGSIZE;
 
-	/* find smallest suitable free space */
+	/* find slice with smallest suitable trailing free space */
 	ps = bus1_pool_slice_find_free(pool, slice_size);
 	if (!ps)
-		return ERR_PTR(-EXFULL);
+		return -EXFULL;
 
 	/* add new slice in free space */
-	slice = bus1_pool_slice_new(ps->offset + ps->size, slice_size,
-				    ps->free - slice_size);
-	if (IS_ERR(slice))
-		return ERR_CAST(slice);
+	r = bus1_pool_slice_link(pool, slice, ps->offset + ps->size, slice_size,
+				 ps->free - slice_size, &ps->entry);
+	if (r < 0)
+		return r;
 
 	/* remove @ps from free tree */
 	rb_erase(&ps->rb_free, &pool->slices_free);
 	ps->free = 0;
 
-	/* add @slice to free tree, if necessary */
-	if (slice->free > 0)
-		bus1_pool_slice_link_free(slice, pool);
+	slice->allocated = true;
 
-	/* add after @ps */
-	list_add(&slice->entry, &ps->entry);
-
-	bus1_pool_slice_link_offset(slice, pool);
-
-	return slice;
+	return 0;
 }
 
-static void bus1_pool_free(struct bus1_pool *pool,
-			   struct bus1_pool_slice *slice)
+int bus1_pool_dealloc(struct bus1_pool *pool, struct bus1_pool_slice *slice)
 {
 	struct bus1_pool_slice *ps;
 
-	/* don't free the slice if either has a reference */
-	if (slice->ref_kernel || slice->published)
-		return;
+	/* don't free the slice if it is published */
+	if (WARN_ON(slice->published))
+		return -EFAULT;
 
-	/* never try to free the root slice */
-	if (WARN_ON(slice->size == 0))
-		return;
+	/* make it a noop if the slice was never allocated */
+	if (!slice->allocated)
+		return 0;
 
 	/*
 	 * To release a pool-slice, we first drop it from the offset tree, and
@@ -353,74 +336,47 @@ static void bus1_pool_free(struct bus1_pool *pool,
 	bus1_pool_slice_link_free(ps, pool);
 
 	list_del(&slice->entry);
-	kfree(slice);
-}
 
-/**
- * bus1_pool_release_kernel() - release kernel-owned slice reference
- * @pool:	pool to free memory on
- * @slice:	slice to release
- *
- * This releases the kernel-reference to a slice that was previously allocated
- * via bus1_pool_alloc(). This only releases the kernel reference to the slice.
- * If the slice was already published to user-space, then their reference is
- * left untouched. Once both references are gone, the memory is actually freed.
- *
- * Return: NULL is returned.
- */
-struct bus1_pool_slice *
-bus1_pool_release_kernel(struct bus1_pool *pool, struct bus1_pool_slice *slice)
-{
-	if (!slice || WARN_ON(!slice->ref_kernel))
-		return NULL;
+	slice->allocated = false;
 
-	WARN_ON(slice->published);
-
-	/* kernel must own a ref to @slice */
-	slice->ref_kernel = false;
-
-	bus1_pool_free(pool, slice);
-
-	return NULL;
+	return 0;
 }
 
 /**
  * bus1_pool_publish() - publish a slice
- * @pool:		pool to operate on
  * @slice:		slice to publish
  *
  * Publish a pool slice to user-space, so user-space can get access to it via
- * the mapped pool memory. If the slice was already published, this is a no-op.
- * Otherwise, the slice is marked as public and will only get freed once both
- * the user-space reference *and* kernel-space reference are released.
+ * the mapped pool memory. A slice cannot be deallocated as long as it is
+ * published and a slice cannot be published more than once.
  */
-void bus1_pool_publish(struct bus1_pool *pool, struct bus1_pool_slice *slice)
+void bus1_pool_publish(struct bus1_pool_slice *slice)
 {
-	/* kernel must own a ref to @slice to publish it */
-	WARN_ON(!slice->ref_kernel);
+	WARN_ON(slice->published);
+
 	slice->published = true;
 }
 
 /**
- * bus1_pool_unpublish() - release a public slice
- * @pool:	pool to operate on
- * @offset:	slice to release
+ * bus1_pool_unpublish() - unpublish a slice
+ * @slice:		slice to unpublish
  *
- * Unpublish the slice. A kernel ref must be held, so this should never free the
- * slice.
+ * Unpublish a pool slice, which was previously published to userspace. The
+ * slice should no longer be accessed from userspace. If it was not currently
+ * published an error is returned.
  */
-void bus1_pool_unpublish(struct bus1_pool *pool, struct bus1_pool_slice *slice)
+void bus1_pool_unpublish(struct bus1_pool_slice *slice)
 {
-	WARN_ON(!slice->published || !slice->ref_kernel);
+	WARN_ON(!slice->published);
 
 	slice->published = false;
 }
 
 /**
- * bus1_pool_flush() - fetch all slices to be flushed
+ * bus1_pool_flush() - unpublish all slices
  * @pool:	pool to flush
  *
- * Return all published slices to the caller.
+ * This unpublishes all published slices returns them to the caller.
  *
  * Return: Single-linked list of flushed entries.
  */
@@ -434,6 +390,8 @@ struct bus1_pool_slice *bus1_pool_flush(struct bus1_pool *pool)
 
 		if (!slice->published)
 			continue;
+
+		slice->published = false;
 
 		slice->next = list;
 		list = slice;

@@ -40,47 +40,38 @@ struct kvec;
  * @offset:		relative offset in parent pool
  * @size:		slice size
  * @free:		free space after slice
- * @ref_kernel:		whether a kernel reference exists
- * @ref_user:		whether a user reference exists
+ * @published:		whether the slices has been published to user-space
  * @entry:		link into linear list of slices
  * @rb_offset:		link to slice rb-tree, indexed by offset
  * @rb_free:		link to slice rb-tree, indexed by free size
  * @next:		single-linked utility list
  *
  * Each chunk of memory in the pool is managed as a slice. A slice can be
- * accessible by both the kernel and user-space, and their access rights are
- * managed independently. As long as the kernel has a reference to a slice, its
- * offset and size can be accessed freely and will not change. Once the kernel
- * drops its reference, it must not access the slice, anymore.
+ * accessible by both the kernel and user-space.
  *
- * To allow user-space access, the slice must be published. This marks the slice
- * as referenced by user-space. Note that all slices are always readable by
- * user-space, since the entire pool can be mapped. Publishing a slice only
- * marks the slice as referenced by user-space, so it will not be modified or
- * removed. Once user-space releases its reference, it should no longer access
- * the slice as it might be modified and/or overwritten by other data.
+ * To allow user-space access, the slice must be published. Note that all slices
+ * are always readable by user-space, since the entire pool can be mapped.
+ * Publishing a slice only marks the slice as such, so it will not be modified
+ * or removed. Once user-space releases its reference, it should no longer
+ * access the slice as it might be modified and/or overwritten by other data.
  *
- * Only if neither kernel nor user-space have a reference to a slice, the slice
- * is released. The kernel reference can only be acquired/released once, but
- * user-space references can be published/released several times. In particular,
- * if the kernel retains a reference when a slice is published and later
- * released by userspace, the same slice can be published again in the future.
+ * A slice can be published and unpublished to user-space several times, but it
+ * must only be released by the kernel if it is no longer published.
  *
- * Note that both kernel-space and user-space must be aware that slice
- * references are not ref-counted. They are simple booleans. For the kernel-side
- * this is obvious, as no ref/unref functions are provided. But user-space must
- * be aware that the same slice being published several times does not increase
- * the reference count.
+ * Note that both kernel-space and user-space must be aware that slices are not
+ * ref-counted. For the kernel-side this is obvious, as no ref/unref functions
+ * are provided. But user-space must be aware that the same slice being
+ * published several times does not increase the reference count.
  *
- * A slice keeps track of the amount of free space after it in the pool, so the
- * free space can be reused in case of fragmentation.
+ * Each slice keeps track of the amount of free space after it in the pool, so
+ * the free space can be reused in case of fragmentation.
  */
 struct bus1_pool_slice {
 	u32 offset;
 	u32 size;
 	u32 free;
 
-	u32 ref_kernel : 1;
+	u32 allocated : 1;
 	u32 published : 1;
 
 	struct list_head entry;
@@ -88,8 +79,6 @@ struct bus1_pool_slice {
 	struct rb_node rb_free;
 
 	struct bus1_pool_slice *next;
-
-	void *userdata;
 };
 
 /**
@@ -129,12 +118,15 @@ struct bus1_pool {
 int bus1_pool_init(struct bus1_pool *pool, const char *filename);
 void bus1_pool_deinit(struct bus1_pool *pool);
 
-struct bus1_pool_slice *bus1_pool_alloc(struct bus1_pool *pool, size_t size);
-struct bus1_pool_slice *bus1_pool_release_kernel(struct bus1_pool *pool,
-						 struct bus1_pool_slice *slice);
+void bus1_pool_slice_init(struct bus1_pool_slice *slice);
 
-void bus1_pool_publish(struct bus1_pool *pool, struct bus1_pool_slice *slice);
-void bus1_pool_unpublish(struct bus1_pool *pool, struct bus1_pool_slice *slice);
+int bus1_pool_alloc(struct bus1_pool *pool, struct bus1_pool_slice *slice,
+		    size_t size);
+int bus1_pool_dealloc(struct bus1_pool *pool, struct bus1_pool_slice *slice);
+
+void bus1_pool_publish(struct bus1_pool_slice *slice);
+void bus1_pool_unpublish(struct bus1_pool_slice *slice);
+
 struct bus1_pool_slice *
 bus1_pool_slice_find_published(struct bus1_pool *pool, size_t offset);
 
@@ -153,23 +145,5 @@ ssize_t bus1_pool_write_kvec(struct bus1_pool *pool,
 			     struct kvec *iov,
 			     size_t n_iov,
 			     size_t total_len);
-
-/**
- * bus1_pool_slice_is_public() - check whether a slice is public
- * @slice:		slice to check
- *
- * This checks whether @slice is public. That is, bus1_pool_publish() has been
- * called and the user has not released their reference, yet.
- *
- * Note that if you need reliable results, you better make sure this cannot
- * race calls to bus1_pool_publish() or bus1_pool_release_user().
- *
- * Return: True if public, false if not.
- */
-static inline bool bus1_pool_slice_is_public(struct bus1_pool_slice *slice)
-{
-	WARN_ON(!slice->ref_kernel);
-	return slice->published;
-}
 
 #endif /* __BUS1_POOL_H */
