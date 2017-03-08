@@ -470,15 +470,13 @@ void bus1_message_stage(struct bus1_message *m, struct bus1_tx *tx)
  *
  * This installs the payload FDs and handles of @message into the receiving
  * peer and the calling process. Handles are always installed, FDs are only
- * installed if explicitly requested via @param.
+ * installed if explicitly requested via @inst_fds.
  *
  * Return: 0 on success, negative error code on failure.
  */
-int bus1_message_install(struct bus1_message *m, struct bus1_cmd_recv *param)
+int bus1_message_install(struct bus1_message *m, bool inst_fds)
 {
 	size_t i, j, n, size, offset, n_handles = 0, n_fds = 0;
-	const bool inst_fds = param->flags & BUS1_RECV_FLAG_INSTALL_FDS;
-	const bool peek = param->flags & BUS1_RECV_FLAG_PEEK;
 	struct bus1_peer *peer = m->qnode.owner;
 	struct bus1_handle *h;
 	struct bus1_flist *e;
@@ -557,15 +555,8 @@ int bus1_message_install(struct bus1_message *m, struct bus1_cmd_recv *param)
 	}
 
 	/* charge resources */
-	if (peek) {
-		r = bus1_user_charge(&peer->user->limits.n_handles,
-				     &peer->data.limits.n_handles, n_handles);
-		if (r < 0)
-			goto exit;
-	} else {
-		WARN_ON(n_handles < m->n_handles_charge);
-		m->n_handles_charge -= n_handles;
-	}
+	WARN_ON(n_handles < m->n_handles_charge);
+	m->n_handles_charge -= n_handles;
 
 	/* publish pool slice */
 	mutex_lock(&peer->data.lock);

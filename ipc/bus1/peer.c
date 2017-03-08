@@ -908,7 +908,6 @@ exit:
 }
 
 static struct bus1_queue_node *bus1_peer_peek(struct bus1_peer *peer,
-					      struct bus1_cmd_recv *param,
 					      bool *morep)
 {
 	struct bus1_queue_node *qnode;
@@ -917,14 +916,6 @@ static struct bus1_queue_node *bus1_peer_peek(struct bus1_peer *peer,
 	u64 ts;
 
 	lockdep_assert_held(&peer->local.lock);
-
-	if (unlikely(param->flags & BUS1_RECV_FLAG_SEED)) {
-		if (!peer->local.seed)
-			return ERR_PTR(-EAGAIN);
-
-		*morep = false;
-		return &peer->local.seed->qnode;
-	}
 
 	mutex_lock(&peer->data.lock);
 	while ((qnode = bus1_queue_peek(&peer->data.queue, morep))) {
@@ -962,7 +953,7 @@ static struct bus1_queue_node *bus1_peer_peek(struct bus1_peer *peer,
 			continue;
 		}
 
-		if (!m && !(param->flags & BUS1_RECV_FLAG_PEEK))
+		if (!m)
 			bus1_queue_remove(&peer->data.queue, &peer->waitq,
 					  qnode);
 
@@ -988,17 +979,25 @@ static int bus1_peer_ioctl_recv(struct bus1_peer *peer,
 
 	if (copy_from_user(&param, (void __user *)arg, sizeof(param)))
 		return -EFAULT;
-	if (unlikely(param.flags & ~(BUS1_RECV_FLAG_PEEK |
-				     BUS1_RECV_FLAG_SEED |
+	if (unlikely(param.flags & ~(BUS1_RECV_FLAG_SEED |
 				     BUS1_RECV_FLAG_INSTALL_FDS)))
 		return -EINVAL;
 
 	mutex_lock(&peer->local.lock);
 
-	qnode = bus1_peer_peek(peer, &param, &more);
-	if (IS_ERR(qnode)) {
-		r = PTR_ERR(qnode);
-		goto exit;
+	if (unlikely(param.flags & BUS1_RECV_FLAG_SEED)) {
+		if (!peer->local.seed) {
+			r = -EAGAIN;
+			goto exit;
+		}
+
+		qnode = &peer->local.seed->qnode;
+	} else {
+		qnode = bus1_peer_peek(peer, &more);
+		if (IS_ERR(qnode)) {
+			r = PTR_ERR(qnode);
+			goto exit;
+		}
 	}
 
 	type = bus1_queue_node_get_type(qnode);
@@ -1012,7 +1011,8 @@ static int bus1_peer_ioctl_recv(struct bus1_peer *peer,
 			goto exit;
 		}
 
-		r = bus1_message_install(m, &param);
+		r = bus1_message_install(m,
+				param.flags & BUS1_RECV_FLAG_INSTALL_FDS);
 		if (r < 0)
 			goto exit;
 
@@ -1024,17 +1024,15 @@ static int bus1_peer_ioctl_recv(struct bus1_peer *peer,
 		param.msg.n_handles = m->n_handles;
 		param.msg.n_fds = m->n_files;
 
-		if (likely(!(param.flags & BUS1_RECV_FLAG_PEEK))) {
-			if (unlikely(param.flags & BUS1_RECV_FLAG_SEED)) {
-				peer->local.seed = NULL;
-			} else {
-				mutex_lock(&peer->data.lock);
-				bus1_queue_remove(&peer->data.queue,
-						  &peer->waitq, qnode);
-				mutex_unlock(&peer->data.lock);
-			}
-			bus1_message_unref(m);
+		if (unlikely(param.flags & BUS1_RECV_FLAG_SEED)) {
+			peer->local.seed = NULL;
+		} else {
+			mutex_lock(&peer->data.lock);
+			bus1_queue_remove(&peer->data.queue,
+					  &peer->waitq, qnode);
+			mutex_unlock(&peer->data.lock);
 		}
+		bus1_message_unref(m);
 		break;
 	case BUS1_MSG_NODE_DESTROY:
 	case BUS1_MSG_NODE_RELEASE:
@@ -1049,8 +1047,7 @@ static int bus1_peer_ioctl_recv(struct bus1_peer *peer,
 		param.msg.n_handles = 0;
 		param.msg.n_fds = 0;
 
-		if (likely(!(param.flags & BUS1_RECV_FLAG_PEEK)))
-			bus1_handle_unref(h);
+		bus1_handle_unref(h);
 		break;
 	case BUS1_MSG_NONE:
 	default:
