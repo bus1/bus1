@@ -80,7 +80,7 @@ struct bus1_pool_slice {
 	u32 free;
 
 	u32 ref_kernel : 1;
-	u32 ref_user : 1;
+	u32 published : 1;
 
 	struct list_head entry;
 	struct rb_node rb_offset;
@@ -127,10 +127,14 @@ void bus1_pool_deinit(struct bus1_pool *pool);
 struct bus1_pool_slice *bus1_pool_alloc(struct bus1_pool *pool, size_t size);
 struct bus1_pool_slice *bus1_pool_release_kernel(struct bus1_pool *pool,
 						 struct bus1_pool_slice *slice);
+
 void bus1_pool_publish(struct bus1_pool *pool, struct bus1_pool_slice *slice);
-int bus1_pool_release_user(struct bus1_pool *pool,
+int bus1_pool_unpublish(struct bus1_pool *pool,
 			   size_t offset,
 			   size_t *n_slicesp);
+struct bus1_pool_slice *
+bus1_pool_slice_find_published(struct bus1_pool *pool, size_t offset);
+
 void bus1_pool_flush(struct bus1_pool *pool, size_t *n_slicesp);
 int bus1_pool_mmap(struct bus1_pool *pool, struct vm_area_struct *vma);
 
@@ -162,7 +166,7 @@ ssize_t bus1_pool_write_kvec(struct bus1_pool *pool,
 static inline bool bus1_pool_slice_is_public(struct bus1_pool_slice *slice)
 {
 	WARN_ON(!slice->ref_kernel);
-	return slice->ref_user;
+	return slice->published;
 }
 
 #endif /* __BUS1_POOL_H */

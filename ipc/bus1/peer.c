@@ -702,7 +702,7 @@ static int bus1_peer_ioctl_slice_release(struct bus1_peer *peer,
 		return -EFAULT;
 
 	mutex_lock(&peer->data.lock);
-	r = bus1_pool_release_user(&peer->data.pool, offset, &n_slices);
+	r = bus1_pool_unpublish(&peer->data.pool, offset, &n_slices);
 	mutex_unlock(&peer->data.lock);
 	bus1_user_discharge(&peer->user->limits.n_slices,
 			    &peer->data.limits.n_slices, n_slices);

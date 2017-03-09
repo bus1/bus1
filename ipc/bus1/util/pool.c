@@ -39,7 +39,7 @@ static int bus1_pool_slice_init(struct bus1_pool_slice *slice,
 	slice->free = free;
 
 	slice->ref_kernel = true;
-	slice->ref_user = false;
+	slice->published = false;
 
 	INIT_LIST_HEAD(&slice->entry);
 
@@ -139,9 +139,17 @@ bus1_pool_slice_find_free(struct bus1_pool *pool, size_t size)
 	return closest;
 }
 
-/* find used slice with given offset */
-static struct bus1_pool_slice *
-bus1_pool_slice_find_by_offset(struct bus1_pool *pool, size_t offset)
+/**
+ * bus1_pool_slice_find_published - find published slice in pool
+ * @pool:	pool to operate on
+ * @offset:	offset to get slice at
+ *
+ * Find the slice at the given offset, if it exists and is published.
+ *
+ * Return: the given slice on success, or NULL otherwise.
+ */
+struct bus1_pool_slice *
+bus1_pool_slice_find_published(struct bus1_pool *pool, size_t offset)
 {
 	struct bus1_pool_slice *ps;
 	struct rb_node *n;
@@ -149,12 +157,16 @@ bus1_pool_slice_find_by_offset(struct bus1_pool *pool, size_t offset)
 	n = pool->slices_offset.rb_node;
 	while (n) {
 		ps = container_of(n, struct bus1_pool_slice, rb_offset);
-		if (offset < ps->offset)
+		if (offset < ps->offset) {
 			n = n->rb_left;
-		else if (offset > ps->offset)
+		} else if (offset > ps->offset) {
 			n = n->rb_right;
-		else /* if (offset == ps->offset) */
-			return ps;
+		} else { /* if (offset == ps->offset) */
+			if (ps->published)
+				return ps;
+			else
+				return NULL;
+		}
 	}
 
 	return NULL;
@@ -310,7 +322,7 @@ static void bus1_pool_free(struct bus1_pool *pool,
 	struct bus1_pool_slice *ps;
 
 	/* don't free the slice if either has a reference */
-	if (slice->ref_kernel || slice->ref_user)
+	if (slice->ref_kernel || slice->published)
 		return;
 
 	/* never try to free the root slice */
@@ -382,11 +394,11 @@ void bus1_pool_publish(struct bus1_pool *pool, struct bus1_pool_slice *slice)
 {
 	/* kernel must own a ref to @slice to publish it */
 	WARN_ON(!slice->ref_kernel);
-	slice->ref_user = true;
+	slice->published = true;
 }
 
 /**
- * bus1_pool_release_user() - release a public slice
+ * bus1_pool_unpublish() - release a public slice
  * @pool:	pool to operate on
  * @offset:	offset of slice to release
  * @n_slicesp:	output variable to store number of released slices, or NULL
@@ -400,20 +412,20 @@ void bus1_pool_publish(struct bus1_pool *pool, struct bus1_pool_slice *slice)
  *
  * Return: 0 on success, negative error code on failure.
  */
-int bus1_pool_release_user(struct bus1_pool *pool,
-			   size_t offset,
-			   size_t *n_slicesp)
+int bus1_pool_unpublish(struct bus1_pool *pool,
+			size_t offset,
+			size_t *n_slicesp)
 {
 	struct bus1_pool_slice *slice;
 
-	slice = bus1_pool_slice_find_by_offset(pool, offset);
-	if (!slice || !slice->ref_user)
+	slice = bus1_pool_slice_find_published(pool, offset);
+	if (!slice)
 		return -ENXIO;
 
 	if (n_slicesp)
 		*n_slicesp = !slice->ref_kernel;
 
-	slice->ref_user = false;
+	slice->published = false;
 	bus1_pool_free(pool, slice);
 
 	return 0;
@@ -437,7 +449,7 @@ void bus1_pool_flush(struct bus1_pool *pool, size_t *n_slicesp)
 	     node && ((t = rb_next(node)), true);
 	     node = t) {
 		slice = container_of(node, struct bus1_pool_slice, rb_offset);
-		if (!slice->ref_user)
+		if (!slice->published)
 			continue;
 
 		if (!slice->ref_kernel)
@@ -449,7 +461,7 @@ void bus1_pool_flush(struct bus1_pool *pool, size_t *n_slicesp)
 		 * this does not reorder the offset tree, so @t is still the
 		 * next slice.
 		 */
-		slice->ref_user = false;
+		slice->published = false;
 		bus1_pool_free(pool, slice);
 	}
 
@@ -508,7 +520,7 @@ ssize_t bus1_pool_write_iovec(struct bus1_pool *pool,
 
 	if (WARN_ON(offset + total_len < offset) ||
 	    WARN_ON(offset + total_len > slice->size) ||
-	    WARN_ON(slice->ref_user))
+	    WARN_ON(slice->published))
 		return -EFAULT;
 	if (total_len < 1)
 		return 0;
@@ -548,7 +560,7 @@ ssize_t bus1_pool_write_kvec(struct bus1_pool *pool,
 
 	if (WARN_ON(offset + total_len < offset) ||
 	    WARN_ON(offset + total_len > slice->size) ||
-	    WARN_ON(slice->ref_user))
+	    WARN_ON(slice->published))
 		return -EFAULT;
 	if (total_len < 1)
 		return 0;
