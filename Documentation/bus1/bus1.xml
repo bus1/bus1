@@ -46,8 +46,8 @@ It allows local processes to send messages to objects owned by remote processes,
 as well as share their own objects with others. Object ownership is static and
 cannot be transferred. Access to remote objects is prohibited, unless it was
 explicitly granted. Processes can transmit messages to a remote object via the
-message bus, transferring a data payload, object access rights, file
-descriptors, or other auxiliary data.
+message bus, transferring a data payload, object access rights, or file
+descriptors.
     </para>
     <para>
 To participate on the message bus, a peer context must be created. Peer contexts
@@ -64,7 +64,7 @@ The message bus manages object access using capabilities. That is, by default
 only the owner of an object is granted access rights. No other peer can access
 the object, nor are they aware of the existence of the object. However, access
 rights can be transmitted as auxiliary data with any message, effectively
-granting them to the receiver of the message. This even works transitively, that
+granting them to the receiver of the message. This also works transitively, that
 is, any peer that was granted access to an object can pass on those rights, even
 if they do not own the object. But mind that no access rights can ever be
 revoked, besides the owner destroying the object.
@@ -104,16 +104,15 @@ receiving a handle from a remote peer the kernel assigns the ID, which always
 has the <constant>BUS1_HANDLE_FLAG_MANAGED</constant> set. Additionally, the
 <constant>BUS1_HANDLE_FLAG_REMOTE</constant> flag tells whether a specific ID
 refers to a remote handle (if set), or to an owner handle (if unset). An ID
-assigned by the
-kernel is never reused, even after a handle has been dropped. The kernel keeps a
-user-reference count for each handle. Every time a handle is exposed to a peer,
-the user-reference count of that handle is incremented by one. This is never
-done asynchronously, but only synchronously when an ioctl is called by the
-holding peer. Therefore, a peer can reliable deduce the current user-reference
-count of all its handles, regardless of any ongoing message transaction.
-References can be explicitly dropped by a peer. Once the counter of a handle
-hits zero, it is destroyed, its ID becomes invalid, and if it was assigned by
-the kernel, it will not be reused again. Note that a peer can never have
+assigned by the kernel is never reused, even after a handle has been dropped.
+The kernel keeps a user-reference count for each handle. Every time a handle is
+exposed to a peer, the user-reference count of that handle is incremented by
+one. This is never done asynchronously, but only synchronously when an ioctl is
+called by the holding peer. Therefore, a peer can reliable deduce the current
+user-reference count of all its handles, regardless of any ongoing message
+transaction. References can be explicitly dropped by a peer. Once the counter of
+a handle hits zero, it is destroyed, its ID becomes invalid, and if it was
+assigned by the kernel, it will not be reused. Note that a peer can never have
 multiple different handles to the same node, rather the kernel always coalesces
 them into a single handle, using the user-reference counter to track it.
 However, if a handle is fully released, but the peer later acquires a handle to
@@ -172,9 +171,9 @@ nodes and handles necessary to bootstrap the peer.
 Each user has a fixed amount of available resources. The limits are static, but
 may be overridden by module parameters. Limits are placed on the amount of
 memory a user's pools may consume, the number of handles a user may hold and,
-the number of inflight messages may be destined for a user and the number of
-file descriptors may be inflight to a user. All inflight resources are accounted
-on the receiving peer.
+the number of inflight messages that may be destined for a user and the number
+of file descriptors that may be inflight to a user. All inflight resources are
+accounted on the receiving peer.
       </para>
       <para>
 As resources are accounted on the receiver, a quota mechanism is in place in
@@ -190,7 +189,7 @@ If a receiving peer does not dequeue any of its incoming messages it would be
 possible for a users quota to be fully consumed by one peer, making it
 impossible to communicate with other functioning peers owned by the same user. A
 second quota is therefore enforced per-peer, enforcing that at the time of a
-message transaction the receiving peer may consume at in total (including what
+message transaction the receiving peer may in total consume (including what
 is consumed by previous transactions) half of the total resources available to
 the sending user that have not been consumed by another peer.
       </para>
@@ -228,7 +227,7 @@ accordingly.
       </para>
       <para>
 Also in the case where there can be no causal relationship, we are guaranteed a
-global order. In case two events happened concurrently, there can never be any
+total order. In case two events happened concurrently, there can never be any
 inconsistency in which occurred before the other. By way of example, consider
 two peers sending one message each to two different peers, we are guaranteed
 that both the recipient peers receive the two messages in the same order, even
@@ -463,8 +462,8 @@ struct bus1_cmd_handle_transfer {
 </programlisting>
 <varname>flags</varname> must always be set to 0, <varname>src_handle</varname>
 is the handle ID of the handle being transferred in the source context,
-<varname>dst_fd</varname> is the file descriptor representing the destination
-peer context and <varname>dst_handle</varname> must be
+<varname>dst_fd</varname> is the bus1 file descriptor representing the
+destination peer context and <varname>dst_handle</varname> must be
 <constant>BUS1_HANDLE_INVALID</constant> and is set to the new handle ID in the
 destination context on return.
                   </para>
@@ -568,9 +567,13 @@ message would be ordered after the node's destruction notification) then
                   </para>
                   <para>
 <varname>ptr_fds</varname> is a pointer to an integer array of file descriptors
-and <varname>n_fds</varname> is the length of the array. Each of the file
-descriptors in this array may be installed in the destination peer context at
-receive time (see below).
+and <varname>n_fds</varname> is the length of the array. If requested, each of
+the file descriptors in this array is installed in the destination peer context
+at receive time (see below). bus1 or
+<citerefentry>
+  <refentrytitle>unix</refentrytitle><manvolnum>7</manvolnum>
+</citerefentry>
+domain socket file descriptors may not be transferred in this way.
                   </para>
                 </listitem>
               </varlistentry>
@@ -595,14 +598,10 @@ struct bus1_cmd_recv {
         } msg;
 };
 </programlisting>
-If <constant>BUS1_RECV_FLAG_PEEK</constant> is set in <varname>flags</varname>,
-the received message is not dropped from the queue. If
-<constant>BUS1_RECV_FLAG_SEED</constant> is set, the peer's seed is received
-rather than a message from the queue. If
-<constant>BUS1_RECV_FLAG_INSTALL_FDS</constant> the file descriptors attached to
-the received message are installed in the receiving process. Care must be taken
-when using this flag from more than one process on the same message as file
-descriptor numbers are per-process and not per-peer.
+If <constant>BUS1_RECV_FLAG_SEED</constant> is set in <varname>flags</varname>,
+the peer's seed is received rather than a message from the queue. If
+<constant>BUS1_RECV_FLAG_INSTALL_FDS</constant> is set, the file descriptors
+attached to the received message are installed in the receiving process.
                   </para>
                   <para>
 <varname>max_offset</varname> indicates the maximum offset into the pool the
