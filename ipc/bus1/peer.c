@@ -145,10 +145,11 @@ error:
 
 static void bus1_peer_flush(struct bus1_peer *peer, u64 flags)
 {
+	struct bus1_pool_slice *slist, *slice;
 	struct bus1_queue_node *qlist, *qnode;
 	struct bus1_handle *h, *safe;
 	struct bus1_tx tx;
-	size_t n_slices;
+	size_t n_slices = 0;
 	u64 ts;
 	int n;
 
@@ -211,7 +212,17 @@ static void bus1_peer_flush(struct bus1_peer *peer, u64 flags)
 		/* finally flush the queue and pool */
 		mutex_lock(&peer->data.lock);
 		qlist = bus1_queue_flush(&peer->data.queue, ts);
-		bus1_pool_flush(&peer->data.pool, &n_slices);
+		slist = bus1_pool_flush(&peer->data.pool);
+
+		while ((slice = slist)) {
+			size_t flushed;
+
+			slist = slice->next;
+			slice->next = NULL;
+
+			bus1_pool_unpublish(&peer->data.pool, slice, &flushed);
+			n_slices += flushed;
+		}
 		mutex_unlock(&peer->data.lock);
 
 		bus1_user_discharge(&peer->user->limits.n_slices,
@@ -692,9 +703,9 @@ exit:
 static int bus1_peer_ioctl_slice_release(struct bus1_peer *peer,
 					 unsigned long arg)
 {
+	struct bus1_pool_slice *slice;
 	size_t n_slices = 0;
 	u64 offset;
-	int r;
 
 	BUILD_BUG_ON(_IOC_SIZE(BUS1_CMD_SLICE_RELEASE) != sizeof(offset));
 
@@ -702,11 +713,16 @@ static int bus1_peer_ioctl_slice_release(struct bus1_peer *peer,
 		return -EFAULT;
 
 	mutex_lock(&peer->data.lock);
-	r = bus1_pool_unpublish(&peer->data.pool, offset, &n_slices);
+	slice = bus1_pool_slice_find_published(&peer->data.pool, offset);
+	if (slice)
+		bus1_pool_unpublish(&peer->data.pool, slice, &n_slices);
 	mutex_unlock(&peer->data.lock);
+	if (!slice)
+		return -ENXIO;
+
 	bus1_user_discharge(&peer->user->limits.n_slices,
 			    &peer->data.limits.n_slices, n_slices);
-	return r;
+	return 0;
 }
 
 static struct bus1_message *bus1_peer_new_message(struct bus1_peer *peer,

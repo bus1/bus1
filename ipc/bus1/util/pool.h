@@ -45,6 +45,7 @@ struct kvec;
  * @entry:		link into linear list of slices
  * @rb_offset:		link to slice rb-tree, indexed by offset
  * @rb_free:		link to slice rb-tree, indexed by free size
+ * @next:		single-linked utility list
  *
  * Each chunk of memory in the pool is managed as a slice. A slice can be
  * accessible by both the kernel and user-space, and their access rights are
@@ -85,6 +86,8 @@ struct bus1_pool_slice {
 	struct list_head entry;
 	struct rb_node rb_offset;
 	struct rb_node rb_free;
+
+	struct bus1_pool_slice *next;
 };
 
 /**
@@ -129,15 +132,15 @@ struct bus1_pool_slice *bus1_pool_release_kernel(struct bus1_pool *pool,
 						 struct bus1_pool_slice *slice);
 
 void bus1_pool_publish(struct bus1_pool *pool, struct bus1_pool_slice *slice);
-int bus1_pool_unpublish(struct bus1_pool *pool,
-			   size_t offset,
-			   size_t *n_slicesp);
+void bus1_pool_unpublish(struct bus1_pool *pool,
+			 struct bus1_pool_slice *slice,
+			 size_t *n_slicesp);
 struct bus1_pool_slice *
 bus1_pool_slice_find_published(struct bus1_pool *pool, size_t offset);
 
-void bus1_pool_flush(struct bus1_pool *pool, size_t *n_slicesp);
-int bus1_pool_mmap(struct bus1_pool *pool, struct vm_area_struct *vma);
+struct bus1_pool_slice *bus1_pool_flush(struct bus1_pool *pool);
 
+int bus1_pool_mmap(struct bus1_pool *pool, struct vm_area_struct *vma);
 ssize_t bus1_pool_write_iovec(struct bus1_pool *pool,
 			      struct bus1_pool_slice *slice,
 			      loff_t offset,

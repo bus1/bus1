@@ -400,73 +400,50 @@ void bus1_pool_publish(struct bus1_pool *pool, struct bus1_pool_slice *slice)
 /**
  * bus1_pool_unpublish() - release a public slice
  * @pool:	pool to operate on
- * @offset:	offset of slice to release
+ * @offset:	slice to release
  * @n_slicesp:	output variable to store number of released slices, or NULL
  *
- * Release the user-space reference to a pool-slice, specified via the offset
- * of the slice. If both, the user-space reference *and* the kernel-space
- * reference to the slice are gone, the slice will be actually freed.
- *
- * If no slice exists with the given offset, or if there is no user-space
- * reference to the specified slice, an error is returned.
- *
- * Return: 0 on success, negative error code on failure.
+ * Release the user-space reference to a pool-slice. If both the user-space
+ * reference *and* the kernel-space reference to the slice are gone, the slice
+ * will be actually freed.
  */
-int bus1_pool_unpublish(struct bus1_pool *pool,
-			size_t offset,
-			size_t *n_slicesp)
+void bus1_pool_unpublish(struct bus1_pool *pool,
+			 struct bus1_pool_slice *slice,
+			 size_t *n_slicesp)
 {
-	struct bus1_pool_slice *slice;
-
-	slice = bus1_pool_slice_find_published(pool, offset);
-	if (!slice)
-		return -ENXIO;
+	WARN_ON(!slice->published);
 
 	if (n_slicesp)
 		*n_slicesp = !slice->ref_kernel;
 
 	slice->published = false;
 	bus1_pool_free(pool, slice);
-
-	return 0;
 }
 
 /**
- * bus1_pool_flush() - flush all user references
+ * bus1_pool_flush() - fetch all slices to be flushed
  * @pool:	pool to flush
- * @n_slicesp:	output variable to store number of released slices, or NULL
  *
- * This flushes all user-references to any slice in @pool. Kernel references
- * are left untouched.
+ * Return all published slices to the caller.
+ *
+ * Return: Single-linked list of flushed entries.
  */
-void bus1_pool_flush(struct bus1_pool *pool, size_t *n_slicesp)
+struct bus1_pool_slice *bus1_pool_flush(struct bus1_pool *pool)
 {
-	struct bus1_pool_slice *slice;
-	struct rb_node *node, *t;
-	size_t n_slices = 0;
+	struct bus1_pool_slice *slice, *list = NULL;
+	struct list_head *entry;
 
-	for (node = rb_first(&pool->slices_offset);
-	     node && ((t = rb_next(node)), true);
-	     node = t) {
-		slice = container_of(node, struct bus1_pool_slice, rb_offset);
+	list_for_each(entry, &pool->slices) {
+		slice = container_of(entry, struct bus1_pool_slice, entry);
+
 		if (!slice->published)
 			continue;
 
-		if (!slice->ref_kernel)
-			++n_slices;
-
-		/*
-		 * @slice might be freed by bus1_pool_free() and the logically
-		 * previous slice may be relinked on the free tree. However,
-		 * this does not reorder the offset tree, so @t is still the
-		 * next slice.
-		 */
-		slice->published = false;
-		bus1_pool_free(pool, slice);
+		slice->next = list;
+		list = slice;
 	}
 
-	if (n_slicesp)
-		*n_slicesp = n_slices;
+	return list;
 }
 
 /**

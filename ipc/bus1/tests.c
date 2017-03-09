@@ -154,12 +154,8 @@ static void bus1_test_pool(void)
 	bus1_pool_release_kernel(&pool, slice);
 	slice = bus1_pool_alloc(&pool, 1024);
 	WARN_ON(IS_ERR_OR_NULL(slice));
-	WARN_ON(bus1_pool_unpublish(&pool, slice->offset, &n_slices)
-		>= 0);
 	bus1_pool_publish(&pool, slice);
-	WARN_ON(bus1_pool_unpublish(&pool, slice->offset + 1, &n_slices)
-		>= 0);
-	WARN_ON(bus1_pool_unpublish(&pool, slice->offset, &n_slices) < 0);
+	bus1_pool_unpublish(&pool, slice, &n_slices);
 	WARN_ON(n_slices != 0);
 	bus1_pool_release_kernel(&pool, slice);
 
@@ -172,7 +168,7 @@ static void bus1_test_pool(void)
 		< 0);
 	bus1_pool_publish(&pool, slice);
 	bus1_pool_release_kernel(&pool, slice);
-	WARN_ON(bus1_pool_unpublish(&pool, slice->offset, &n_slices) < 0);
+	bus1_pool_unpublish(&pool, slice, &n_slices);
 	WARN_ON(n_slices != 1);
 
 	bus1_pool_deinit(&pool);
