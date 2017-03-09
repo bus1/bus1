@@ -1048,6 +1048,7 @@ static int bus1_peer_ioctl_recv(struct bus1_peer *peer,
 					  &peer->waitq, qnode);
 			mutex_unlock(&peer->data.lock);
 		}
+		bus1_message_deinit(m);
 		bus1_message_unref(m);
 		break;
 	case BUS1_MSG_NODE_DESTROY:

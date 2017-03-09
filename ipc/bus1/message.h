@@ -104,6 +104,7 @@ struct bus1_message *bus1_factory_instantiate(struct bus1_factory *f,
 					      struct bus1_handle *handle,
 					      struct bus1_peer *peer);
 
+void bus1_message_deinit(struct bus1_message *m);
 void bus1_message_free(struct kref *k);
 void bus1_message_stage(struct bus1_message *m, struct bus1_tx *tx);
 int bus1_message_install(struct bus1_message *m, bool inst_fds);

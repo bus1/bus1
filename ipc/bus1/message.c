@@ -384,16 +384,13 @@ error:
 }
 
 /**
- * bus1_message_free() - destroy message
- * @k:			kref belonging to a message
+ * bus1_message_deinit() - release file descriptors and handles of message
+ * @m:		message to operate on
  *
- * This frees the message belonging to the reference counter @k. It is supposed
- * to be used with kref_put(). See bus1_message_unref(). Like all queue nodes,
- * the memory deallocation is rcu-delayed.
+ * This frees the fds and handles pinned by the message @m.
  */
-void bus1_message_free(struct kref *k)
+void bus1_message_deinit(struct bus1_message *m)
 {
-	struct bus1_message *m = container_of(k, struct bus1_message, ref);
 	struct bus1_peer *peer = m->qnode.owner;
 	struct bus1_flist *e;
 	size_t i;
@@ -403,6 +400,7 @@ void bus1_message_free(struct kref *k)
 
 	for (i = 0; i < m->n_files; ++i)
 		fput(m->files[i]);
+	m->n_files = 0;
 
 	for (i = 0, e = m->handles;
 	     i < m->n_handles;
@@ -416,6 +414,27 @@ void bus1_message_free(struct kref *k)
 	bus1_user_discharge(&peer->user->limits.n_handles,
 			    &peer->data.limits.n_handles, m->n_handles_charge);
 	bus1_flist_deinit(m->handles, m->n_handles);
+	m->n_handles = 0;
+
+	m->user = bus1_user_unref(m->user);
+	m->dst = bus1_handle_unref(m->dst);
+	bus1_queue_node_deinit(&m->qnode);
+}
+
+/**
+ * bus1_message_free() - destroy message
+ * @k:			kref belonging to a message
+ *
+ * This frees the message belonging to the reference counter @k. It is supposed
+ * to be used with kref_put(). See bus1_message_unref(). Like all queue nodes,
+ * the memory deallocation is rcu-delayed.
+ */
+void bus1_message_free(struct kref *k)
+{
+	struct bus1_message *m = container_of(k, struct bus1_message, ref);
+	struct bus1_peer *peer = m->qnode.owner;
+
+	bus1_message_deinit(m);
 
 	if (m->slice) {
 		mutex_lock(&peer->data.lock);
@@ -426,9 +445,6 @@ void bus1_message_free(struct kref *k)
 		mutex_unlock(&peer->data.lock);
 	}
 
-	bus1_user_unref(m->user);
-	bus1_handle_unref(m->dst);
-	bus1_queue_node_deinit(&m->qnode);
 	kfree_rcu(m, qnode.rcu);
 }
 
