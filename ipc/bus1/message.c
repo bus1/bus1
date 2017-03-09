@@ -438,9 +438,9 @@ void bus1_message_free(struct kref *k)
 
 	if (m->slice) {
 		mutex_lock(&peer->data.lock);
-		if (!bus1_pool_slice_is_public(m->slice))
-			bus1_user_discharge(&peer->user->limits.n_slices,
-					    &peer->data.limits.n_slices, 1);
+		WARN_ON(bus1_pool_slice_is_public(m->slice));
+		bus1_user_discharge(&peer->user->limits.n_slices,
+				    &peer->data.limits.n_slices, 1);
 		bus1_pool_release_kernel(&peer->data.pool, m->slice);
 		mutex_unlock(&peer->data.lock);
 	}
@@ -575,6 +575,8 @@ int bus1_message_install(struct bus1_message *m, bool inst_fds)
 	m->n_handles_charge -= n_handles;
 
 	/* publish pool slice */
+	WARN_ON(m->slice->userdata);
+	m->slice->userdata = bus1_message_ref(m);
 	mutex_lock(&peer->data.lock);
 	bus1_pool_publish(&peer->data.pool, m->slice);
 	mutex_unlock(&peer->data.lock);

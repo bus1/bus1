@@ -88,6 +88,8 @@ struct bus1_pool_slice {
 	struct rb_node rb_free;
 
 	struct bus1_pool_slice *next;
+
+	void *userdata;
 };
 
 /**
@@ -132,9 +134,7 @@ struct bus1_pool_slice *bus1_pool_release_kernel(struct bus1_pool *pool,
 						 struct bus1_pool_slice *slice);
 
 void bus1_pool_publish(struct bus1_pool *pool, struct bus1_pool_slice *slice);
-void bus1_pool_unpublish(struct bus1_pool *pool,
-			 struct bus1_pool_slice *slice,
-			 size_t *n_slicesp);
+void bus1_pool_unpublish(struct bus1_pool *pool, struct bus1_pool_slice *slice);
 struct bus1_pool_slice *
 bus1_pool_slice_find_published(struct bus1_pool *pool, size_t offset);
 

@@ -140,7 +140,6 @@ static void bus1_test_pool(void)
 		.iov_base = payload,
 		.iov_len = strlen(payload),
 	};
-	size_t n_slices;
 
 	bus1_pool_deinit(&pool);
 	WARN_ON(bus1_pool_init(&pool, "test") < 0);
@@ -155,8 +154,7 @@ static void bus1_test_pool(void)
 	slice = bus1_pool_alloc(&pool, 1024);
 	WARN_ON(IS_ERR_OR_NULL(slice));
 	bus1_pool_publish(&pool, slice);
-	bus1_pool_unpublish(&pool, slice, &n_slices);
-	WARN_ON(n_slices != 0);
+	bus1_pool_unpublish(&pool, slice);
 	bus1_pool_release_kernel(&pool, slice);
 
 	slice = bus1_pool_alloc(&pool, 1024);
@@ -167,9 +165,8 @@ static void bus1_test_pool(void)
 	WARN_ON(bus1_pool_write_kvec(&pool, slice, 0, &kvec, 1, kvec.iov_len)
 		< 0);
 	bus1_pool_publish(&pool, slice);
+	bus1_pool_unpublish(&pool, slice);
 	bus1_pool_release_kernel(&pool, slice);
-	bus1_pool_unpublish(&pool, slice, &n_slices);
-	WARN_ON(n_slices != 1);
 
 	bus1_pool_deinit(&pool);
 }

@@ -43,6 +43,8 @@ static int bus1_pool_slice_init(struct bus1_pool_slice *slice,
 
 	INIT_LIST_HEAD(&slice->entry);
 
+	slice->userdata = NULL;
+
 	return 0;
 }
 
@@ -372,6 +374,8 @@ bus1_pool_release_kernel(struct bus1_pool *pool, struct bus1_pool_slice *slice)
 	if (!slice || WARN_ON(!slice->ref_kernel))
 		return NULL;
 
+	WARN_ON(slice->published);
+
 	/* kernel must own a ref to @slice */
 	slice->ref_kernel = false;
 
@@ -401,23 +405,15 @@ void bus1_pool_publish(struct bus1_pool *pool, struct bus1_pool_slice *slice)
  * bus1_pool_unpublish() - release a public slice
  * @pool:	pool to operate on
  * @offset:	slice to release
- * @n_slicesp:	output variable to store number of released slices, or NULL
  *
- * Release the user-space reference to a pool-slice. If both the user-space
- * reference *and* the kernel-space reference to the slice are gone, the slice
- * will be actually freed.
+ * Unpublish the slice. A kernel ref must be held, so this should never free the
+ * slice.
  */
-void bus1_pool_unpublish(struct bus1_pool *pool,
-			 struct bus1_pool_slice *slice,
-			 size_t *n_slicesp)
+void bus1_pool_unpublish(struct bus1_pool *pool, struct bus1_pool_slice *slice)
 {
-	WARN_ON(!slice->published);
-
-	if (n_slicesp)
-		*n_slicesp = !slice->ref_kernel;
+	WARN_ON(!slice->published || !slice->ref_kernel);
 
 	slice->published = false;
-	bus1_pool_free(pool, slice);
 }
 
 /**
