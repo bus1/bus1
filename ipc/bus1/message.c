@@ -569,9 +569,7 @@ int bus1_message_install(struct bus1_message *m, bool inst_fds)
 
 	/* publish pool slice */
 	bus1_message_ref(m);
-	mutex_lock(&peer->data.lock);
 	bus1_pool_publish(&m->slice);
-	mutex_unlock(&peer->data.lock);
 
 	/* commit handles */
 	for (i = 0, e = m->handles;

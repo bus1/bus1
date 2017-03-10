@@ -212,9 +212,15 @@ static void bus1_peer_flush(struct bus1_peer *peer, u64 flags)
 		/* finally flush the queue and pool */
 		mutex_lock(&peer->data.lock);
 		qlist = bus1_queue_flush(&peer->data.queue, ts);
-		slist = bus1_pool_flush(&peer->data.pool);
 		mutex_unlock(&peer->data.lock);
 
+		while ((qnode = qlist)) {
+			qlist = qnode->next;
+			qnode->next = NULL;
+			bus1_peer_free_qnode(qnode);
+		}
+
+		slist = bus1_pool_flush(&peer->data.pool);
 		while ((slice = slist)) {
 			slist = slice->next;
 			slice->next = NULL;
@@ -222,12 +228,6 @@ static void bus1_peer_flush(struct bus1_peer *peer, u64 flags)
 					       slice);
 
 			bus1_message_unref(message);
-		}
-
-		while ((qnode = qlist)) {
-			qlist = qnode->next;
-			qnode->next = NULL;
-			bus1_peer_free_qnode(qnode);
 		}
 	}
 
@@ -708,11 +708,13 @@ static int bus1_peer_ioctl_slice_release(struct bus1_peer *peer,
 	if (get_user(offset, (const u64 __user *)arg))
 		return -EFAULT;
 
+	mutex_lock(&peer->local.lock);
 	mutex_lock(&peer->data.lock);
 	slice = bus1_pool_slice_find_published(&peer->data.pool, offset);
+	mutex_unlock(&peer->data.lock);
 	if (slice)
 		bus1_pool_unpublish(slice);
-	mutex_unlock(&peer->data.lock);
+	mutex_unlock(&peer->local.lock);
 	if (!slice)
 		return -ENXIO;
 
