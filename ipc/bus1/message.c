@@ -411,7 +411,6 @@ void bus1_message_deinit(struct bus1_message *m)
 	bus1_flist_deinit(m->handles, m->n_handles);
 	m->n_handles = 0;
 
-	m->user = bus1_user_unref(m->user);
 	m->dst = bus1_handle_unref(m->dst);
 	bus1_queue_node_deinit(&m->qnode);
 }
@@ -436,6 +435,8 @@ void bus1_message_free(struct kref *k)
 	mutex_unlock(&peer->data.lock);
 	bus1_user_discharge(&peer->user->limits.n_slices,
 			    &peer->data.limits.n_slices, 1);
+
+	bus1_user_unref(m->user);
 
 	kfree_rcu(m, qnode.rcu);
 }
