@@ -156,7 +156,7 @@ bus1_user_limits_map(struct bus1_user_limits *limits, struct bus1_user *actor)
 		return usage;
 
 	usage = bus1_user_usage_new();
-	if (!IS_ERR(usage))
+	if (IS_ERR(usage))
 		return ERR_CAST(usage);
 
 	r = idr_alloc(&limits->usages, usage, __kuid_val(actor->uid),
