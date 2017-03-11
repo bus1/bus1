@@ -153,25 +153,28 @@ bus1_user_limits_map(struct bus1_user *user,
 	struct bus1_user_usage *usage;
 	int r;
 
-	mutex_lock(&user->lock);
+	/* fast-path: unlocked, the usage object is guaranteed to stay around */
 	usage = idr_find(&limits->usages, __kuid_val(actor->uid));
 	if (usage)
-		goto exit;
+		return usage;
 
-	usage = bus1_user_usage_new();
-	if (IS_ERR(usage))
-		goto exit;
-
-	r = idr_alloc(&limits->usages, usage, __kuid_val(actor->uid),
-		      __kuid_val(actor->uid) + 1, GFP_KERNEL);
-	if (r < 0) {
-		bus1_user_usage_free(usage);
-		usage = ERR_PTR(r);
-		goto exit;
+	/* slow-path: try again with IDR locked */
+	mutex_lock(&user->lock);
+	usage = idr_find(&limits->usages, __kuid_val(actor->uid));
+	if (likely(!usage)) {
+		usage = bus1_user_usage_new();
+		if (!IS_ERR(usage)) {
+			r = idr_alloc(&limits->usages, usage,
+				      __kuid_val(actor->uid),
+				      __kuid_val(actor->uid) + 1, GFP_KERNEL);
+			if (r < 0) {
+				bus1_user_usage_free(usage);
+				usage = ERR_PTR(r);
+			}
+		}
 	}
-
-exit:
 	mutex_unlock(&user->lock);
+
 	return usage;
 }
 
