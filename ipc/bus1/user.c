@@ -146,26 +146,32 @@ void bus1_user_limits_deinit(struct bus1_user_limits *limits)
 }
 
 static struct bus1_user_usage *
-bus1_user_limits_map(struct bus1_user_limits *limits, struct bus1_user *actor)
+bus1_user_limits_map(struct bus1_user *user,
+		     struct bus1_user_limits *limits,
+		     struct bus1_user *actor)
 {
 	struct bus1_user_usage *usage;
 	int r;
 
+	mutex_lock(&user->lock);
 	usage = idr_find(&limits->usages, __kuid_val(actor->uid));
 	if (usage)
-		return usage;
+		goto exit;
 
 	usage = bus1_user_usage_new();
 	if (IS_ERR(usage))
-		return ERR_CAST(usage);
+		goto exit;
 
 	r = idr_alloc(&limits->usages, usage, __kuid_val(actor->uid),
 		      __kuid_val(actor->uid) + 1, GFP_KERNEL);
 	if (r < 0) {
 		bus1_user_usage_free(usage);
-		return ERR_PTR(r);
+		usage = ERR_PTR(r);
+		goto exit;
 	}
 
+exit:
+	mutex_unlock(&user->lock);
 	return usage;
 }
 
@@ -492,19 +498,13 @@ int bus1_user_charge_quota(struct bus1_user *user,
 
 	WARN_ON(n_slices < 0 || n_handles < 0 || n_bytes < 0 || n_fds < 0);
 
-	mutex_lock(&user->lock);
-	usage = bus1_user_limits_map(limits, actor);
-	if (IS_ERR(usage)) {
-		r = PTR_ERR(usage);
-		goto exit;
-	}
+	usage = bus1_user_limits_map(user, limits, actor);
+	if (IS_ERR(usage))
+		return PTR_ERR(usage);
 
-	u_usage = bus1_user_limits_map(&user->limits, actor);
-	if (IS_ERR(u_usage)) {
-		r = PTR_ERR(u_usage);
-		goto exit;
-	}
-	mutex_unlock(&user->lock);
+	u_usage = bus1_user_limits_map(user, &user->limits, actor);
+	if (IS_ERR(u_usage))
+		return PTR_ERR(u_usage);
 
 	r = bus1_user_charge_quota_apply(u_usage, usage, &user->limits, limits,
 					 n_slices, n_handles, n_bytes, n_fds);
@@ -512,9 +512,6 @@ int bus1_user_charge_quota(struct bus1_user *user,
 		return r;
 
 	return 0;
-exit:
-	mutex_unlock(&user->lock);
-	return r;
 }
 
 /**
@@ -543,10 +540,8 @@ void bus1_user_discharge_quota(struct bus1_user *user,
 
 	WARN_ON(n_slices < 0 || n_handles < 0 || n_bytes < 0 || n_fds < 0);
 
-	mutex_lock(&user->lock);
-	q_local = bus1_user_limits_map(l_local, actor);
-	q_global = bus1_user_limits_map(&user->limits, actor);
-	mutex_unlock(&user->lock);
+	q_local = bus1_user_limits_map(user, l_local, actor);
+	q_global = bus1_user_limits_map(user, &user->limits, actor);
 
 	WARN_ON(IS_ERR(q_local));
 	WARN_ON(IS_ERR(q_global));
@@ -598,10 +593,8 @@ void bus1_user_commit_quota(struct bus1_user *user,
 
 	WARN_ON(n_slices < 0 || n_handles < 0 || n_bytes < 0 || n_fds < 0);
 
-	mutex_lock(&user->lock);
-	q_local = bus1_user_limits_map(l_local, actor);
-	q_global = bus1_user_limits_map(&user->limits, actor);
-	mutex_unlock(&user->lock);
+	q_local = bus1_user_limits_map(user, l_local, actor);
+	q_global = bus1_user_limits_map(user, &user->limits, actor);
 
 	WARN_ON(IS_ERR(q_local));
 	WARN_ON(IS_ERR(q_global));
