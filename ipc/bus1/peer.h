@@ -29,7 +29,7 @@
  * All peers on the system operate on the same level. There is no context a
  * peer is linked into. Hence, you can never lock multiple peers at the same
  * time. Instead, peers provide active-references. Before performing an
- * operation on a peer, an active reference must be acquired, and hold as long
+ * operation on a peer, an active reference must be acquired, and held as long
  * as the operation goes on. When done, the reference is released again.
  * When a peer is disconnected, no more active references can be acquired, and
  * any outstanding operation is waited for before the peer is destroyed.
@@ -41,7 +41,7 @@
  * data lock nests underneath the local-lock. Furthermore, the data-lock
  * critical sections must be kept small and never block indefinitely. Remote
  * peers might wait for data-locks, hence they must rely on not being DoSed.
- * The local peer lock, however, is private to the peer itself. Not such
+ * The local peer lock, however, is private to the peer itself and no such
  * restrictions apply. It is mostly used to give the impression of atomic
  * operations (i.e., making the API appear consistent and coherent).
  */
