@@ -390,14 +390,14 @@ static int bus1_user_charge_one(atomic_t *global_remaining,
 	return 0;
 }
 
-static int bus1_user_charge_quota_locked(struct bus1_user_usage *q_global,
-					 struct bus1_user_usage *q_local,
-					 struct bus1_user_limits *l_global,
-					 struct bus1_user_limits *l_local,
-					 int n_slices,
-					 int n_handles,
-					 int n_bytes,
-					 int n_fds)
+static int bus1_user_charge_quota_apply(struct bus1_user_usage *q_global,
+					struct bus1_user_usage *q_local,
+					struct bus1_user_limits *l_global,
+					struct bus1_user_limits *l_local,
+					int n_slices,
+					int n_handles,
+					int n_bytes,
+					int n_fds)
 {
 	int r;
 
@@ -473,6 +473,10 @@ revert_slices:
  * all fail. Hence, it makes little sense to mix negative and positive charges
  * in a single call.
  *
+ * Note that this is not atomic, it may happen that trying to apply two charges
+ * simultaneously might fail whereas applying them one at a time would allow one
+ * to succeed.
+ *
  * Return: 0 on success, negative error code on failure.
  */
 int bus1_user_charge_quota(struct bus1_user *user,
@@ -489,7 +493,6 @@ int bus1_user_charge_quota(struct bus1_user *user,
 	WARN_ON(n_slices < 0 || n_handles < 0 || n_bytes < 0 || n_fds < 0);
 
 	mutex_lock(&user->lock);
-
 	usage = bus1_user_limits_map(limits, actor);
 	if (IS_ERR(usage)) {
 		r = PTR_ERR(usage);
@@ -501,11 +504,14 @@ int bus1_user_charge_quota(struct bus1_user *user,
 		r = PTR_ERR(u_usage);
 		goto exit;
 	}
+	mutex_unlock(&user->lock);
 
-	r = bus1_user_charge_quota_locked(u_usage, usage, &user->limits,
-					  limits, n_slices, n_handles,
-					  n_bytes, n_fds);
+	r = bus1_user_charge_quota_apply(u_usage, usage, &user->limits, limits,
+					 n_slices, n_handles, n_bytes, n_fds);
+	if (r < 0)
+		return r;
 
+	return 0;
 exit:
 	mutex_unlock(&user->lock);
 	return r;
@@ -538,14 +544,12 @@ void bus1_user_discharge_quota(struct bus1_user *user,
 	WARN_ON(n_slices < 0 || n_handles < 0 || n_bytes < 0 || n_fds < 0);
 
 	mutex_lock(&user->lock);
-
 	q_local = bus1_user_limits_map(l_local, actor);
-	if (WARN_ON(IS_ERR(q_local)))
-		goto exit;
-
 	q_global = bus1_user_limits_map(&user->limits, actor);
-	if (WARN_ON(IS_ERR(q_global)))
-		goto exit;
+	mutex_unlock(&user->lock);
+
+	WARN_ON(IS_ERR(q_local));
+	WARN_ON(IS_ERR(q_global));
 
 	atomic_sub(n_slices, &q_global->n_slices);
 	atomic_sub(n_handles, &q_global->n_handles);
@@ -566,9 +570,6 @@ void bus1_user_discharge_quota(struct bus1_user *user,
 	atomic_add(n_handles, &l_local->n_handles);
 	atomic_add(n_bytes, &l_local->n_inflight_bytes);
 	atomic_add(n_fds, &l_local->n_inflight_fds);
-
-exit:
-	mutex_unlock(&user->lock);
 }
 
 /**
@@ -598,14 +599,12 @@ void bus1_user_commit_quota(struct bus1_user *user,
 	WARN_ON(n_slices < 0 || n_handles < 0 || n_bytes < 0 || n_fds < 0);
 
 	mutex_lock(&user->lock);
-
 	q_local = bus1_user_limits_map(l_local, actor);
-	if (WARN_ON(IS_ERR(q_local)))
-		goto exit;
-
 	q_global = bus1_user_limits_map(&user->limits, actor);
-	if (WARN_ON(IS_ERR(q_global)))
-		goto exit;
+	mutex_unlock(&user->lock);
+
+	WARN_ON(IS_ERR(q_local));
+	WARN_ON(IS_ERR(q_global));
 
 	atomic_sub(n_slices, &q_global->n_slices);
 	atomic_sub(n_handles, &q_global->n_handles);
@@ -622,7 +621,4 @@ void bus1_user_commit_quota(struct bus1_user *user,
 
 	atomic_add(n_bytes, &l_local->n_inflight_bytes);
 	atomic_add(n_fds, &l_local->n_inflight_fds);
-
-exit:
-	mutex_unlock(&user->lock);
 }
