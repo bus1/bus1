@@ -67,6 +67,7 @@ struct bus1_user_usage {
  * @max_handles:		maximum number of owned handles
  * @max_inflight_bytes:		maximum number of inflight bytes
  * @max_inflight_fds:		maximum number of inflight FDs
+ * @lock:			object lock
  * @usages:			idr of usage entries per uid
  */
 struct bus1_user_limits {
@@ -78,6 +79,7 @@ struct bus1_user_limits {
 	unsigned int max_handles;
 	unsigned int max_inflight_bytes;
 	unsigned int max_inflight_fds;
+	struct mutex lock;
 	struct idr usages;
 };
 
@@ -85,14 +87,12 @@ struct bus1_user_limits {
  * struct bus1_user - resource accounting for users
  * @ref:		reference counter
  * @uid:		UID of the user
- * @lock:		object lock
  * @rcu:		rcu
  * @limits:		resource limit counters
  */
 struct bus1_user {
 	struct kref ref;
 	kuid_t uid;
-	struct mutex lock;
 	union {
 		struct rcu_head rcu;
 		struct bus1_user_limits limits;
