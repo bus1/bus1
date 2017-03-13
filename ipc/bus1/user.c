@@ -153,8 +153,10 @@ bus1_user_limits_map(struct bus1_user_limits *limits, struct bus1_user *actor)
 	struct bus1_user_usage *usage;
 	int r;
 
-	/* fast-path: unlocked, the usage object is guaranteed to stay around */
+	/* fast-path: acquire usage object via rcu */
+	rcu_read_lock();
 	usage = idr_find(&limits->usages, __kuid_val(actor->uid));
+	rcu_read_unlock();
 	if (usage)
 		return usage;
 
