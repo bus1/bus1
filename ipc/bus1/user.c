@@ -342,10 +342,10 @@ void bus1_user_discharge(atomic_t *global, atomic_t *local, int charge)
 }
 
 static int bus1_user_charge_quota_one(atomic_t *remaining,
-				      int share,
+				      atomic_t *share,
 				      int charge)
 {
-	int v, reserved;
+	int v, new_share, reserved, r;
 
 	WARN_ON(charge < 0);
 
@@ -358,8 +358,11 @@ static int bus1_user_charge_quota_one(atomic_t *remaining,
 	 *             limit for this user. For each accounted resource, we
 	 *             decrement it. Thus, it must not drop below 0, or you
 	 *             exceeded your quota.
-	 * @share:     current amount of resources that the acting task has in
-	 *             the local peer.
+	 * @share:     current amount of resources that the acting user has
+	 *             consumed from the receiving user. This is an upper bound,
+	 *             it is possible for this to be momentarily charged charges
+	 *             that do not end up being applied to the user limits
+	 *             (which are then reverted below).
 	 * @charge:    number of resources to charge with this operation
 	 *
 	 * We try charging @charge on @remaining. The logic applied is: The
@@ -374,16 +377,30 @@ static int bus1_user_charge_quota_one(atomic_t *remaining,
 	if (charge > charge * 2)
 		return -EDQUOT;
 
-	reserved = share + charge * 2;
+	/*
+	 * This implies a memory barrier, so @share is guaranteed to be adjusted
+	 * before @remaining is charged.
+	 */
+	new_share = atomic_add_return(charge, share);
 
-	if (share > reserved || charge * 2 > reserved)
-		return -EDQUOT;
+	reserved = new_share + charge * 2;
+
+	if (new_share > reserved || charge * 2 > reserved) {
+		r = -EDQUOT;
+		goto revert_share;
+	}
 
 	v = bus1_atomic_add_if_ge(remaining, -charge, reserved);
-	if (v < charge)
-		return -EDQUOT;
+	if (v < charge) {
+		r = -EDQUOT;
+		goto revert_share;
+	}
 
 	return 0;
+
+revert_share:
+	atomic_sub(charge, share);
+	return r;
 }
 
 /**
@@ -425,33 +442,28 @@ int bus1_user_charge_quota(struct bus1_user *user,
 		return PTR_ERR(usage);
 
 	r = bus1_user_charge_quota_one(&limits->n_slices,
-				 atomic_read(&usage->n_slices),
-				 n_slices);
+				       &usage->n_slices,
+				       n_slices);
 	if (r < 0)
 		return r;
 
 	r = bus1_user_charge_quota_one(&limits->n_handles,
-				 atomic_read(&usage->n_handles),
-				 n_handles);
+				       &usage->n_handles,
+				       n_handles);
 	if (r < 0)
 		goto revert_slices;
 
 	r = bus1_user_charge_quota_one(&limits->n_inflight_bytes,
-				 atomic_read(&usage->n_bytes),
-				 n_bytes);
+				       &usage->n_bytes,
+				       n_bytes);
 	if (r < 0)
 		goto revert_handles;
 
 	r = bus1_user_charge_quota_one(&limits->n_inflight_fds,
-				 atomic_read(&usage->n_fds),
-				 n_fds);
+				       &usage->n_fds,
+				       n_fds);
 	if (r < 0)
 		goto revert_bytes;
-
-	atomic_add(n_slices, &usage->n_slices);
-	atomic_add(n_handles, &usage->n_handles);
-	atomic_add(n_bytes, &usage->n_bytes);
-	atomic_add(n_fds, &usage->n_fds);
 
 	return 0;
 
@@ -490,15 +502,19 @@ void bus1_user_discharge_quota(struct bus1_user *user,
 	usage = bus1_user_limits_map(limits, actor);
 	WARN_ON(IS_ERR(usage));
 
-	atomic_sub(n_slices, &usage->n_slices);
-	atomic_sub(n_handles, &usage->n_handles);
-	atomic_sub(n_bytes, &usage->n_bytes);
-	atomic_sub(n_fds, &usage->n_fds);
-
 	atomic_add(n_slices, &limits->n_slices);
 	atomic_add(n_handles, &limits->n_handles);
 	atomic_add(n_bytes, &limits->n_inflight_bytes);
 	atomic_add(n_fds, &limits->n_inflight_fds);
+
+	/*
+	 * No memory barrier necessary, at worst reordering these sections will
+	 * cause false negatives.
+	 */
+	atomic_sub(n_slices, &usage->n_slices);
+	atomic_sub(n_handles, &usage->n_handles);
+	atomic_sub(n_bytes, &usage->n_bytes);
+	atomic_sub(n_fds, &usage->n_fds);
 }
 
 /**
@@ -528,11 +544,15 @@ void bus1_user_commit_quota(struct bus1_user *user,
 	usage = bus1_user_limits_map(limits, actor);
 	WARN_ON(IS_ERR(usage));
 
+	atomic_add(n_bytes, &limits->n_inflight_bytes);
+	atomic_add(n_fds, &limits->n_inflight_fds);
+
+	/*
+	 * No memory barrier necessary, at worst reordering these sections will
+	 * cause false negatives.
+	 */
 	atomic_sub(n_slices, &usage->n_slices);
 	atomic_sub(n_handles, &usage->n_handles);
 	atomic_sub(n_bytes, &usage->n_bytes);
 	atomic_sub(n_fds, &usage->n_fds);
-
-	atomic_add(n_bytes, &limits->n_inflight_bytes);
-	atomic_add(n_fds, &limits->n_inflight_fds);
-	}
+}
