@@ -117,21 +117,18 @@ int bus1_user_charge(atomic_t *global, atomic_t *local, int charge);
 void bus1_user_discharge(atomic_t *global, atomic_t *local, int charge);
 int bus1_user_charge_quota(struct bus1_user *user,
 			   struct bus1_user *actor,
-			   struct bus1_user_limits *limits,
 			   int n_slices,
 			   int n_handles,
 			   int n_bytes,
 			   int n_fds);
 void bus1_user_discharge_quota(struct bus1_user *user,
 			       struct bus1_user *actor,
-			       struct bus1_user_limits *l_local,
 			       int n_slices,
 			       int n_handles,
 			       int n_bytes,
 			       int n_fds);
 void bus1_user_commit_quota(struct bus1_user *user,
 			    struct bus1_user *actor,
-			    struct bus1_user_limits *l_local,
 			    int n_slices,
 			    int n_handles,
 			    int n_bytes,

@@ -341,13 +341,11 @@ void bus1_user_discharge(atomic_t *global, atomic_t *local, int charge)
 	atomic_add(charge, global);
 }
 
-static int bus1_user_charge_one(atomic_t *global_remaining,
-				atomic_t *local_remaining,
-				int global_share,
-				int local_share,
-				int charge)
+static int bus1_user_charge_quota_one(atomic_t *remaining,
+				      int share,
+				      int charge)
 {
-	int v, global_reserved, local_reserved;
+	int v, reserved;
 
 	WARN_ON(charge < 0);
 
@@ -364,11 +362,11 @@ static int bus1_user_charge_one(atomic_t *global_remaining,
 	 *             the local peer.
 	 * @charge:    number of resources to charge with this operation
 	 *
-	 * We try charging @charge on @remaining. The applied logic is: The
+	 * We try charging @charge on @remaining. The logic applied is: The
 	 * caller is not allowed to account for more than the half of the
-	 * remaining space (including what its current share). That is, if 'n'
-	 * free resources are remaining, then after charging @charge, it must
-	 * not drop below @share+@charge. That is, the remaining resources after
+	 * remaining space (including its current share). That is, if 'n' free
+	 * resources are remaining, then after charging @charge, it must not
+	 * drop below @share+@charge. That is, the remaining resources after
 	 * the charge are still at least as big as what the caller has charged
 	 * in total.
 	 */
@@ -376,127 +374,48 @@ static int bus1_user_charge_one(atomic_t *global_remaining,
 	if (charge > charge * 2)
 		return -EDQUOT;
 
-	global_reserved = global_share + charge * 2;
+	reserved = share + charge * 2;
 
-	if (global_share > global_reserved || charge * 2 > global_reserved)
+	if (share > reserved || charge * 2 > reserved)
 		return -EDQUOT;
 
-	v = bus1_atomic_add_if_ge(global_remaining, -charge, global_reserved);
+	v = bus1_atomic_add_if_ge(remaining, -charge, reserved);
 	if (v < charge)
 		return -EDQUOT;
 
-	local_reserved = local_share + charge * 2;
-
-	if (local_share > local_reserved || charge * 2 > local_reserved)
-		return -EDQUOT;
-
-	v = bus1_atomic_add_if_ge(local_remaining, -charge, local_reserved);
-	if (v < charge) {
-		atomic_add(charge, global_remaining);
-		return -EDQUOT;
-	}
-
 	return 0;
-}
-
-static int bus1_user_charge_quota_apply(struct bus1_user_usage *q_global,
-					struct bus1_user_usage *q_local,
-					struct bus1_user_limits *l_global,
-					struct bus1_user_limits *l_local,
-					int n_slices,
-					int n_handles,
-					int n_bytes,
-					int n_fds)
-{
-	int r;
-
-	r = bus1_user_charge_one(&l_global->n_slices, &l_local->n_slices,
-				 atomic_read(&q_global->n_slices),
-				 atomic_read(&q_local->n_slices),
-				 n_slices);
-	if (r < 0)
-		return r;
-
-	r = bus1_user_charge_one(&l_global->n_handles, &l_local->n_handles,
-				 atomic_read(&q_global->n_handles),
-				 atomic_read(&q_local->n_handles),
-				 n_handles);
-	if (r < 0)
-		goto revert_slices;
-
-	r = bus1_user_charge_one(&l_global->n_inflight_bytes,
-				 &l_local->n_inflight_bytes,
-				 atomic_read(&q_global->n_bytes),
-				 atomic_read(&q_local->n_bytes),
-				 n_bytes);
-	if (r < 0)
-		goto revert_handles;
-
-	r = bus1_user_charge_one(&l_global->n_inflight_fds,
-				 &l_local->n_inflight_fds,
-				 atomic_read(&q_global->n_fds),
-				 atomic_read(&q_local->n_fds),
-				 n_fds);
-	if (r < 0)
-		goto revert_bytes;
-
-	atomic_add(n_slices, &q_global->n_slices);
-	atomic_add(n_handles, &q_global->n_handles);
-	atomic_add(n_bytes, &q_global->n_bytes);
-	atomic_add(n_fds, &q_global->n_fds);
-
-	atomic_add(n_slices, &q_local->n_slices);
-	atomic_add(n_handles, &q_local->n_handles);
-	atomic_add(n_bytes, &q_local->n_bytes);
-	atomic_add(n_fds, &q_local->n_fds);
-
-	return 0;
-
-revert_bytes:
-	atomic_add(n_bytes, &l_local->n_inflight_bytes);
-	atomic_add(n_bytes, &l_global->n_inflight_bytes);
-revert_handles:
-	atomic_add(n_handles, &l_local->n_handles);
-	atomic_add(n_handles, &l_global->n_handles);
-revert_slices:
-	atomic_add(n_slices, &l_local->n_slices);
-	atomic_add(n_slices, &l_global->n_slices);
-	return r;
 }
 
 /**
  * bus1_user_charge_quota() - charge quota resources
  * @user:			user to charge on
  * @actor:			user to charge as
- * @limits:			local limits to charge on
  * @n_slices:			number of slices to charge
  * @n_handles:			number of handles to charge
  * @n_bytes:			number of bytes to charge
  * @n_fds:			number of FDs to charge
  *
- * This charges the given resources on @user and @limits. It does both, local
- * and remote charges. It is all charged for user @actor.
+ * This charges the given resources on @user for user @actor.
  *
- * Negative charges always succeed. Positive charges might fail if quota is
- * denied. Note that a single call is always atomic, so either all succeed or
- * all fail. Hence, it makes little sense to mix negative and positive charges
- * in a single call.
+ * It is an error to call this with a negative charge. A charge might fail if
+ * it would exceed the quota. Note that a single call is always atomic, so
+ * either all succeed or all fail.
  *
- * Note that this is not atomic, it may happen that trying to apply two charges
- * simultaneously might fail whereas applying them one at a time would allow one
- * to succeed.
+ * Several calls to this function may race eachother, it may happen that trying
+ * to apply two charges simultaneously might fail whereas applying them one at a
+ * time would have allow one to succeed.
  *
  * Return: 0 on success, negative error code on failure.
  */
 int bus1_user_charge_quota(struct bus1_user *user,
 			   struct bus1_user *actor,
-			   struct bus1_user_limits *limits,
 			   int n_slices,
 			   int n_handles,
 			   int n_bytes,
 			   int n_fds)
 {
-	struct bus1_user_usage *u_usage, *usage;
+	struct bus1_user_usage *usage;
+	struct bus1_user_limits *limits = &user->limits;
 	int r;
 
 	WARN_ON(n_slices < 0 || n_handles < 0 || n_bytes < 0 || n_fds < 0);
@@ -505,116 +424,115 @@ int bus1_user_charge_quota(struct bus1_user *user,
 	if (IS_ERR(usage))
 		return PTR_ERR(usage);
 
-	u_usage = bus1_user_limits_map(&user->limits, actor);
-	if (IS_ERR(u_usage))
-		return PTR_ERR(u_usage);
-
-	r = bus1_user_charge_quota_apply(u_usage, usage, &user->limits, limits,
-					 n_slices, n_handles, n_bytes, n_fds);
+	r = bus1_user_charge_quota_one(&limits->n_slices,
+				 atomic_read(&usage->n_slices),
+				 n_slices);
 	if (r < 0)
 		return r;
 
+	r = bus1_user_charge_quota_one(&limits->n_handles,
+				 atomic_read(&usage->n_handles),
+				 n_handles);
+	if (r < 0)
+		goto revert_slices;
+
+	r = bus1_user_charge_quota_one(&limits->n_inflight_bytes,
+				 atomic_read(&usage->n_bytes),
+				 n_bytes);
+	if (r < 0)
+		goto revert_handles;
+
+	r = bus1_user_charge_quota_one(&limits->n_inflight_fds,
+				 atomic_read(&usage->n_fds),
+				 n_fds);
+	if (r < 0)
+		goto revert_bytes;
+
+	atomic_add(n_slices, &usage->n_slices);
+	atomic_add(n_handles, &usage->n_handles);
+	atomic_add(n_bytes, &usage->n_bytes);
+	atomic_add(n_fds, &usage->n_fds);
+
 	return 0;
+
+revert_bytes:
+	atomic_add(n_bytes, &limits->n_inflight_bytes);
+revert_handles:
+	atomic_add(n_handles, &limits->n_handles);
+revert_slices:
+	atomic_add(n_slices, &limits->n_slices);
+	return r;
 }
 
 /**
  * bus1_user_discharge_quota() - discharge quota resources
  * @user:			user to charge on
  * @actor:			user to charge as
- * @l_local:			local limits to charge on
  * @n_slices:			number of slices to charge
  * @n_handles:			number of handles to charge
  * @n_bytes:			number of bytes to charge
  * @n_fds:			number of FDs to charge
  *
- * This discharges the given resources on @user and @limits. It does both local
- * and remote charges. It is all discharged for user @actor.
+ * This discharges the given resources on @user for user @actor.
  */
 void bus1_user_discharge_quota(struct bus1_user *user,
 			       struct bus1_user *actor,
-			       struct bus1_user_limits *l_local,
 			       int n_slices,
 			       int n_handles,
 			       int n_bytes,
 			       int n_fds)
 {
-	struct bus1_user_usage *q_global, *q_local;
-	struct bus1_user_limits *l_global = &user->limits;
+	struct bus1_user_usage *usage;
+	struct bus1_user_limits *limits = &user->limits;
 
 	WARN_ON(n_slices < 0 || n_handles < 0 || n_bytes < 0 || n_fds < 0);
 
-	q_local = bus1_user_limits_map(l_local, actor);
-	q_global = bus1_user_limits_map(&user->limits, actor);
+	usage = bus1_user_limits_map(limits, actor);
+	WARN_ON(IS_ERR(usage));
 
-	WARN_ON(IS_ERR(q_local));
-	WARN_ON(IS_ERR(q_global));
+	atomic_sub(n_slices, &usage->n_slices);
+	atomic_sub(n_handles, &usage->n_handles);
+	atomic_sub(n_bytes, &usage->n_bytes);
+	atomic_sub(n_fds, &usage->n_fds);
 
-	atomic_sub(n_slices, &q_global->n_slices);
-	atomic_sub(n_handles, &q_global->n_handles);
-	atomic_sub(n_bytes, &q_global->n_bytes);
-	atomic_sub(n_fds, &q_global->n_fds);
-
-	atomic_sub(n_slices, &q_local->n_slices);
-	atomic_sub(n_handles, &q_local->n_handles);
-	atomic_sub(n_bytes, &q_local->n_bytes);
-	atomic_sub(n_fds, &q_local->n_fds);
-
-	atomic_add(n_slices, &l_global->n_slices);
-	atomic_add(n_handles, &l_global->n_handles);
-	atomic_add(n_bytes, &l_global->n_inflight_bytes);
-	atomic_add(n_fds, &l_global->n_inflight_fds);
-
-	atomic_add(n_slices, &l_local->n_slices);
-	atomic_add(n_handles, &l_local->n_handles);
-	atomic_add(n_bytes, &l_local->n_inflight_bytes);
-	atomic_add(n_fds, &l_local->n_inflight_fds);
+	atomic_add(n_slices, &limits->n_slices);
+	atomic_add(n_handles, &limits->n_handles);
+	atomic_add(n_bytes, &limits->n_inflight_bytes);
+	atomic_add(n_fds, &limits->n_inflight_fds);
 }
 
 /**
  * bus1_user_commit_quota() - commit quota resources
  * @user:			user to charge on
  * @actor:			user to charge as
- * @l_local:			local limits to charge on
  * @n_slices:			number of slices to charge
  * @n_handles:			number of handles to charge
  * @n_bytes:			number of bytes to charge
  * @n_fds:			number of FDs to charge
  *
- * This commits the given resources on @user and @limits. Committing a quota
- * means discharging the usage objects but leaving the limits untouched.
+ * This commits the given resources on @user. Committing a quota means
+ * discharging the usage objects but leaving the limits untouched.
  */
 void bus1_user_commit_quota(struct bus1_user *user,
 			    struct bus1_user *actor,
-			    struct bus1_user_limits *l_local,
 			    int n_slices,
 			    int n_handles,
 			    int n_bytes,
 			    int n_fds)
 {
-	struct bus1_user_usage *q_global, *q_local;
-	struct bus1_user_limits *l_global = &user->limits;
+	struct bus1_user_usage *usage;
+	struct bus1_user_limits *limits = &user->limits;
 
 	WARN_ON(n_slices < 0 || n_handles < 0 || n_bytes < 0 || n_fds < 0);
 
-	q_local = bus1_user_limits_map(l_local, actor);
-	q_global = bus1_user_limits_map(&user->limits, actor);
+	usage = bus1_user_limits_map(limits, actor);
+	WARN_ON(IS_ERR(usage));
 
-	WARN_ON(IS_ERR(q_local));
-	WARN_ON(IS_ERR(q_global));
+	atomic_sub(n_slices, &usage->n_slices);
+	atomic_sub(n_handles, &usage->n_handles);
+	atomic_sub(n_bytes, &usage->n_bytes);
+	atomic_sub(n_fds, &usage->n_fds);
 
-	atomic_sub(n_slices, &q_global->n_slices);
-	atomic_sub(n_handles, &q_global->n_handles);
-	atomic_sub(n_bytes, &q_global->n_bytes);
-	atomic_sub(n_fds, &q_global->n_fds);
-
-	atomic_sub(n_slices, &q_local->n_slices);
-	atomic_sub(n_handles, &q_local->n_handles);
-	atomic_sub(n_bytes, &q_local->n_bytes);
-	atomic_sub(n_fds, &q_local->n_fds);
-
-	atomic_add(n_bytes, &l_global->n_inflight_bytes);
-	atomic_add(n_fds, &l_global->n_inflight_fds);
-
-	atomic_add(n_bytes, &l_local->n_inflight_bytes);
-	atomic_add(n_fds, &l_local->n_inflight_fds);
-}
+	atomic_add(n_bytes, &limits->n_inflight_bytes);
+	atomic_add(n_fds, &limits->n_inflight_fds);
+	}
