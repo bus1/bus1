@@ -59,7 +59,7 @@
  *   bus1_peer.active
  *     bus1_peer.local.lock
  *       bus1_peer.data.lock
- *       bus1_user.lock
+ *       bus1_user_limits.lock
  *       bus1_user_lock
  */
 
