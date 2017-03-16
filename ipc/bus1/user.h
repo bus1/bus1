@@ -81,6 +81,7 @@ struct bus1_user_limits {
 	unsigned int max_inflight_fds;
 	struct mutex lock;
 	struct idr usages;
+	atomic_t n_usages;
 };
 
 /**

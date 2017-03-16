@@ -115,6 +115,7 @@ void bus1_user_limits_init(struct bus1_user_limits *limits,
 	atomic_set(&limits->n_inflight_bytes, limits->max_inflight_bytes);
 	atomic_set(&limits->n_inflight_fds, limits->max_inflight_fds);
 
+	atomic_set(&limits->n_usages, 0);
 	idr_init(&limits->usages);
 	mutex_init(&limits->lock);
 }
@@ -131,11 +132,14 @@ void bus1_user_limits_deinit(struct bus1_user_limits *limits)
 	struct bus1_user_usage *usage;
 	int i;
 
-	idr_for_each_entry(&limits->usages, usage, i)
+	idr_for_each_entry(&limits->usages, usage, i) {
 		bus1_user_usage_free(usage);
+		atomic_dec(&limits->n_usages);
+	}
 
 	mutex_destroy(&limits->lock);
 	idr_destroy(&limits->usages);
+	WARN_ON(atomic_read(&limits->n_usages) != 0);
 
 	WARN_ON(atomic_read(&limits->n_slices) !=
 		limits->max_slices);
@@ -172,6 +176,8 @@ bus1_user_limits_map(struct bus1_user_limits *limits, struct bus1_user *actor)
 			if (r < 0) {
 				bus1_user_usage_free(usage);
 				usage = ERR_PTR(r);
+			} else {
+				atomic_inc(&limits->n_usages);
 			}
 		}
 	}
@@ -343,11 +349,13 @@ void bus1_user_discharge(atomic_t *global, atomic_t *local, int charge)
 
 static int bus1_user_charge_quota_one(atomic_t *remaining,
 				      atomic_t *share,
+				      int users,
 				      int charge)
 {
-	int v, new_share, reserved, r;
+	int v, new_share, r;
 
 	WARN_ON(charge < 0);
+	WARN_ON(users < 1);
 
 	/*
 	 * Try charging a single resource type. If limits are exceeded, return
@@ -363,19 +371,20 @@ static int bus1_user_charge_quota_one(atomic_t *remaining,
 	 *             it is possible for this to be momentarily charged charges
 	 *             that do not end up being applied to the user limits
 	 *             (which are then reverted below).
+	 * @users:     an estimation of how many other users we want to share
+	 *             the remaining resources
 	 * @charge:    number of resources to charge with this operation
 	 *
 	 * We try charging @charge on @remaining. The logic applied is: The
-	 * caller is not allowed to account for more than the half of the
-	 * remaining space (including its current share). That is, if 'n' free
-	 * resources are remaining, then after charging @charge, it must not
-	 * drop below @share+@charge. That is, the remaining resources after
-	 * the charge are still at least as big as what the caller has charged
-	 * in total.
+	 * caller is not allowed to account for more than an n'th of the
+	 * remaining space (including its current share), where 'n' is the
+	 * number of users we assume to be sharing the resources. In other
+	 * words, after charging @charge, the remaining resources remaining must
+	 * not drop below (@share + @charge) * @users. That is, the remaining
+	 * resources after the charge are still at least as large as what the
+	 * caller has charged in total, multiplied by the number of other active
+	 * users.
 	 */
-
-	if (charge > charge * 2)
-		return -EDQUOT;
 
 	/*
 	 * This implies a memory barrier, so @share is guaranteed to be adjusted
@@ -383,14 +392,13 @@ static int bus1_user_charge_quota_one(atomic_t *remaining,
 	 */
 	new_share = atomic_add_return(charge, share);
 
-	reserved = new_share + charge * 2;
-
-	if (new_share > reserved || charge * 2 > reserved) {
+	/* check for overflow */
+	if (unlikely(new_share > (INT_MAX / users))) {
 		r = -EDQUOT;
 		goto revert_share;
 	}
 
-	v = bus1_atomic_add_if_ge(remaining, -charge, reserved);
+	v = bus1_atomic_add_if_ge(remaining, -charge, new_share * users);
 	if (v < charge) {
 		r = -EDQUOT;
 		goto revert_share;
@@ -433,7 +441,7 @@ int bus1_user_charge_quota(struct bus1_user *user,
 {
 	struct bus1_user_usage *usage;
 	struct bus1_user_limits *limits = &user->limits;
-	int r;
+	int r, n_usages;
 
 	WARN_ON(n_slices < 0 || n_handles < 0 || n_bytes < 0 || n_fds < 0);
 
@@ -441,26 +449,37 @@ int bus1_user_charge_quota(struct bus1_user *user,
 	if (IS_ERR(usage))
 		return PTR_ERR(usage);
 
+	/*
+	 * Share the resources between one more than the current number of known
+	 * users. It is not importan that this is precise, just that it exceeds
+	 * the number of users at the time @usage was created.
+	 */
+	n_usages = atomic_read(&limits->n_usages);
+
 	r = bus1_user_charge_quota_one(&limits->n_slices,
 				       &usage->n_slices,
+				       n_usages,
 				       n_slices);
 	if (r < 0)
 		return r;
 
 	r = bus1_user_charge_quota_one(&limits->n_handles,
 				       &usage->n_handles,
+				       n_usages,
 				       n_handles);
 	if (r < 0)
 		goto revert_slices;
 
 	r = bus1_user_charge_quota_one(&limits->n_inflight_bytes,
 				       &usage->n_bytes,
+				       n_usages,
 				       n_bytes);
 	if (r < 0)
 		goto revert_handles;
 
 	r = bus1_user_charge_quota_one(&limits->n_inflight_fds,
 				       &usage->n_fds,
+				       n_usages,
 				       n_fds);
 	if (r < 0)
 		goto revert_bytes;
