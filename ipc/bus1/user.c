@@ -426,7 +426,7 @@ revert_share:
  * it would exceed the quota. Note that a single call is always atomic, so
  * either all succeed or all fail.
  *
- * Several calls to this function may race eachother, it may happen that trying
+ * Several calls to this function may race each other, it may happen that trying
  * to apply two charges simultaneously might fail whereas applying them one at a
  * time would have allow one to succeed.
  *
@@ -451,7 +451,7 @@ int bus1_user_charge_quota(struct bus1_user *user,
 
 	/*
 	 * Share the resources between one more than the current number of known
-	 * users. It is not importan that this is precise, just that it exceeds
+	 * users. It is not important that this is precise, just that it exceeds
 	 * the number of users at the time @usage was created.
 	 */
 	n_usages = atomic_read(&limits->n_usages);
