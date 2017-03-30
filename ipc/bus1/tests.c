@@ -11,6 +11,7 @@
 #include <linux/err.h>
 #include <linux/kernel.h>
 #include <linux/uio.h>
+#include <linux/cred.h>
 #include "handle.h"
 #include "peer.h"
 #include "tests.h"
