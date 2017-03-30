@@ -29,4 +29,19 @@ static inline int bus1_tests_run(void)
 }
 #endif
 
+/**
+ * kref: Implement 'struct kref' using refcount_t API breakage
+ *
+ * Since 4.11 kernel uses refcount_t to implement struct kref instead of atomic_t.
+ * Following macro fixes semantics on newer kernels while keeping compatibily with old API.
+ */
+
+#include <linux/version.h>
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 11, 0)
+#define ATOMIC_READ_ACCESS_KREF(KREF) atomic_read(KREF)
+#else
+#define ATOMIC_READ_ACCESS_KREF(KREF) atomic_read(KREF.refs)
+#endif
+
 #endif /* __BUS1_TESTS_H */
