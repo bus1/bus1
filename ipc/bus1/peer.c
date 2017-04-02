@@ -9,6 +9,7 @@
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 #include <linux/atomic.h>
+#include <linux/cred.h>
 #include <linux/debugfs.h>
 #include <linux/err.h>
 #include <linux/file.h>

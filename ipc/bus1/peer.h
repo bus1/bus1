@@ -51,7 +51,6 @@
 #include <linux/mutex.h>
 #include <linux/rcupdate.h>
 #include <linux/rbtree.h>
-#include <linux/uidgid.h>
 #include <linux/wait.h>
 #include <uapi/linux/bus1.h>
 #include "user.h"
@@ -60,6 +59,7 @@
 #include "util/queue.h"
 
 struct bus1_message;
+struct cred;
 struct dentry;
 
 /**
