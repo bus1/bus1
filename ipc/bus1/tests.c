@@ -20,6 +20,21 @@
 #include "util/pool.h"
 #include "util/queue.h"
 
+/*
+ * XXX: Remove this hack once 4.11 is released and mandatory.
+ *
+ * With linux-4.11 the kref_read() function was introduced, to stop exposing
+ * kref-internals (the counter changed to the saturated refcount_t type).
+ *
+ * Until 4.11 is released, we use this small helper to keep compatibility.
+ */
+#ifndef KREF_INIT
+static inline unsigned int kref_read(const struct kref *kref)
+{
+	return atomic_read(&kref->refcount);
+}
+#endif
+
 static void bus1_test_flist(void)
 {
 	struct bus1_flist *e, *list;
@@ -310,7 +325,7 @@ static void bus1_test_handle_basic(void)
 
 	h[0] = bus1_handle_new_anchor(p[0]);
 	WARN_ON(IS_ERR_OR_NULL(h[0]));
-	WARN_ON(atomic_read(&h[0]->ref.refcount) != 1);
+	WARN_ON(kref_read(&h[0]->ref) != 1);
 	t = bus1_handle_unref(h[0]);
 	WARN_ON(t);
 
@@ -321,10 +336,10 @@ static void bus1_test_handle_basic(void)
 	h[1] = bus1_handle_new_remote(p[1], h[0]);
 	WARN_ON(IS_ERR_OR_NULL(h[1]));
 
-	WARN_ON(atomic_read(&h[0]->ref.refcount) < 2);
-	WARN_ON(atomic_read(&h[1]->ref.refcount) != 1);
+	WARN_ON(kref_read(&h[0]->ref) < 2);
+	WARN_ON(kref_read(&h[1]->ref) != 1);
 	bus1_handle_unref(h[1]);
-	WARN_ON(atomic_read(&h[0]->ref.refcount) != 1);
+	WARN_ON(kref_read(&h[0]->ref) != 1);
 	bus1_handle_unref(h[0]);
 
 	/* test remote creation based on existing remote */
@@ -336,12 +351,12 @@ static void bus1_test_handle_basic(void)
 	h[2] = bus1_handle_new_remote(p[1], h[1]);
 	WARN_ON(IS_ERR_OR_NULL(h[2]));
 
-	WARN_ON(atomic_read(&h[0]->ref.refcount) < 3);
-	WARN_ON(atomic_read(&h[1]->ref.refcount) != 1);
-	WARN_ON(atomic_read(&h[2]->ref.refcount) != 1);
+	WARN_ON(kref_read(&h[0]->ref) < 3);
+	WARN_ON(kref_read(&h[1]->ref) != 1);
+	WARN_ON(kref_read(&h[2]->ref) != 1);
 	bus1_handle_unref(h[2]);
 	bus1_handle_unref(h[1]);
-	WARN_ON(atomic_read(&h[0]->ref.refcount) != 1);
+	WARN_ON(kref_read(&h[0]->ref) != 1);
 	bus1_handle_unref(h[0]);
 
 	/* peer cleanup */
@@ -651,23 +666,23 @@ static void bus1_test_handle_lifetime(void)
 		}
 
 		if (h[4]) {
-			WARN_ON(atomic_read(&h[4]->ref.refcount) != 1);
+			WARN_ON(kref_read(&h[4]->ref) != 1);
 			h[4] = bus1_handle_unref(h[4]);
 		}
 		if (h[3]) {
-			WARN_ON(atomic_read(&h[3]->ref.refcount) != 1);
+			WARN_ON(kref_read(&h[3]->ref) != 1);
 			h[3] = bus1_handle_unref(h[3]);
 		}
 		if (h[2]) {
-			WARN_ON(atomic_read(&h[2]->ref.refcount) != 1);
+			WARN_ON(kref_read(&h[2]->ref) != 1);
 			h[2] = bus1_handle_unref(h[2]);
 		}
 		if (h[1]) {
-			WARN_ON(atomic_read(&h[1]->ref.refcount) != 1);
+			WARN_ON(kref_read(&h[1]->ref) != 1);
 			h[1] = bus1_handle_unref(h[1]);
 		}
 		if (h[0]) {
-			WARN_ON(atomic_read(&h[0]->ref.refcount) != 1);
+			WARN_ON(kref_read(&h[0]->ref) != 1);
 			h[0] = bus1_handle_unref(h[0]);
 		}
 
