@@ -1018,7 +1018,7 @@ static int bus1_peer_ioctl_recv(struct bus1_peer *peer,
 	switch (type) {
 	case BUS1_MSG_DATA:
 		m = container_of(qnode, struct bus1_message, qnode);
-		WARN_ON(m->dst->id == BUS1_HANDLE_INVALID);
+		WARN_ON(m->dst->anchor->id == BUS1_HANDLE_INVALID);
 
 		if (param.max_offset < m->slice.offset + m->slice.size) {
 			r = -ERANGE;
