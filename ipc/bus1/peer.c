@@ -937,7 +937,7 @@ static struct bus1_queue_node *bus1_peer_peek(struct bus1_peer *peer,
 		switch (bus1_queue_node_get_type(qnode)) {
 		case BUS1_MSG_DATA:
 			m = container_of(qnode, struct bus1_message, qnode);
-			h = m->dst;
+			h = m->dst->anchor;
 			break;
 		case BUS1_MSG_NODE_DESTROY:
 		case BUS1_MSG_NODE_RELEASE:
