@@ -28,13 +28,13 @@ static unsigned int bus1_user_max_handles = 65536;
 static unsigned int bus1_user_max_inflight_bytes = 16 * 1024 * 1024;
 static unsigned int bus1_user_max_inflight_fds = 4096;
 
-module_param_named(user_slices_max, bus1_user_max_slices,
+module_param_named(user_max_slices, bus1_user_max_slices,
 		   uint, 0644);
-module_param_named(user_handles_max, bus1_user_max_handles,
+module_param_named(user_max_handles, bus1_user_max_handles,
 		   uint, 0644);
-module_param_named(user_inflight_bytes_max, bus1_user_max_inflight_bytes,
+module_param_named(user_max_inflight_bytes, bus1_user_max_inflight_bytes,
 		   uint, 0644);
-module_param_named(user_inflight_fds_max, bus1_user_max_inflight_fds,
+module_param_named(user_max_inflight_fds, bus1_user_max_inflight_fds,
 		   uint, 0644);
 MODULE_PARM_DESC(user_max_slices,
 		 "Max number of slices for each user.");
