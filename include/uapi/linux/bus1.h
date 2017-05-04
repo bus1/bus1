@@ -2,7 +2,7 @@
 #define _UAPI_LINUX_BUS1_H
 
 /*
- * Copyright (C) 2013-2016 Red Hat, Inc.
+ * Copyright (C) 2013-2017 Red Hat, Inc.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU Lesser General Public License as published by the
