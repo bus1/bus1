@@ -23,6 +23,7 @@
 #include <linux/slab.h>
 #include <linux/uaccess.h>
 #include <linux/uio.h>
+#include <linux/version.h>
 #include "pool.h"
 
 /* insert slice into the free tree */
@@ -459,7 +460,11 @@ ssize_t bus1_pool_write_iovec(struct bus1_pool *pool,
 	offset += slice->offset;
 	iov_iter_init(&iter, WRITE, iov, n_iov, total_len);
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 12, 0)
+	len = vfs_iter_write(pool->f, &iter, &offset, 0);
+#else
 	len = vfs_iter_write(pool->f, &iter, &offset);
+#endif
 
 	return (len >= 0 && len != total_len) ? -EFAULT : len;
 }
@@ -501,7 +506,11 @@ ssize_t bus1_pool_write_kvec(struct bus1_pool *pool,
 
 	old_fs = get_fs();
 	set_fs(get_ds());
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 12, 0)
+	len = vfs_iter_write(pool->f, &iter, &offset, 0);
+#else
 	len = vfs_iter_write(pool->f, &iter, &offset);
+#endif
 	set_fs(old_fs);
 
 	return (len >= 0 && len != total_len) ? -EFAULT : len;
