@@ -85,7 +85,7 @@ struct bus1_factory *bus1_factory_new(struct bus1_peer *peer,
 
 	size = bus1_factory_size(param);
 	if (unlikely(size > n_stack)) {
-		f = kmalloc(size, GFP_TEMPORARY);
+		f = kmalloc(size, GFP_KERNEL);
 		if (!f)
 			return ERR_PTR(-ENOMEM);
 
@@ -115,7 +115,7 @@ struct bus1_factory *bus1_factory_new(struct bus1_peer *peer,
 		goto error;
 
 	/* import handles */
-	r = bus1_flist_populate(f->handles, f->param->n_handles, GFP_TEMPORARY);
+	r = bus1_flist_populate(f->handles, f->param->n_handles, GFP_KERNEL);
 	if (r < 0)
 		goto error;
 
@@ -501,7 +501,7 @@ int bus1_message_install(struct bus1_message *m, bool inst_fds)
 	size = max(m->n_files, min_t(size_t, m->n_handles, BUS1_FLIST_BATCH));
 	size *= max(sizeof(*fds), sizeof(*handles));
 	if (unlikely(size > sizeof(stack))) {
-		buffer = kmalloc(size, GFP_TEMPORARY);
+		buffer = kmalloc(size, GFP_KERNEL);
 		if (!buffer)
 			return -ENOMEM;
 	}
