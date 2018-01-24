@@ -27,14 +27,14 @@ static void bus1_test_flist(void)
 	size_t i, j, z, n;
 
 	WARN_ON(bus1_flist_free(NULL, 0));
-	WARN_ON(bus1_flist_new(0, GFP_TEMPORARY));
+	WARN_ON(bus1_flist_new(0, GFP_KERNEL));
 
 	/*
 	 * Allocate small list, initialize all entries via normal iteration,
 	 * then validate them via batch iteration.
 	 */
 	n = 8;
-	list = bus1_flist_new(n, GFP_TEMPORARY);
+	list = bus1_flist_new(n, GFP_KERNEL);
 	WARN_ON(!list);
 
 	for (i = 0, e = list; i < n; e = bus1_flist_next(e, &i))
@@ -54,7 +54,7 @@ static void bus1_test_flist(void)
 	 * size of flists.
 	 */
 	n = BUS1_FLIST_BATCH * 8;
-	list = bus1_flist_new(n, GFP_TEMPORARY);
+	list = bus1_flist_new(n, GFP_KERNEL);
 	WARN_ON(!list);
 
 	for (i = 0, e = list; i < n; e = bus1_flist_next(e, &i))
