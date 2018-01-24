@@ -11,6 +11,7 @@
 #include <linux/cred.h>
 #include <linux/err.h>
 #include <linux/kernel.h>
+#include <linux/kref.h>
 #include <linux/uio.h>
 #include "handle.h"
 #include "peer.h"
@@ -19,21 +20,6 @@
 #include "util/flist.h"
 #include "util/pool.h"
 #include "util/queue.h"
-
-/*
- * XXX: Remove this hack once 4.11 is released and mandatory.
- *
- * With linux-4.11 the kref_read() function was introduced, to stop exposing
- * kref-internals (the counter changed to the saturated refcount_t type).
- *
- * Until 4.11 is released, we use this small helper to keep compatibility.
- */
-#ifndef KREF_INIT
-static inline unsigned int kref_read(const struct kref *kref)
-{
-	return atomic_read(&kref->refcount);
-}
-#endif
 
 static void bus1_test_flist(void)
 {
