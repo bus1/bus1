@@ -12,6 +12,7 @@
 #include <linux/err.h>
 #include <linux/kernel.h>
 #include <linux/kref.h>
+#include <linux/uaccess.h>
 #include <linux/uio.h>
 #include "handle.h"
 #include "peer.h"
@@ -142,6 +143,7 @@ static void bus1_test_pool(void)
 		.iov_base = payload,
 		.iov_len = strlen(payload),
 	};
+	mm_segment_t old_fs;
 	int r;
 
 	bus1_pool_deinit(&pool);
@@ -161,8 +163,13 @@ static void bus1_test_pool(void)
 
 	r = bus1_pool_alloc(&pool, &slice, 1024);
 	WARN_ON(r < 0);
+
+	old_fs = get_fs();
+	set_fs(get_ds());
 	r = bus1_pool_write_iovec(&pool, &slice, 0, &vec, 1, vec.iov_len);
 	WARN_ON(r < 0);
+	set_fs(old_fs);
+
 	r = bus1_pool_write_kvec(&pool, &slice, 0, &kvec, 1, kvec.iov_len);
 	WARN_ON(r < 0);
 	bus1_pool_publish(&slice);
