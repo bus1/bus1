@@ -459,7 +459,7 @@ ssize_t bus1_pool_write_iovec(struct bus1_pool *pool,
 	offset += slice->offset;
 	iov_iter_init(&iter, WRITE, iov, n_iov, total_len);
 
-	len = vfs_iter_write(pool->f, &iter, &offset);
+	len = vfs_iter_write(pool->f, &iter, &offset, 0);
 
 	return (len >= 0 && len != total_len) ? -EFAULT : len;
 }
@@ -501,7 +501,7 @@ ssize_t bus1_pool_write_kvec(struct bus1_pool *pool,
 
 	old_fs = get_fs();
 	set_fs(get_ds());
-	len = vfs_iter_write(pool->f, &iter, &offset);
+	len = vfs_iter_write(pool->f, &iter, &offset, 0);
 	set_fs(old_fs);
 
 	return (len >= 0 && len != total_len) ? -EFAULT : len;
