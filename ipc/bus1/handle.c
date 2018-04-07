@@ -138,7 +138,7 @@ static struct bus1_peer *bus1_handle_acquire_holder(struct bus1_handle *handle)
 	 */
 	rcu_read_lock();
 	if (atomic_read_acquire(&handle->n_weak) > 0)
-		peer = bus1_peer_acquire(lockless_dereference(handle->holder));
+		peer = bus1_peer_acquire(READ_ONCE(handle->holder));
 	rcu_read_unlock();
 
 	return peer;
