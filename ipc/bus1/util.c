@@ -78,8 +78,7 @@ int bus1_import_vecs(struct iovec *out_vecs,
 #endif
 		void __user *v_ptr;
 
-		if (unlikely(!access_ok(VERIFY_READ, vecs,
-					sizeof(*uvecs) * n_vecs)))
+		if (unlikely(!access_ok(vecs, sizeof(*uvecs) * n_vecs)))
 			return -EFAULT;
 
 		for (i = 0; i < n_vecs; ++i) {
@@ -97,7 +96,7 @@ int bus1_import_vecs(struct iovec *out_vecs,
 			if (unlikely(v_slen < 0 ||
 				     (typeof(v_len))v_slen != v_len))
 				return -EMSGSIZE;
-			if (unlikely(!access_ok(VERIFY_READ, v_ptr, v_len)))
+			if (unlikely(!access_ok(v_ptr, v_len)))
 				return -EFAULT;
 			if (unlikely((size_t)v_len > MAX_RW_COUNT - length))
 				return -EMSGSIZE;
@@ -119,7 +118,7 @@ int bus1_import_vecs(struct iovec *out_vecs,
 
 			if (unlikely((ssize_t)v_len < 0))
 				return -EMSGSIZE;
-			if (unlikely(!access_ok(VERIFY_READ, v_base, v_len)))
+			if (unlikely(!access_ok(v_base, v_len)))
 				return -EFAULT;
 			if (unlikely(v_len > MAX_RW_COUNT - length))
 				return -EMSGSIZE;
