@@ -165,7 +165,7 @@ static void bus1_test_pool(void)
 	WARN_ON(r < 0);
 
 	old_fs = get_fs();
-	set_fs(get_ds());
+	set_fs(KERNEL_DS);
 	r = bus1_pool_write_iovec(&pool, &slice, 0, &vec, 1, vec.iov_len);
 	WARN_ON(r < 0);
 	set_fs(old_fs);

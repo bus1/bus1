@@ -500,7 +500,7 @@ ssize_t bus1_pool_write_kvec(struct bus1_pool *pool,
 	iov_iter_kvec(&iter, WRITE | ITER_KVEC, iov, n_iov, total_len);
 
 	old_fs = get_fs();
-	set_fs(get_ds());
+	set_fs(KERNEL_DS);
 	len = vfs_iter_write(pool->f, &iter, &offset, 0);
 	set_fs(old_fs);
 
