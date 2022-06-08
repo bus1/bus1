@@ -565,7 +565,7 @@ int bus1_message_install(struct bus1_message *m, bool inst_fds)
 
 	/* charge resources */
 	WARN_ON(n_handles < m->n_handles_charge);
-	m->n_handles_charge -= n_handles;
+	//m->n_handles_charge -= n_handles;
 
 	/* publish pool slice */
 	bus1_message_ref(m);
